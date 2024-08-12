@@ -1,0 +1,9 @@
+version: '3'
+
+services:
+  dc_voice_monitor:
+    image: dc_voice_monitor
+    environment:
+      - TOKEN=MTI2Njc1NjEwMDY5MTE5ODAwNA.Gjj2wC.269ORGc82F_rE_c2ZvH5paNCPriNRQDPH_0VxA
+    ports:
+      - 8008:8000
