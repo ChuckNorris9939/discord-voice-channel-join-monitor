@@ -1,0 +1,9 @@
+version: '3'
+
+services:
+  dc_voice_monitor:
+    image: dc_voice_monitor
+    environment:
+      - TOKEN=<DISCORD BOT TOKEN>
+    ports:
+      - 8008:8000
