@@ -1,0 +1,12 @@
+version: '3'
+
+services:
+  dc_voice_monitor:
+    build: .
+    image: dc_voice_monitor
+    env_file:
+      - ./.env
+    ports:
+      - 8008:8000
+    volumes:
+      - ./images/:/images/
