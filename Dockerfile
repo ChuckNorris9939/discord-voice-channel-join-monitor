@@ -3,17 +3,15 @@ FROM python:3.12
 
 EXPOSE 8000
 
-# Copy reicht!
-#ADD main.py .
-#ADD keep_up.py .
 
 WORKDIR /app
+# Kein ADD noetig, copy reicht
 COPY . /app
 
-#ENV DISCORD_TOKEN=
-#ENV DISCORD_SERVER_ID=
-#ENV HIDDEN_CHANNELS=
-#ENV AUDIT_CHANNEL=
+#Dies weist Python an, stdout und stderr nicht zu puffern. brauchen wir nicht da logger. zeigt aber mehr an... 
+#ENV PYTHONUNBUFFERED=1
 
-RUN pip install discord flask
+
+
+RUN pip install --no-cache-dir discord flask waitress
 CMD ["python", "main.py"]
