@@ -28,37 +28,47 @@ logger = logging.getLogger("discord_bot") # Spezifischer Name für den Bot-Logge
 
 # --------- Flask-Server für Health Checks ---------
 from waitress import serve
-from flask import Flask, render_template # Ensure render_template is imported
+from flask import Flask, render_template, url_for, request # Ensure request is imported
 app = Flask(__name__, template_folder='templates')
 
 @app.route("/")
 def home():
     # Diese print-Anweisung kann bleiben oder zu logger.debug/info für Flask-spezifische Logs werden
     # logger.info("Flask: Health-Check-Endpunkt / wurde aufgerufen.")
-    return "Bot ist online!"
+    return render_template('home.html')
 
 @app.route('/view_join_logs')
 def view_join_logs_page():
     conn = None
-    logs = [] # Default to empty list
+    logs = []
+    current_filter_username = request.args.get('username_filter', '').strip()
     try:
         conn = sqlite3.connect('user_log.db')
-        conn.row_factory = sqlite3.Row # Access columns by name
+        conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
-        cursor.execute("SELECT id, user_id, username, channel_id, channel_name, timestamp FROM user_joins ORDER BY id DESC")
-        logs = cursor.fetchall() # This will be a list of sqlite3.Row objects
-        logger.info(f"Successfully fetched {len(logs)} log entries for web interface /view_join_logs.")
+
+        sql_query = "SELECT id, user_id, username, channel_id, channel_name, timestamp FROM user_joins"
+        params = []
+
+        if current_filter_username:
+            sql_query += " WHERE username LIKE ?" # Use LIKE for partial matching
+            params.append(f"%{current_filter_username}%")
+        
+        sql_query += " ORDER BY id DESC"
+        
+        cursor.execute(sql_query, params)
+        logs = cursor.fetchall()
+        logger.info(f"Successfully fetched {len(logs)} log entries for web interface. Filter: '{current_filter_username}'")
     except sqlite3.Error as e:
-        logger.error(f"SQLite error when fetching logs for web interface /view_join_logs: {e}")
-        # logs remains empty, template will show "No log entries found."
+        logger.error(f"SQLite error when fetching logs for web interface (filter: '{current_filter_username}'): {e}")
     except Exception as e:
-        logger.error(f"General error when fetching logs for web interface /view_join_logs: {e}", exc_info=True)
-        # logs remains empty
+        logger.error(f"General error when fetching logs for web interface (filter: '{current_filter_username}'): {e}", exc_info=True)
     finally:
         if conn:
             conn.close()
-            logger.info("Database connection closed for /view_join_logs.")
-    return render_template('view_logs.html', logs=logs)
+            logger.info(f"Database connection closed for /view_join_logs (filter: '{current_filter_username}').")
+            
+    return render_template('view_logs.html', logs=logs, current_filter_username=current_filter_username)
 
 def run_flask():
     host = "0.0.0.0"
