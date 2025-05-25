@@ -28,13 +28,37 @@ logger = logging.getLogger("discord_bot") # Spezifischer Name für den Bot-Logge
 
 # --------- Flask-Server für Health Checks ---------
 from waitress import serve
-app = Flask(__name__)
+from flask import Flask, render_template # Ensure render_template is imported
+app = Flask(__name__, template_folder='templates')
 
 @app.route("/")
 def home():
     # Diese print-Anweisung kann bleiben oder zu logger.debug/info für Flask-spezifische Logs werden
     # logger.info("Flask: Health-Check-Endpunkt / wurde aufgerufen.")
     return "Bot ist online!"
+
+@app.route('/view_join_logs')
+def view_join_logs_page():
+    conn = None
+    logs = [] # Default to empty list
+    try:
+        conn = sqlite3.connect('user_log.db')
+        conn.row_factory = sqlite3.Row # Access columns by name
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, user_id, username, channel_id, channel_name, timestamp FROM user_joins ORDER BY id DESC")
+        logs = cursor.fetchall() # This will be a list of sqlite3.Row objects
+        logger.info(f"Successfully fetched {len(logs)} log entries for web interface /view_join_logs.")
+    except sqlite3.Error as e:
+        logger.error(f"SQLite error when fetching logs for web interface /view_join_logs: {e}")
+        # logs remains empty, template will show "No log entries found."
+    except Exception as e:
+        logger.error(f"General error when fetching logs for web interface /view_join_logs: {e}", exc_info=True)
+        # logs remains empty
+    finally:
+        if conn:
+            conn.close()
+            logger.info("Database connection closed for /view_join_logs.")
+    return render_template('view_logs.html', logs=logs)
 
 def run_flask():
     host = "0.0.0.0"

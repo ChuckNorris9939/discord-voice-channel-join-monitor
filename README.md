@@ -50,3 +50,10 @@ To view the latest join events, administrators can use the `viewlogs` command.
     - As a traditional command: `!!viewlogs` (if the `!!` prefix is configured)
 
 The output will be sent as an ephemeral message, visible only to the administrator who invoked the command.
+
+### Web Interface for Logs
+A web interface is available to browse all user join logs stored in the database. You can access it at the following path on the server where the bot is running:
+
+`/view_join_logs`
+
+For example, if your bot is accessible at `http://localhost:8080`, the log interface would be at `http://localhost:8080/view_join_logs`. The port is the same one used by the Flask server for health checks (default 8080, configurable via the `PORT` environment variable).
