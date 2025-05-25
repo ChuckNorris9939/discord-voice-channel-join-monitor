@@ -627,9 +627,11 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
     
     if after.channel and after.channel.id not in HIDDEN_CHANNELS:
         if not before.self_stream and after.self_stream:
-             await send_log_message(f"🔴 {user_name_log_format} startete einen Stream in ***{after.channel.name}***.", target_channel_ids=target_ids_vc)
+             # await send_log_message(f"🔴 {user_name_log_format} startete einen Stream in ***{after.channel.name}***.", target_channel_ids=target_ids_vc)
+             pass # Stream start logging removed
         elif before.self_stream and not after.self_stream:
-             await send_log_message(f"⚫ {user_name_log_format} beendete einen Stream in ***{after.channel.name}***.", target_channel_ids=target_ids_vc)
+             # await send_log_message(f"⚫ {user_name_log_format} beendete einen Stream in ***{after.channel.name}***.", target_channel_ids=target_ids_vc)
+             pass # Stream end logging removed
         
         if not before.self_video and after.self_video:
              await send_log_message(f"📹 {user_name_log_format} aktivierte die Kamera in ***{after.channel.name}***.", target_channel_ids=target_ids_vc)
@@ -678,7 +680,8 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
                 log_needs_update_user_list = True
             except ValueError: pass
     elif switched_between_visible_channels: # Auskommentierter Code wieder aktiviert
-        await send_log_message(f"🔄 {user_name_log_format} wechselte von ***{before.channel.name}*** zu ***{after.channel.name}***.", target_channel_ids=target_ids_vc)
+        # await send_log_message(f"🔄 {user_name_log_format} wechselte von ***{before.channel.name}*** zu ***{after.channel.name}***.", target_channel_ids=target_ids_vc)
+        pass # Channel switch logging removed
 
     if log_needs_update_user_list:
         formatted_current_users = [f"***{u}***" for u in USERS]
