@@ -12,6 +12,14 @@ Install the required Python packages using pip:
 pip install -r requirements.txt
 ```
 
+### Health Check Port
+The bot runs a small web server for health checks on port 8080 by default. If this port is already in use on your system (you might see an `OSError: [Errno 98] Address already in use`), you can specify a different port by setting the `PORT` environment variable before running the bot:
+```bash
+export PORT=8081
+# Then run your bot
+```
+Or include it in your `.env` file if you are using one.
+
 ## User Join Logging
 
 This bot includes a feature to log user voice channel join events.
