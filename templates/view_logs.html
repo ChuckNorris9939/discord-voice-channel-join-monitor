@@ -18,7 +18,20 @@
 <body>
     <div class="container">
         <h1>User Join Logs</h1>
+
+        <form method="GET" action="{{ url_for('view_join_logs_page') }}" style="margin-bottom: 20px;">
+            <label for="username_filter" style="margin-right: 10px;">Filter by Username:</label>
+            <input type="text" id="username_filter" name="username_filter" value="{{ current_filter_username or '' }}" placeholder="Enter username">
+            <input type="submit" value="Filter" style="padding: 5px 10px; margin-left: 10px;">
+            {% if current_filter_username %}
+                <a href="{{ url_for('view_join_logs_page') }}" style="margin-left: 10px; text-decoration: none; color: #007bff;">Clear Filter</a>
+            {% endif %}
+        </form>
+
         {% if logs %}
+            {% if current_filter_username %}
+                <p>Showing logs filtered by username: <strong>{{ current_filter_username }}</strong></p>
+            {% endif %}
             <table>
                 <thead>
                     <tr>
