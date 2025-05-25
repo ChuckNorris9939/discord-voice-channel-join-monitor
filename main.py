@@ -3,6 +3,7 @@ import os
 import threading
 import datetime
 import random
+import sqlite3 # Added import for sqlite3
 from flask import Flask
 import discord
 from discord import Intents, Thread, File, Embed
@@ -228,6 +229,7 @@ async def on_ready():
         msg_purge_task.start()
         logger.info("msg_purge_task gestartet.")
 
+    init_user_log_db() # Initialize user log database
 
     USERS.clear()
     for guild in bot.guilds:
@@ -478,6 +480,75 @@ async def on_message(message: discord.Message):
     if message.guild and message.guild.id == DISCORD_SERVER_ID:
         await bot.process_commands(message)
 
+@bot.hybrid_command(name="viewlogs", description="Zeigt die letzten 10 Benutzer-Join-Events an (nur für Admins).")
+@commands.has_permissions(administrator=True)
+@commands.guild_only()
+async def viewlogs(ctx: commands.Context):
+    conn = None
+    try:
+        conn = sqlite3.connect('user_log.db')
+        cursor = conn.cursor()
+        # Fetch last 10 records, ordering by id descending to get the latest entries
+        cursor.execute("SELECT user_id, username, channel_id, channel_name, timestamp FROM user_joins ORDER BY id DESC LIMIT 10")
+        records = cursor.fetchall()
+
+        if not records:
+            await ctx.send("Noch keine Join-Events in der Datenbank vorhanden.", ephemeral=True)
+            return
+
+        response_lines = ["**Letzte 10 Benutzer-Join-Events:**"]
+        for record in records:
+            user_id, username, channel_id, channel_name, timestamp_str = record
+            # Parse ISO timestamp string back to datetime object for formatting (optional, but nice)
+            try:
+                dt_obj = datetime.datetime.fromisoformat(timestamp_str)
+                formatted_timestamp = dt_obj.strftime('%Y-%m-%d %H:%M:%S UTC')
+            except ValueError:
+                formatted_timestamp = timestamp_str # Fallback if parsing fails
+
+            response_lines.append(
+                f"Benutzer: {username} (ID: {user_id}) trat Kanal bei: {channel_name} (ID: {channel_id}) um {formatted_timestamp}"
+            )
+        
+        response_message = "\n".join(response_lines)
+
+        # Discord message length limit is 2000 characters.
+        # For 10 records, this should be fine. If it could be longer, chunking or file sending is needed.
+        if len(response_message) > 1980: # Leave some buffer
+            # Simple truncation for this example if too long, ideally send as file or multiple messages
+            # For now, just send what fits or an error.
+            # A better approach for very long messages would be to send as a discord.File
+            await ctx.send("Die Log-Nachricht ist zu lang. Hier sind die ersten ~2000 Zeichen:\n" + response_message[:1950], ephemeral=True)
+            # Alternative: send as file
+            # with open("join_logs.txt", "w", encoding="utf-8") as f:
+            # f.write(response_message)
+            # await ctx.send(file=discord.File("join_logs.txt"), ephemeral=True)
+            # os.remove("join_logs.txt")
+
+        else:
+            await ctx.send(response_message, ephemeral=True)
+
+    except sqlite3.Error as e:
+        logger.error(f"SQLite error when trying to view logs: {e}")
+        await ctx.send(f"Ein Datenbankfehler ist aufgetreten: {e}", ephemeral=True)
+    except Exception as e:
+        logger.error(f"Generischer Fehler in viewlogs: {e}", exc_info=True)
+        await ctx.send(f"Ein unerwarteter Fehler ist aufgetreten: {e}", ephemeral=True)
+    finally:
+        if conn:
+            conn.close()
+
+@viewlogs.error
+async def viewlogs_error(ctx: commands.Context, error: commands.CommandError):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("Du hast nicht die erforderlichen Berechtigungen, um diesen Befehl auszuführen.", ephemeral=True)
+    elif isinstance(error, commands.NoPrivateMessage):
+        await ctx.send("Dieser Befehl kann nicht in privaten Nachrichten verwendet werden.", ephemeral=True)
+    else:
+        await ctx.send(f"Ein Fehler ist im `viewlogs`-Befehl aufgetreten: {error}", ephemeral=True)
+        logger.error(f"Fehler im viewlogs-Befehl von {ctx.author}: {error}", exc_info=True)
+        await send_log_message(f"⚠️ Fehler im viewlogs-Befehl von {ctx.author} in #{ctx.channel.name if ctx.channel else 'Unbekannter Kanal'}: {error}", target_channel_ids=[BOT_AUDIT_ID])
+
 @bot.event
 async def on_voice_state_update(member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
     if member.guild.id != DISCORD_SERVER_ID: return
@@ -515,6 +586,23 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
     if joined_visible_channel:
         ch_name_log_format = f"***{after.channel.name}***"
         await send_log_message(f"➕ {user_name_log_format} hat {ch_name_log_format} betreten.", target_channel_ids=target_ids_vc)
+        
+        # Log user join to database
+        try:
+            conn = sqlite3.connect('user_log.db')
+            cursor = conn.cursor()
+            timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            cursor.execute("""
+                INSERT INTO user_joins (user_id, username, channel_id, channel_name, timestamp)
+                VALUES (?, ?, ?, ?, ?)
+            """, (member.id, member.name, after.channel.id, after.channel.name, timestamp))
+            conn.commit()
+        except sqlite3.Error as e:
+            logger.error(f"SQLite error when logging user join: {e}")
+        finally:
+            if conn:
+                conn.close()
+
         if member.name not in USERS:
             USERS.append(member.name)
             USERS.sort()
@@ -720,3 +808,27 @@ if __name__ == "__main__":
     finally:
         logger.info("asyncio.run() wurde beendet. Programm-Aufräumarbeiten abgeschlossen.")
         logger.info("Bot-Prozess wird nun endgültig beendet.")
+
+# --------- User Log Database Initialization ---------
+def init_user_log_db():
+    try:
+        conn = sqlite3.connect('user_log.db')
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_joins (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                username TEXT,
+                channel_id INTEGER,
+                channel_name TEXT,
+                timestamp TEXT
+            )
+        """)
+        conn.commit()
+        logger.info("User log database initialized successfully (user_log.db and user_joins table).")
+    except sqlite3.Error as e:
+        logger.error(f"SQLite error during user_log_db initialization: {e}")
+    finally:
+        if conn:
+            conn.close()
+# Ensure newline at the end of the file
