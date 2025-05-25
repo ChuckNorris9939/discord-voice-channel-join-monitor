@@ -58,8 +58,19 @@ bot = commands.Bot(command_prefix="!!", intents=intents)
 DISCORD_SERVER_ID = 374159356717039616
 TECHSUPPORT_CHANNEL_ID = 1139952610883928134
 CLOSED_TAG_NAME = "🔒 CLOSED"
-LOG_CHANNEL_ID = 1266773678306230374
-BOT_AUDIT_ID = 1373288909542264852
+
+# Testing Mode Configuration
+TESTING = os.environ.get('APP_TESTING_MODE', 'False').lower() == 'true'
+TESTING_CHANNEL_ID = 1376227809474908253 # User-provided ID for testing channel
+
+if TESTING:
+    logger.info(f"TESTING MODE ENABLED: Overriding LOG_CHANNEL_ID and BOT_AUDIT_ID to {TESTING_CHANNEL_ID}.")
+    LOG_CHANNEL_ID = TESTING_CHANNEL_ID
+    BOT_AUDIT_ID = TESTING_CHANNEL_ID
+else:
+    LOG_CHANNEL_ID = 1266773678306230374 # Original value
+    BOT_AUDIT_ID = 1373288909542264852   # Original value
+
 HIDDEN_CHANNELS = [1255930025463644232, 1233872680680296499, 374159356717039620]
 USERS: List[str] = []
 IMAGES_FOLDER = "images"
@@ -254,20 +265,39 @@ async def on_ready():
         logger.info("msg_purge_task gestartet.")
 
     init_user_log_db() # Initialize user log database
+    await asyncio.sleep(5) # Wait for 5 seconds for cache to populate
+    logger.info("Populating initial USERS list...")
 
-    USERS.clear()
-    for guild in bot.guilds:
-        if guild.id == DISCORD_SERVER_ID:
-            for vc in guild.voice_channels:
-                if vc.id not in HIDDEN_CHANNELS:
-                    for member in vc.members:
-                        if not member.bot and member.name not in USERS:
+    logger.info(f"Attempting to fetch guild with ID: {DISCORD_SERVER_ID}")
+    guild = bot.get_guild(DISCORD_SERVER_ID)
+    if guild:
+        logger.info(f"Successfully fetched guild: {guild.name} (ID: {guild.id})")
+        USERS.clear()
+        for vc in guild.voice_channels:
+            if vc.id not in HIDDEN_CHANNELS:
+                # Log the voice channel being processed
+                logger.info(f"Processing voice channel: {vc.name} (ID: {vc.id}), Member count: {len(vc.members)}")
+                for member in vc.members:
+                    if not member.bot:
+                        # Log the member being added
+                        logger.info(f"Found member: {member.name} (ID: {member.id}) in VC {vc.name}")
+                        if member.name not in USERS: # Ensure no duplicates
                             USERS.append(member.name)
-    USERS.sort()
+                            logger.info(f"Added member to USERS list: {member.name}")
+                        else:
+                            logger.info(f"Member already in USERS list: {member.name}")
+                    else:
+                        logger.info(f"Skipping bot member: {member.name} (ID: {member.id}) in VC {vc.name}")
+        USERS.sort()
+        logger.info(f"USERS list populated: {USERS}")
+    else:
+        logger.warning(f"Could not find guild with ID {DISCORD_SERVER_ID}. User list will be empty.")
+        USERS.clear() # Ensure USERS is empty if guild not found
 
     formatted_users = [f"***{u}***" for u in USERS]
     user_list_msg = f"👥 {len(USERS)} Nutzer online (beim Start): {', '.join(formatted_users) if USERS else 'keine'}"
     await send_log_message(user_list_msg, target_channel_ids=[LOG_CHANNEL_ID])
+    logger.info(f"Sent initial user list to log channel: {user_list_msg}")
 
     try:
         tech_support_forum = bot.get_channel(TECHSUPPORT_CHANNEL_ID) or await bot.fetch_channel(TECHSUPPORT_CHANNEL_ID)

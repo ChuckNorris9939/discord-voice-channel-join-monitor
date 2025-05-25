@@ -20,6 +20,15 @@ export PORT=8081
 ```
 Or include it in your `.env` file if you are using one.
 
+### Testing Mode
+You can enable a testing mode by setting the `APP_TESTING_MODE` environment variable to `true`.
+```bash
+export APP_TESTING_MODE=true
+```
+When testing mode is active:
+*   A log message "TESTING MODE ENABLED: Overriding LOG_CHANNEL_ID and BOT_AUDIT_ID to 1376227809474908253" will be printed at startup.
+*   The `LOG_CHANNEL_ID` and `BOT_AUDIT_ID` will both be set to `1376227809474908253`, redirecting critical logs and audit messages to this specific channel.
+
 ## User Join Logging
 
 This bot includes a feature to log user voice channel join events.
