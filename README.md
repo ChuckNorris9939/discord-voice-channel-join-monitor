@@ -4,6 +4,14 @@ Sends messages when user joins to a voice channel
 clone command: `git clone --branch master --single-branch https://github.com/ChuckNorris9939/discord-voice-channel-join-monitor.git`
 build command: `docker build . -t dc_voice_monitor`
 
+## Installation
+
+### Dependencies
+Install the required Python packages using pip:
+```bash
+pip install -r requirements.txt
+```
+
 ## User Join Logging
 
 This bot includes a feature to log user voice channel join events.
