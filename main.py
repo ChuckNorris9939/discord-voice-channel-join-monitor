@@ -40,7 +40,8 @@ def run_flask():
     host = "0.0.0.0"
     port = int(os.environ.get("PORT", 8080))
     # Diese print-Anweisung ist eine einmalige Startmeldung für Waitress und kann so bleiben.
-    print(f"Starte Waitress WSGI-Server auf {host}:{port}")
+    # print(f"Starte Waitress WSGI-Server auf {host}:{port}") # Original print replaced by logger
+    logger.info(f"Attempting to start Flask server (Waitress) on {host}:{port}. If you see an 'Address already in use' error, try setting the PORT environment variable to a different value.")
     serve(app, host=host, port=port, threads=4)
 
 # --------- Discord-Bot Setup ---------
@@ -64,6 +65,29 @@ USERS: List[str] = []
 IMAGES_FOLDER = "images"
 
 shutdown_initiated = False
+
+# --------- User Log Database Initialization Function ---------
+def init_user_log_db():
+    try:
+        conn = sqlite3.connect('user_log.db')
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_joins (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                username TEXT,
+                channel_id INTEGER,
+                channel_name TEXT,
+                timestamp TEXT
+            )
+        """)
+        conn.commit()
+        logger.info("User log database initialized successfully (user_log.db and user_joins table).")
+    except sqlite3.Error as e:
+        logger.error(f"SQLite error during user_log_db initialization: {e}")
+    finally:
+        if conn:
+            conn.close()
 
 async def send_log_message(msg: str, embed: Optional[Embed] = None, target_channel_ids: Optional[List[int]] = None):
     if target_channel_ids is None:
@@ -808,27 +832,4 @@ if __name__ == "__main__":
     finally:
         logger.info("asyncio.run() wurde beendet. Programm-Aufräumarbeiten abgeschlossen.")
         logger.info("Bot-Prozess wird nun endgültig beendet.")
-
-# --------- User Log Database Initialization ---------
-def init_user_log_db():
-    try:
-        conn = sqlite3.connect('user_log.db')
-        cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS user_joins (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                username TEXT,
-                channel_id INTEGER,
-                channel_name TEXT,
-                timestamp TEXT
-            )
-        """)
-        conn.commit()
-        logger.info("User log database initialized successfully (user_log.db and user_joins table).")
-    except sqlite3.Error as e:
-        logger.error(f"SQLite error during user_log_db initialization: {e}")
-    finally:
-        if conn:
-            conn.close()
 # Ensure newline at the end of the file
