@@ -12,6 +12,8 @@ from typing import Dict, List, Optional
 import signal
 import asyncio
 
+BOT_VERSION = "1.10"
+
 # --------- Logging ---------
 import logging
 import sys
@@ -508,6 +510,7 @@ async def close_support_thread(thread: Thread, trigger_source: str, set_tag: boo
 @bot.event
 async def on_ready():
     logger.info(f"Eingeloggt als {bot.user} (ID: {bot.user.id})")
+    logger.info(f"Bot version: {BOT_VERSION} starting up...")
     if not os.path.exists(IMAGES_FOLDER):
         os.makedirs(IMAGES_FOLDER)
         logger.info(f"Ordner '{IMAGES_FOLDER}' wurde erstellt. Bitte füge Bilder hinzu.")
@@ -538,6 +541,10 @@ async def on_ready():
 
         await send_log_message(
             "✅ Bot gestartet.",
+            target_channel_ids=[LOG_CHANNEL_ID, BOT_AUDIT_ID]
+        )
+        await send_log_message(
+            f"✅ Bot version {BOT_VERSION} gestartet und einsatzbereit.",
             target_channel_ids=[LOG_CHANNEL_ID, BOT_AUDIT_ID]
         )
         sync_info_msg = f"{num_synced} Befehle für Guild {DISCORD_SERVER_ID} synchronisiert: {command_names}"

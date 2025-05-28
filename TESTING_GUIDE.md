@@ -111,3 +111,12 @@ This guide outlines the steps to manually test the thread inactivity monitoring 
 ---
 **Remember to revert the `timedelta` changes in `main.py` after completing your tests.**
 ---
+
+## Verifying Bot Version Announcement
+
+1.  **Console/File Logs:** After starting the bot, check the standard output or log file. You should see a log line similar to:
+    `YYYY-MM-DD HH:MM:SS [INFO] discord_bot: Bot version: 1.9 starting up...`
+    (Replace "1.9" with the actual value of `BOT_VERSION` if it differs).
+2.  **Discord Channels:** Check the channels specified by `LOG_CHANNEL_ID` and `BOT_AUDIT_ID` in your Discord server. You should see a message similar to:
+    `✅ Bot version 1.9 gestartet und einsatzbereit.`
+    (Replace "1.9" with the actual value of `BOT_VERSION` if it differs).
