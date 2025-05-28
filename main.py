@@ -72,6 +72,100 @@ def view_join_logs_page():
             
     return render_template('view_logs.html', logs=logs, current_filter_username=current_filter_username)
 
+@app.route('/settings', methods=['GET', 'POST'])
+def settings_route():
+    # These globals are modified by load_all_settings_to_globals() and the subsequent re-evaluation block.
+    global TESTING, HIDDEN_CHANNELS, LOG_CHANNEL_ID, BOT_AUDIT_ID, TECHSUPPORT_CHANNEL_ID 
+
+    message = None 
+    error = None   
+
+    if request.method == 'POST':
+        logger.info("Settings page: POST request received.")
+        try:
+            # Handle APP_TESTING_MODE
+            app_testing_mode_str = request.form.get('app_testing_mode')
+            if app_testing_mode_str in ['true', 'false']:
+                save_setting(DB_KEY_APP_TESTING_MODE, app_testing_mode_str)
+                logger.info(f"Saved {DB_KEY_APP_TESTING_MODE}: {app_testing_mode_str}")
+            else:
+                logger.warning(f"Invalid value for app_testing_mode: {app_testing_mode_str}")
+
+            # Handle HIDDEN_CHANNELS
+            hidden_channels_str = request.form.get('hidden_channels', '')
+            save_setting(DB_KEY_HIDDEN_CHANNELS, hidden_channels_str)
+            logger.info(f"Saved {DB_KEY_HIDDEN_CHANNELS}: {hidden_channels_str}")
+
+            # Handle LOG_CHANNEL_ID
+            log_channel_id_str = request.form.get('log_channel_id', '')
+            save_setting(DB_KEY_LOG_CHANNEL_ID, log_channel_id_str if log_channel_id_str else "None")
+            logger.info(f"Saved {DB_KEY_LOG_CHANNEL_ID}: {log_channel_id_str}")
+            
+            # Handle BOT_AUDIT_ID
+            bot_audit_id_str = request.form.get('bot_audit_id', '')
+            save_setting(DB_KEY_BOT_AUDIT_ID, bot_audit_id_str if bot_audit_id_str else "None")
+            logger.info(f"Saved {DB_KEY_BOT_AUDIT_ID}: {bot_audit_id_str}")
+
+            # Handle TECHSUPPORT_CHANNEL_ID
+            techsupport_channel_id_str = request.form.get('techsupport_channel_id', '')
+            save_setting(DB_KEY_TECHSUPPORT_CHANNEL_ID, techsupport_channel_id_str if techsupport_channel_id_str else "None")
+            logger.info(f"Saved {DB_KEY_TECHSUPPORT_CHANNEL_ID}: {techsupport_channel_id_str}")
+
+            # Reload settings into global scope
+            load_all_settings_to_globals()
+            
+            # Re-evaluate TESTING-dependent channel IDs after loading from DB, similar to on_ready
+            # This ensures LOG_CHANNEL_ID and BOT_AUDIT_ID are correctly set based on the new TESTING status
+            # The TESTING_CHANNEL_ID itself is not configurable via this page, it's an ENV var or hardcoded.
+            # The DEFAULT_..._ID constants are defined at the top of the file.
+            # The TESTING_CHANNEL_ID_FOR_OVERRIDES is the value used when TESTING is true.
+            
+            # Fetch the testing channel ID (this is not set by the form, but used for overriding)
+            # Assuming TESTING_CHANNEL_ID is already defined globally (e.g., from os.environ or hardcoded)
+            # This is the value that LOG_CHANNEL_ID and BOT_AUDIT_ID will be set to if TESTING is true
+            # and their specific DB values were the same as production defaults.
+            
+            # This re-evaluation logic should be identical to the one in on_ready
+            if TESTING:
+                logger.info(f"Settings Route - TESTING MODE ACTIVE (from DB or ENV): Overriding LOG_CHANNEL_ID and BOT_AUDIT_ID to {TESTING_CHANNEL_ID}.")
+                LOG_CHANNEL_ID = TESTING_CHANNEL_ID # TESTING_CHANNEL_ID is a global constant defined near the top
+                BOT_AUDIT_ID = TESTING_CHANNEL_ID
+            else:
+                # If TESTING is false, load_all_settings_to_globals already loaded the specific values
+                # for LOG_CHANNEL_ID and BOT_AUDIT_ID from DB or their respective defaults.
+                # The key part is that load_all_settings_to_globals sets them to their "production" values if TESTING is false.
+                logger.info(f"Settings Route - TESTING MODE INACTIVE. LOG_CHANNEL_ID: {LOG_CHANNEL_ID}, BOT_AUDIT_ID: {BOT_AUDIT_ID}.")
+
+
+            message = "Settings saved successfully. Note: Some changes (like Discord Token or channel ID changes impacting running tasks) may require a bot restart to take full effect across all components."
+
+            new_discord_token = request.form.get('discord_token')
+            if new_discord_token:
+                message += " New Discord Token was entered. Please set this as an environment variable (DISCORD_TOKEN) and restart the bot to apply."
+                logger.info("User entered a new Discord token in settings form. Reminded user to set as ENV var and restart.")
+        
+        except Exception as e:
+            logger.error(f"Error saving settings: {e}", exc_info=True)
+            error = f"Error saving settings: {e}"
+
+    current_settings_display = {}
+    
+    token_env = os.environ.get('DISCORD_TOKEN', '')
+    if token_env and len(token_env) > 8: # Show more characters for better identification
+        current_settings_display['DISCORD_TOKEN_DISPLAY'] = f"{token_env[:4]}...{token_env[-4:]}"
+    elif token_env:
+        current_settings_display['DISCORD_TOKEN_DISPLAY'] = "Token set (partially masked or too short)"
+    else:
+        current_settings_display['DISCORD_TOKEN_DISPLAY'] = "Token not set in environment"
+
+    current_settings_display['APP_TESTING_MODE'] = str(TESTING).lower()
+    current_settings_display['HIDDEN_CHANNELS'] = ','.join(map(str, HIDDEN_CHANNELS)) if HIDDEN_CHANNELS else ''
+    current_settings_display['LOG_CHANNEL_ID'] = str(LOG_CHANNEL_ID) if LOG_CHANNEL_ID is not None else ''
+    current_settings_display['BOT_AUDIT_ID'] = str(BOT_AUDIT_ID) if BOT_AUDIT_ID is not None else ''
+    current_settings_display['TECHSUPPORT_CHANNEL_ID'] = str(TECHSUPPORT_CHANNEL_ID) if TECHSUPPORT_CHANNEL_ID is not None else ''
+    
+    return render_template('settings.html', current_settings=current_settings_display, message=message, error=error)
+
 def run_flask():
     host = "0.0.0.0"
     port = int(os.environ.get("PORT", 8080))
@@ -145,6 +239,17 @@ def init_user_log_db():
         """)
         conn.commit()
         logger.info("Table 'inactive_threads' ensured to exist in user_log.db.")
+
+        # Create bot_settings table
+        logger.info("Initializing bot_settings table...")
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS bot_settings (
+                setting_name TEXT PRIMARY KEY,
+                setting_value TEXT
+            )
+        """)
+        conn.commit()
+        logger.info("Table 'bot_settings' ensured to exist in user_log.db.")
         
         logger.info("User log database (user_log.db) and its tables initialized successfully.")
     except sqlite3.Error as e:
@@ -395,6 +500,160 @@ def update_thread_reminder_sent(thread_id: int, timestamp_iso: str):
         if conn:
             conn.close()
 
+# --------- Helper Functions for bot_settings Table ---------
+def get_setting(setting_name: str, default_value: Optional[str] = None) -> Optional[str]:
+    conn = None
+    try:
+        conn = sqlite3.connect('user_log.db')
+        # No need for conn.row_factory = sqlite3.Row if we access by index (row[0])
+        # If accessing by column name (row['setting_value']), then it's needed.
+        # For consistency with other helpers, let's add it.
+        conn.row_factory = sqlite3.Row 
+        cursor = conn.cursor()
+        cursor.execute("SELECT setting_value FROM bot_settings WHERE setting_name = ?", (setting_name,))
+        row = cursor.fetchone()
+        if row:
+            logger.debug(f"Setting '{setting_name}' retrieved with value: {row['setting_value']}")
+            return row['setting_value']
+        else:
+            logger.debug(f"Setting '{setting_name}' not found, returning default value: {default_value}")
+            return default_value
+    except sqlite3.Error as e:
+        logger.error(f"SQLite error in get_setting for '{setting_name}': {e}", exc_info=True)
+        return default_value # Return default_value on error as well
+    except Exception as e:
+        logger.error(f"General error in get_setting for '{setting_name}': {e}", exc_info=True)
+        return default_value
+    finally:
+        if conn:
+            conn.close()
+
+def save_setting(setting_name: str, setting_value: str):
+    conn = None
+    try:
+        conn = sqlite3.connect('user_log.db')
+        cursor = conn.cursor()
+        cursor.execute("INSERT OR REPLACE INTO bot_settings (setting_name, setting_value) VALUES (?, ?)", (setting_name, setting_value))
+        conn.commit()
+        logger.info(f"Setting '{setting_name}' saved to database with value: {setting_value}")
+    except sqlite3.Error as e:
+        logger.error(f"SQLite error in save_setting for '{setting_name}': {e}", exc_info=True)
+    except Exception as e:
+        logger.error(f"General error in save_setting for '{setting_name}': {e}", exc_info=True)
+    finally:
+        if conn:
+            conn.close()
+
+# --------- Settings Loading Function ---------
+DB_KEY_APP_TESTING_MODE = "APP_TESTING_MODE"
+DB_KEY_HIDDEN_CHANNELS = "HIDDEN_CHANNELS"
+DB_KEY_LOG_CHANNEL_ID = "LOG_CHANNEL_ID"
+DB_KEY_BOT_AUDIT_ID = "BOT_AUDIT_ID"
+DB_KEY_TECHSUPPORT_CHANNEL_ID = "TECHSUPPORT_CHANNEL_ID"
+
+# Original hardcoded default values (pre-database settings)
+DEFAULT_LOG_CHANNEL_ID = 1266773678306230374
+DEFAULT_BOT_AUDIT_ID = 1373288909542264852
+DEFAULT_TECHSUPPORT_CHANNEL_ID = 1139952610883928134
+DEFAULT_HIDDEN_CHANNELS_LIST = [1255930025463644232, 1233872680680296499, 374159356717039620]
+
+def load_all_settings_to_globals():
+    global TESTING, HIDDEN_CHANNELS, LOG_CHANNEL_ID, BOT_AUDIT_ID, TECHSUPPORT_CHANNEL_ID
+    
+    logger.info("Loading dynamic settings from database...")
+
+    # --- APP_TESTING_MODE (linked to global TESTING) ---
+    # Default is False, or current os.environ if set
+    default_app_testing_mode_str = str(os.environ.get('APP_TESTING_MODE', 'False').lower() == 'true')
+    app_testing_mode_db_val = get_setting(DB_KEY_APP_TESTING_MODE, default_value=default_app_testing_mode_str)
+    if app_testing_mode_db_val == default_app_testing_mode_str and app_testing_mode_db_val is not None: # Save if default was used and not None
+        save_setting(DB_KEY_APP_TESTING_MODE, app_testing_mode_db_val)
+    TESTING = app_testing_mode_db_val.lower() == 'true'
+    logger.info(f"Loaded setting {DB_KEY_APP_TESTING_MODE}: {TESTING} (Type: {type(TESTING)})")
+
+
+    # --- HIDDEN_CHANNELS ---
+    default_hidden_channels_str = os.environ.get('HIDDEN_CHANNELS_ENV_VAR', ','.join(map(str, DEFAULT_HIDDEN_CHANNELS_LIST)))
+    hc_str_db_val = get_setting(DB_KEY_HIDDEN_CHANNELS, default_value=default_hidden_channels_str)
+    if hc_str_db_val == default_hidden_channels_str and hc_str_db_val is not None:
+        save_setting(DB_KEY_HIDDEN_CHANNELS, hc_str_db_val)
+    
+    if hc_str_db_val and hc_str_db_val.strip():
+        try:
+            HIDDEN_CHANNELS = [int(x.strip()) for x in hc_str_db_val.split(',') if x.strip()]
+        except ValueError:
+            logger.warning(f"Could not parse HIDDEN_CHANNELS string '{hc_str_db_val}' from database. Using default value: {DEFAULT_HIDDEN_CHANNELS_LIST}.")
+            HIDDEN_CHANNELS = list(DEFAULT_HIDDEN_CHANNELS_LIST) # Use a copy
+            save_setting(DB_KEY_HIDDEN_CHANNELS, ','.join(map(str, HIDDEN_CHANNELS))) # Save the fallback
+    else:
+        logger.info(f"HIDDEN_CHANNELS string from DB is empty or None. Using default: {DEFAULT_HIDDEN_CHANNELS_LIST}")
+        HIDDEN_CHANNELS = list(DEFAULT_HIDDEN_CHANNELS_LIST) # Use a copy
+        save_setting(DB_KEY_HIDDEN_CHANNELS, ','.join(map(str, HIDDEN_CHANNELS))) # Save the fallback
+    logger.info(f"Loaded setting {DB_KEY_HIDDEN_CHANNELS}: {HIDDEN_CHANNELS} (Type: {type(HIDDEN_CHANNELS)})")
+
+
+    # --- LOG_CHANNEL_ID ---
+    default_log_channel_id_str = str(os.environ.get('LOG_CHANNEL_ID_ENV_VAR', DEFAULT_LOG_CHANNEL_ID))
+    lc_str_db_val = get_setting(DB_KEY_LOG_CHANNEL_ID, default_value=default_log_channel_id_str)
+    if lc_str_db_val == default_log_channel_id_str and lc_str_db_val is not None:
+        save_setting(DB_KEY_LOG_CHANNEL_ID, lc_str_db_val)
+    
+    if lc_str_db_val and lc_str_db_val.lower() != 'none':
+        try:
+            LOG_CHANNEL_ID = int(lc_str_db_val)
+        except ValueError:
+            logger.warning(f"Could not parse LOG_CHANNEL_ID '{lc_str_db_val}' from DB. Using default: {DEFAULT_LOG_CHANNEL_ID}.")
+            LOG_CHANNEL_ID = DEFAULT_LOG_CHANNEL_ID
+            save_setting(DB_KEY_LOG_CHANNEL_ID, str(LOG_CHANNEL_ID)) # Save the fallback
+    else:
+        logger.info(f"LOG_CHANNEL_ID string from DB is empty or 'none'. Setting to None.")
+        LOG_CHANNEL_ID = None # Explicitly None if empty or 'none'
+        save_setting(DB_KEY_LOG_CHANNEL_ID, "None") # Save "None" as string
+    logger.info(f"Loaded setting {DB_KEY_LOG_CHANNEL_ID}: {LOG_CHANNEL_ID} (Type: {type(LOG_CHANNEL_ID)})")
+
+
+    # --- BOT_AUDIT_ID ---
+    default_bot_audit_id_str = str(os.environ.get('BOT_AUDIT_ID_ENV_VAR', DEFAULT_BOT_AUDIT_ID))
+    ba_str_db_val = get_setting(DB_KEY_BOT_AUDIT_ID, default_value=default_bot_audit_id_str)
+    if ba_str_db_val == default_bot_audit_id_str and ba_str_db_val is not None:
+        save_setting(DB_KEY_BOT_AUDIT_ID, ba_str_db_val)
+
+    if ba_str_db_val and ba_str_db_val.lower() != 'none':
+        try:
+            BOT_AUDIT_ID = int(ba_str_db_val)
+        except ValueError:
+            logger.warning(f"Could not parse BOT_AUDIT_ID '{ba_str_db_val}' from DB. Using default: {DEFAULT_BOT_AUDIT_ID}.")
+            BOT_AUDIT_ID = DEFAULT_BOT_AUDIT_ID
+            save_setting(DB_KEY_BOT_AUDIT_ID, str(BOT_AUDIT_ID)) # Save the fallback
+    else:
+        logger.info(f"BOT_AUDIT_ID string from DB is empty or 'none'. Setting to None.")
+        BOT_AUDIT_ID = None
+        save_setting(DB_KEY_BOT_AUDIT_ID, "None")
+    logger.info(f"Loaded setting {DB_KEY_BOT_AUDIT_ID}: {BOT_AUDIT_ID} (Type: {type(BOT_AUDIT_ID)})")
+    
+
+    # --- TECHSUPPORT_CHANNEL_ID ---
+    default_techsupport_channel_id_str = str(os.environ.get('TECHSUPPORT_CHANNEL_ID_ENV_VAR', DEFAULT_TECHSUPPORT_CHANNEL_ID))
+    tsc_str_db_val = get_setting(DB_KEY_TECHSUPPORT_CHANNEL_ID, default_value=default_techsupport_channel_id_str)
+    if tsc_str_db_val == default_techsupport_channel_id_str and tsc_str_db_val is not None:
+        save_setting(DB_KEY_TECHSUPPORT_CHANNEL_ID, tsc_str_db_val)
+
+    if tsc_str_db_val and tsc_str_db_val.lower() != 'none':
+        try:
+            TECHSUPPORT_CHANNEL_ID = int(tsc_str_db_val)
+        except ValueError:
+            logger.warning(f"Could not parse TECHSUPPORT_CHANNEL_ID '{tsc_str_db_val}' from DB. Using default: {DEFAULT_TECHSUPPORT_CHANNEL_ID}.")
+            TECHSUPPORT_CHANNEL_ID = DEFAULT_TECHSUPPORT_CHANNEL_ID
+            save_setting(DB_KEY_TECHSUPPORT_CHANNEL_ID, str(TECHSUPPORT_CHANNEL_ID)) # Save the fallback
+    else:
+        logger.info(f"TECHSUPPORT_CHANNEL_ID string from DB is empty or 'none'. Setting to None.")
+        TECHSUPPORT_CHANNEL_ID = None
+        save_setting(DB_KEY_TECHSUPPORT_CHANNEL_ID, "None")
+    logger.info(f"Loaded setting {DB_KEY_TECHSUPPORT_CHANNEL_ID}: {TECHSUPPORT_CHANNEL_ID} (Type: {type(TECHSUPPORT_CHANNEL_ID)})")
+
+    logger.info("Finished loading dynamic settings.")
+
+
 async def send_log_message(msg: str, embed: Optional[Embed] = None, target_channel_ids: Optional[List[int]] = None):
     if target_channel_ids is None:
         if BOT_AUDIT_ID:
@@ -564,10 +823,25 @@ async def on_ready():
         msg_purge_task.start()
         logger.info("msg_purge_task gestartet.")
 
-    init_user_log_db() # Initialize user log database
+    init_user_log_db() # Ensures DB tables are ready
+
+    # Load all settings from DB, potentially overriding ENV VARs or hardcoded defaults
+    load_all_settings_to_globals() 
+
+    # Re-evaluate TESTING-dependent channel IDs after loading from DB
+    if TESTING:
+        logger.info(f"TESTING MODE ACTIVE (from DB or ENV): Overriding LOG_CHANNEL_ID and BOT_AUDIT_ID to {TESTING_CHANNEL_ID}.")
+        LOG_CHANNEL_ID = TESTING_CHANNEL_ID
+        BOT_AUDIT_ID = TESTING_CHANNEL_ID
+    else:
+        # If TESTING was false, LOG_CHANNEL_ID and BOT_AUDIT_ID would have been set
+        # by load_all_settings_to_globals based on DB or their original defaults.
+        # No need to re-assign them here unless TESTING became false *after* being true initially.
+        # The load_all_settings_to_globals function handles the defaults correctly.
+        logger.info(f"TESTING MODE INACTIVE (from DB or ENV). LOG_CHANNEL_ID: {LOG_CHANNEL_ID}, BOT_AUDIT_ID: {BOT_AUDIT_ID}.")
     
     # Scan existing threads for activity before fully starting other tasks
-    await scan_existing_threads() # <-- New call
+    await scan_existing_threads() 
 
     await asyncio.sleep(5) # Wait for 5 seconds for cache to populate
     logger.info("Populating initial USERS list...")
