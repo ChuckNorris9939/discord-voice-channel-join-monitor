@@ -29,12 +29,13 @@ class TestMain(unittest.TestCase):
         self.conn = sqlite3.connect(TEST_DB_NAME)
         self.cursor = self.conn.cursor()
         
-        # Ensure a clean state by trying to drop the table if it exists from a previous test run (optional)
+        # Ensure a clean state by trying to drop tables if they exist
         try:
             self.cursor.execute("DROP TABLE IF EXISTS user_joins")
+            self.cursor.execute("DROP TABLE IF EXISTS inactive_threads") # New table
             self.conn.commit()
         except sqlite3.Error:
-            pass # Table might not exist yet, which is fine
+            pass # Tables might not exist yet, which is fine
 
         # Patch 'sqlite3.connect' in the 'main' module's scope
         # All calls to sqlite3.connect within main.py will now use our in-memory database
@@ -93,7 +94,29 @@ class TestMain(unittest.TestCase):
             "timestamp": "TEXT"
         }
         self.assertEqual(columns, expected_columns, "Table 'user_joins' schema does not match expected.")
-        self.mock_logger.info.assert_called_with("User log database initialized successfully (user_log.db and user_joins table).")
+
+        # Verify 'inactive_threads' table creation and schema
+        self.cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='inactive_threads'")
+        self.assertIsNotNone(self.cursor.fetchone(), "Table 'inactive_threads' was not created.")
+        
+        self.cursor.execute("PRAGMA table_info(inactive_threads)")
+        inactive_columns = {row[1]: row[2] for row in self.cursor.fetchall()}
+        expected_inactive_columns = {
+            "thread_id": "INTEGER",
+            "guild_id": "INTEGER",
+            "last_activity_timestamp": "TEXT",
+            "warning_sent_timestamp": "TEXT",
+            "reminder_sent_timestamp": "TEXT",
+            "op_user_id": "INTEGER",
+            "last_message_user_id": "INTEGER"
+        }
+        self.assertEqual(inactive_columns, expected_inactive_columns, "Table 'inactive_threads' schema does not match expected.")
+        
+        # Check for the specific log messages
+        self.mock_logger.info.assert_any_call("Table 'user_joins' ensured to exist in user_log.db.")
+        self.mock_logger.info.assert_any_call("Table 'inactive_threads' ensured to exist in user_log.db.")
+        self.mock_logger.info.assert_any_call("User log database (user_log.db) and its tables initialized successfully.")
+
 
     async def run_on_voice_state_update(self, member, before, after):
         """Helper to run on_voice_state_update within the test's async context if needed"""
@@ -332,6 +355,156 @@ class TestMain(unittest.TestCase):
         asyncio.run(run_viewlogs_error_handler())
         
         mock_ctx.send.assert_called_once_with("Du hast nicht die erforderlichen Berechtigungen, um diesen Befehl auszuführen.", ephemeral=True)
+
+    # --- Tests for inactive_threads DB helper functions ---
+
+    def test_add_or_update_thread_activity_insert(self):
+        """Test inserting a new thread activity record."""
+        main.init_user_log_db() # Ensure schema
+        thread_id = 12345
+        guild_id = 98765
+        last_activity_ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        op_user_id = 111
+        last_message_user_id = 222
+
+        main.add_or_update_thread_activity(thread_id, guild_id, last_activity_ts, op_user_id, last_message_user_id)
+
+        self.cursor.execute("SELECT * FROM inactive_threads WHERE thread_id = ?", (thread_id,))
+        record = self.cursor.fetchone()
+        self.assertIsNotNone(record)
+        self.assertEqual(record[0], thread_id)
+        self.assertEqual(record[1], guild_id)
+        self.assertEqual(record[2], last_activity_ts)
+        self.assertIsNone(record[3]) # warning_sent_timestamp
+        self.assertIsNone(record[4]) # reminder_sent_timestamp
+        self.assertEqual(record[5], op_user_id)
+        self.assertEqual(record[6], last_message_user_id)
+        self.mock_logger.info.assert_called_with(f"New activity recorded for thread {thread_id}: Inserted into inactive_threads.")
+
+    def test_add_or_update_thread_activity_update(self):
+        """Test updating an existing thread activity record."""
+        main.init_user_log_db()
+        thread_id = 12345
+        guild_id = 98765
+        initial_op_user_id = 111
+        initial_last_msg_user_id = 222
+        initial_activity_ts = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=1)).isoformat()
+        warning_ts = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=30)).isoformat()
+        
+        # Insert initial record with a warning
+        self.cursor.execute("""
+            INSERT INTO inactive_threads (thread_id, guild_id, last_activity_timestamp, op_user_id, last_message_user_id, warning_sent_timestamp)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (thread_id, guild_id, initial_activity_ts, initial_op_user_id, initial_last_msg_user_id, warning_ts))
+        self.conn.commit()
+
+        new_activity_ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        new_op_user_id = 112 
+        new_last_message_user_id = 223
+
+        main.add_or_update_thread_activity(thread_id, guild_id, new_activity_ts, new_op_user_id, new_last_message_user_id)
+
+        self.cursor.execute("SELECT * FROM inactive_threads WHERE thread_id = ?", (thread_id,))
+        record = self.cursor.fetchone()
+        self.assertIsNotNone(record)
+        self.assertEqual(record[2], new_activity_ts) # last_activity updated
+        self.assertIsNone(record[3]) # warning_sent_timestamp should be NULL
+        self.assertIsNone(record[4]) # reminder_sent_timestamp should be NULL
+        self.assertEqual(record[5], new_op_user_id) # op_user_id updated
+        self.assertEqual(record[6], new_last_message_user_id) # last_message_user_id updated
+        self.mock_logger.info.assert_called_with(f"Activity updated for thread {thread_id}: Updated existing record in inactive_threads, reset warning/reminder.")
+
+    def test_get_thread_activity_exists(self):
+        """Test retrieving an existing thread's activity."""
+        main.init_user_log_db()
+        thread_id = 54321
+        guild_id = 123
+        ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        self.cursor.execute("INSERT INTO inactive_threads (thread_id, guild_id, last_activity_timestamp, op_user_id, last_message_user_id) VALUES (?, ?, ?, ?, ?)",
+                       (thread_id, guild_id, ts, 1, 2))
+        self.conn.commit()
+
+        record = main.get_thread_activity(thread_id)
+        self.assertIsNotNone(record)
+        self.assertEqual(record['thread_id'], thread_id)
+        self.assertEqual(record['last_activity_timestamp'], ts)
+
+    def test_get_thread_activity_not_exists(self):
+        """Test retrieving a non-existent thread's activity."""
+        main.init_user_log_db()
+        record = main.get_thread_activity(99999)
+        self.assertIsNone(record)
+
+    def test_get_all_thread_activities_empty(self):
+        """Test getting all activities when DB is empty."""
+        main.init_user_log_db()
+        records = main.get_all_thread_activities()
+        self.assertEqual(len(records), 0)
+
+    def test_get_all_thread_activities_multiple(self):
+        """Test getting all activities with multiple records."""
+        main.init_user_log_db()
+        ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        self.cursor.execute("INSERT INTO inactive_threads (thread_id, guild_id, last_activity_timestamp, op_user_id, last_message_user_id) VALUES (1, 10, ?, 1,1)", (ts,))
+        self.cursor.execute("INSERT INTO inactive_threads (thread_id, guild_id, last_activity_timestamp, op_user_id, last_message_user_id) VALUES (2, 10, ?, 2,2)", (ts,))
+        self.conn.commit()
+
+        records = main.get_all_thread_activities()
+        self.assertEqual(len(records), 2)
+        self.assertEqual(records[0]['thread_id'], 1)
+        self.assertEqual(records[1]['thread_id'], 2)
+
+    def test_remove_thread_activity(self):
+        """Test removing a thread activity record."""
+        main.init_user_log_db()
+        thread_id = 777
+        ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        self.cursor.execute("INSERT INTO inactive_threads (thread_id, guild_id, last_activity_timestamp, op_user_id, last_message_user_id) VALUES (?, 10, ?, 1, 1)", (thread_id, ts))
+        self.conn.commit()
+
+        main.remove_thread_activity(thread_id)
+        
+        self.cursor.execute("SELECT * FROM inactive_threads WHERE thread_id = ?", (thread_id,))
+        self.assertIsNone(self.cursor.fetchone())
+        self.mock_logger.info.assert_called_with(f"Removed thread activity record for thread_id: {thread_id}")
+
+    def test_remove_thread_activity_not_exists(self):
+        """Test removing a non-existent thread activity record."""
+        main.init_user_log_db()
+        thread_id = 888
+        main.remove_thread_activity(thread_id) # Should not error
+        self.mock_logger.warning.assert_called_with(f"Attempted to remove thread activity for thread_id: {thread_id}, but no record was found.")
+
+
+    def test_update_thread_warning_sent(self):
+        """Test updating warning_sent_timestamp."""
+        main.init_user_log_db()
+        thread_id = 666
+        ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        self.cursor.execute("INSERT INTO inactive_threads (thread_id, guild_id, last_activity_timestamp, op_user_id, last_message_user_id) VALUES (?, 10, ?, 1,1)", (thread_id, ts))
+        self.conn.commit()
+
+        warning_ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        main.update_thread_warning_sent(thread_id, warning_ts)
+
+        self.cursor.execute("SELECT warning_sent_timestamp FROM inactive_threads WHERE thread_id = ?", (thread_id,))
+        self.assertEqual(self.cursor.fetchone()[0], warning_ts)
+        self.mock_logger.info.assert_called_with(f"Updated warning_sent_timestamp for thread_id: {thread_id} to {warning_ts}")
+
+    def test_update_thread_reminder_sent(self):
+        """Test updating reminder_sent_timestamp."""
+        main.init_user_log_db()
+        thread_id = 555
+        ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        self.cursor.execute("INSERT INTO inactive_threads (thread_id, guild_id, last_activity_timestamp, op_user_id, last_message_user_id) VALUES (?, 10, ?, 1,1)", (thread_id, ts))
+        self.conn.commit()
+
+        reminder_ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        main.update_thread_reminder_sent(thread_id, reminder_ts)
+
+        self.cursor.execute("SELECT reminder_sent_timestamp FROM inactive_threads WHERE thread_id = ?", (thread_id,))
+        self.assertEqual(self.cursor.fetchone()[0], reminder_ts)
+        self.mock_logger.info.assert_called_with(f"Updated reminder_sent_timestamp for thread_id: {thread_id} to {reminder_ts}")
 
 
 if __name__ == '__main__':
