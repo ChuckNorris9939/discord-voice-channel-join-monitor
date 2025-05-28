@@ -12,6 +12,8 @@ from typing import Dict, List, Optional
 import signal
 import asyncio
 
+BOT_VERSION = "1.10"
+
 # --------- Logging ---------
 import logging
 import sys
@@ -127,9 +129,268 @@ def init_user_log_db():
             )
         """)
         conn.commit()
-        logger.info("User log database initialized successfully (user_log.db and user_joins table).")
+        logger.info("Table 'user_joins' ensured to exist in user_log.db.")
+
+        # Create inactive_threads table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS inactive_threads (
+                thread_id INTEGER PRIMARY KEY,
+                guild_id INTEGER,
+                last_activity_timestamp TEXT,
+                warning_sent_timestamp TEXT,
+                reminder_sent_timestamp TEXT,
+                op_user_id INTEGER,
+                last_message_user_id INTEGER
+            )
+        """)
+        conn.commit()
+        logger.info("Table 'inactive_threads' ensured to exist in user_log.db.")
+        
+        logger.info("User log database (user_log.db) and its tables initialized successfully.")
     except sqlite3.Error as e:
         logger.error(f"SQLite error during user_log_db initialization: {e}")
+    finally:
+        if conn:
+            conn.close()
+
+# --------- Helper Functions for inactive_threads Table ---------
+def add_or_update_thread_activity(thread_id: int, guild_id: int, last_activity_timestamp_iso: str, op_user_id: int, last_message_user_id: int):
+    conn = None
+    try:
+        conn = sqlite3.connect('user_log.db')
+        cursor = conn.cursor()
+        
+        # Try to insert, if it fails (because thread_id exists), then update
+        try:
+            cursor.execute("""
+                INSERT INTO inactive_threads (thread_id, guild_id, last_activity_timestamp, op_user_id, last_message_user_id, warning_sent_timestamp, reminder_sent_timestamp)
+                VALUES (?, ?, ?, ?, ?, NULL, NULL)
+            """, (thread_id, guild_id, last_activity_timestamp_iso, op_user_id, last_message_user_id))
+            logger.info(f"New activity recorded for thread {thread_id}: Inserted into inactive_threads.")
+        except sqlite3.IntegrityError: # This means thread_id already exists
+            cursor.execute("""
+                UPDATE inactive_threads
+                SET last_activity_timestamp = ?,
+                    op_user_id = ?,
+                    last_message_user_id = ?,
+                    warning_sent_timestamp = NULL,
+                    reminder_sent_timestamp = NULL
+                WHERE thread_id = ?
+            """, (last_activity_timestamp_iso, op_user_id, last_message_user_id, thread_id))
+            logger.info(f"Activity updated for thread {thread_id}: Updated existing record in inactive_threads, reset warning/reminder.")
+        conn.commit()
+    except sqlite3.Error as e:
+        logger.error(f"SQLite error in add_or_update_thread_activity for thread {thread_id}: {e}", exc_info=True)
+    except Exception as e:
+        logger.error(f"General error in add_or_update_thread_activity for thread {thread_id}: {e}", exc_info=True)
+    finally:
+        if conn:
+            conn.close()
+
+def get_thread_activity(thread_id: int) -> Optional[sqlite3.Row]:
+    conn = None
+    try:
+        conn = sqlite3.connect('user_log.db')
+        conn.row_factory = sqlite3.Row # To access columns by name
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM inactive_threads WHERE thread_id = ?", (thread_id,))
+        record = cursor.fetchone()
+        if record:
+            logger.debug(f"Thread activity record found for thread {thread_id}.")
+            return record
+        else:
+            logger.debug(f"No thread activity record found for thread {thread_id}.")
+            return None
+    except sqlite3.Error as e:
+        logger.error(f"SQLite error in get_thread_activity for thread {thread_id}: {e}", exc_info=True)
+        return None
+    except Exception as e:
+        logger.error(f"General error in get_thread_activity for thread {thread_id}: {e}", exc_info=True)
+        return None
+    finally:
+        if conn:
+            conn.close()
+
+async def scan_existing_threads():
+    logger.info("Starting scan of existing tech support threads...")
+    if not TECHSUPPORT_CHANNEL_ID:
+        logger.error("TECHSUPPORT_CHANNEL_ID is not configured. Cannot scan existing threads.")
+        return
+
+    try:
+        tech_forum_channel = bot.get_channel(TECHSUPPORT_CHANNEL_ID)
+        if not tech_forum_channel:
+            try:
+                tech_forum_channel = await bot.fetch_channel(TECHSUPPORT_CHANNEL_ID)
+            except discord.NotFound:
+                logger.error(f"Tech support forum channel (ID: {TECHSUPPORT_CHANNEL_ID}) not found.")
+                return
+            except discord.Forbidden:
+                logger.error(f"Forbidden to fetch tech support forum channel (ID: {TECHSUPPORT_CHANNEL_ID}).")
+                return
+            except Exception as e:
+                logger.error(f"Error fetching tech support forum channel (ID: {TECHSUPPORT_CHANNEL_ID}): {e}", exc_info=True)
+                return
+        
+        if not isinstance(tech_forum_channel, discord.ForumChannel):
+            logger.error(f"Channel with ID {TECHSUPPORT_CHANNEL_ID} is not a ForumChannel. Cannot scan threads.")
+            return
+
+        logger.info(f"Successfully fetched tech support forum: '{tech_forum_channel.name}' (ID: {tech_forum_channel.id})")
+        closed_tag = await get_forum_tag_by_name(tech_forum_channel, CLOSED_TAG_NAME)
+        if not closed_tag:
+            logger.warning(f"'{CLOSED_TAG_NAME}' tag not found in forum '{tech_forum_channel.name}'. Will process all threads as if not closed by tag.")
+
+        processed_threads = 0
+        updated_threads = 0
+        threads_to_scan = tech_forum_channel.threads # Get a list of threads once
+        # Also include archived threads if possible and relevant, though this example focuses on active ones.
+        # If you need to scan archived threads:
+        # archived_threads = await tech_forum_channel.archived_threads(limit=None).flatten()
+        # threads_to_scan.extend(archived_threads) # Be mindful of duplicates if any thread can be in both lists
+
+        logger.info(f"Found {len(threads_to_scan)} threads in '{tech_forum_channel.name}'. Iterating now...")
+
+        for thread in threads_to_scan:
+            logger.debug(f"Scanning thread: '{thread.name}' (ID: {thread.id})")
+            if closed_tag and closed_tag in thread.applied_tags:
+                logger.info(f"Thread '{thread.name}' (ID: {thread.id}) is closed (has '{CLOSED_TAG_NAME}' tag). Skipping.")
+                continue
+
+            if thread.archived or thread.locked: # Also skip if manually archived/locked by other means
+                 logger.info(f"Thread '{thread.name}' (ID: {thread.id}) is archived or locked. Skipping.")
+                 continue
+
+            last_message = None
+            try:
+                # Attempt to fetch the last message
+                messages = await thread.history(limit=1).flatten() # Default is newest first
+                if not messages:
+                    logger.info(f"Thread '{thread.name}' (ID: {thread.id}) is empty or history is inaccessible. Skipping.")
+                    continue
+                last_message = messages[0]
+                logger.debug(f"Last message in thread '{thread.name}' by {last_message.author.name} at {last_message.created_at}")
+            except discord.Forbidden:
+                logger.warning(f"Forbidden to fetch history for thread '{thread.name}' (ID: {thread.id}). Skipping.")
+                continue
+            except Exception as e:
+                logger.error(f"Error fetching history for thread '{thread.name}' (ID: {thread.id}): {e}", exc_info=True)
+                continue
+            
+            op_user_id = thread.owner_id
+            if not op_user_id: # owner_id can be None if the user who created the thread (post) left the server
+                logger.info(f"owner_id is None for thread '{thread.name}' (ID: {thread.id}). Attempting to fetch starter message.")
+                try:
+                    # The thread ID itself is the ID of the starter message in forum post threads
+                    starter_message = await thread.fetch_message(thread.id)
+                    if starter_message:
+                        op_user_id = starter_message.author.id
+                        logger.info(f"OP user ID for thread '{thread.name}' (ID: {thread.id}) from fetched starter message: {op_user_id}")
+                    else:
+                        # This case should ideally not happen if fetch_message(thread.id) works for forum posts
+                        logger.warning(f"Could not fetch starter message for thread '{thread.name}' (ID: {thread.id}) to determine OP. Skipping.")
+                        continue
+                except discord.NotFound:
+                    logger.warning(f"Starter message for thread '{thread.name}' (ID: {thread.id}) not found (thread ID might not be the starter message ID if it's not a forum post, or post deleted). Skipping.")
+                    continue
+                except discord.Forbidden:
+                    logger.warning(f"Forbidden to fetch starter message for thread '{thread.name}' (ID: {thread.id}). Skipping.")
+                    continue
+                except Exception as e:
+                    logger.error(f"Error fetching starter message for thread '{thread.name}' (ID: {thread.id}): {e}", exc_info=True)
+                    continue
+            
+            if not op_user_id: # Should be redundant now, but as a safeguard
+                logger.error(f"Failed to determine OP user ID for thread '{thread.name}' (ID: {thread.id}) after all attempts. Skipping.")
+                continue
+
+            last_message_author_id = last_message.author.id
+            last_activity_ts_iso = last_message.created_at.isoformat()
+
+            logger.info(f"Updating activity for thread '{thread.name}' (ID: {thread.id}). OP: {op_user_id}, Last Poster: {last_message_author_id}, Last Activity: {last_activity_ts_iso}")
+            add_or_update_thread_activity(
+                thread_id=thread.id,
+                guild_id=thread.guild.id,
+                last_activity_timestamp_iso=last_activity_ts_iso,
+                op_user_id=op_user_id,
+                last_message_user_id=last_message_author_id
+            )
+            updated_threads += 1
+            processed_threads +=1 # Count as processed if we attempted an update
+
+        logger.info(f"Scan of existing tech support threads completed. Processed: {processed_threads}, Updated/Added: {updated_threads} threads.")
+
+    except Exception as e:
+        logger.error(f"An unexpected error occurred during scan_existing_threads: {e}", exc_info=True)
+
+# --- Additional DB Helper Functions for inactive_threads ---
+def get_all_thread_activities() -> List[sqlite3.Row]:
+    conn = None
+    try:
+        conn = sqlite3.connect('user_log.db')
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM inactive_threads")
+        records = cursor.fetchall()
+        logger.debug(f"Fetched {len(records)} thread activity records from DB.")
+        return records
+    except sqlite3.Error as e:
+        logger.error(f"SQLite error in get_all_thread_activities: {e}", exc_info=True)
+        return []
+    except Exception as e:
+        logger.error(f"General error in get_all_thread_activities: {e}", exc_info=True)
+        return []
+    finally:
+        if conn:
+            conn.close()
+
+def remove_thread_activity(thread_id: int):
+    conn = None
+    try:
+        conn = sqlite3.connect('user_log.db')
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM inactive_threads WHERE thread_id = ?", (thread_id,))
+        conn.commit()
+        if cursor.rowcount > 0:
+            logger.info(f"Removed thread activity record for thread_id: {thread_id}")
+        else:
+            logger.warning(f"Attempted to remove thread activity for thread_id: {thread_id}, but no record was found.")
+    except sqlite3.Error as e:
+        logger.error(f"SQLite error in remove_thread_activity for thread {thread_id}: {e}", exc_info=True)
+    except Exception as e:
+        logger.error(f"General error in remove_thread_activity for thread {thread_id}: {e}", exc_info=True)
+    finally:
+        if conn:
+            conn.close()
+
+def update_thread_warning_sent(thread_id: int, timestamp_iso: str):
+    conn = None
+    try:
+        conn = sqlite3.connect('user_log.db')
+        cursor = conn.cursor()
+        cursor.execute("UPDATE inactive_threads SET warning_sent_timestamp = ? WHERE thread_id = ?", (timestamp_iso, thread_id))
+        conn.commit()
+        logger.info(f"Updated warning_sent_timestamp for thread_id: {thread_id} to {timestamp_iso}")
+    except sqlite3.Error as e:
+        logger.error(f"SQLite error in update_thread_warning_sent for thread {thread_id}: {e}", exc_info=True)
+    except Exception as e:
+        logger.error(f"General error in update_thread_warning_sent for thread {thread_id}: {e}", exc_info=True)
+    finally:
+        if conn:
+            conn.close()
+
+def update_thread_reminder_sent(thread_id: int, timestamp_iso: str):
+    conn = None
+    try:
+        conn = sqlite3.connect('user_log.db')
+        cursor = conn.cursor()
+        cursor.execute("UPDATE inactive_threads SET reminder_sent_timestamp = ? WHERE thread_id = ?", (timestamp_iso, thread_id))
+        conn.commit()
+        logger.info(f"Updated reminder_sent_timestamp for thread_id: {thread_id} to {timestamp_iso}")
+    except sqlite3.Error as e:
+        logger.error(f"SQLite error in update_thread_reminder_sent for thread {thread_id}: {e}", exc_info=True)
+    except Exception as e:
+        logger.error(f"General error in update_thread_reminder_sent for thread {thread_id}: {e}", exc_info=True)
     finally:
         if conn:
             conn.close()
@@ -249,6 +510,7 @@ async def close_support_thread(thread: Thread, trigger_source: str, set_tag: boo
 @bot.event
 async def on_ready():
     logger.info(f"Eingeloggt als {bot.user} (ID: {bot.user.id})")
+    logger.info(f"Bot version: {BOT_VERSION} starting up...")
     if not os.path.exists(IMAGES_FOLDER):
         os.makedirs(IMAGES_FOLDER)
         logger.info(f"Ordner '{IMAGES_FOLDER}' wurde erstellt. Bitte füge Bilder hinzu.")
@@ -281,6 +543,10 @@ async def on_ready():
             "✅ Bot gestartet.",
             target_channel_ids=[LOG_CHANNEL_ID, BOT_AUDIT_ID]
         )
+        await send_log_message(
+            f"✅ Bot version {BOT_VERSION} gestartet und einsatzbereit.",
+            target_channel_ids=[LOG_CHANNEL_ID, BOT_AUDIT_ID]
+        )
         sync_info_msg = f"{num_synced} Befehle für Guild {DISCORD_SERVER_ID} synchronisiert: {command_names}"
         await send_log_message(
             f"ℹ️ {sync_info_msg}",
@@ -299,6 +565,10 @@ async def on_ready():
         logger.info("msg_purge_task gestartet.")
 
     init_user_log_db() # Initialize user log database
+    
+    # Scan existing threads for activity before fully starting other tasks
+    await scan_existing_threads() # <-- New call
+
     await asyncio.sleep(5) # Wait for 5 seconds for cache to populate
     logger.info("Populating initial USERS list...")
 
@@ -565,8 +835,68 @@ async def users(ctx: commands.Context):
 async def on_message(message: discord.Message):
     if message.author == bot.user or message.author.bot:
         return
-    if message.guild and message.guild.id == DISCORD_SERVER_ID:
-        await bot.process_commands(message)
+
+    # Process commands first
+    if message.guild and message.guild.id == DISCORD_SERVER_ID: # Ensure commands are processed for the correct guild
+        await bot.process_commands(message) # Important: process commands before other message handling
+
+    # --- New Thread Activity Tracking Logic ---
+    if message.guild and message.guild.id == DISCORD_SERVER_ID and \
+       isinstance(message.channel, discord.Thread) and \
+       message.channel.parent_id == TECHSUPPORT_CHANNEL_ID:
+        
+        thread: discord.Thread = message.channel
+        logger.debug(f"Message received in relevant support thread: {thread.name} (ID: {thread.id}) by {message.author.name}")
+
+        # Check if thread is already closed
+        if isinstance(thread.parent, discord.ForumChannel):
+            closed_tag_object = await get_forum_tag_by_name(thread.parent, CLOSED_TAG_NAME)
+            if closed_tag_object and closed_tag_object in thread.applied_tags:
+                logger.info(f"Activity in already closed thread '{thread.name}' (ID: {thread.id}). No activity update.")
+                return # Do not update activity for closed threads
+
+        op_user_id = None
+        if thread.owner_id:
+            op_user_id = thread.owner_id
+            logger.debug(f"OP user ID for thread {thread.id} from owner_id: {op_user_id}")
+        else:
+            try:
+                # Fallback: fetch starter message if owner_id is None (e.g., user left)
+                # The thread ID itself is the ID of the starter message in forum post threads
+                starter_message = await thread.fetch_message(thread.id) 
+                if starter_message:
+                    op_user_id = starter_message.author.id
+                    logger.info(f"OP user ID for thread {thread.id} from fetched starter message: {op_user_id}")
+                else:
+                    logger.warning(f"Could not fetch starter message for thread {thread.id} to determine OP. op_user_id will be None.")
+            except discord.NotFound:
+                logger.warning(f"Starter message for thread {thread.id} not found. op_user_id will be None.")
+            except discord.Forbidden:
+                logger.warning(f"Forbidden to fetch starter message for thread {thread.id}. op_user_id will be None.")
+            except Exception as e:
+                logger.error(f"Error fetching starter message for thread {thread.id}: {e}", exc_info=True)
+        
+        if not op_user_id:
+            logger.error(f"Failed to determine OP user ID for thread {thread.id}. Cannot update activity.")
+            # Optionally, send an audit log message about this failure
+            # await send_log_message(f"⚠️ Failed to determine OP user ID for thread {thread.id}. Activity not tracked.", target_channel_ids=[BOT_AUDIT_ID])
+            return
+
+        last_message_user_id = message.author.id
+        current_timestamp_iso = message.created_at.isoformat() # discord.Message.created_at is already timezone-aware (UTC)
+
+        logger.info(f"Activity detected in thread '{thread.name}' (ID: {thread.id}). Updating timestamp. OP: {op_user_id}, Last Poster: {last_message_user_id}")
+        add_or_update_thread_activity(
+            thread_id=thread.id,
+            guild_id=thread.guild.id,
+            last_activity_timestamp_iso=current_timestamp_iso,
+            op_user_id=op_user_id,
+            last_message_user_id=last_message_user_id
+        )
+    # --- End of New Thread Activity Tracking Logic ---
+    # The original command processing line was moved up to ensure commands are always processed if conditions met.
+    # if message.guild and message.guild.id == DISCORD_SERVER_ID:
+    # await bot.process_commands(message) # This line is now at the top of on_message
 
 @bot.hybrid_command(name="viewlogs", description="Zeigt die letzten 10 Benutzer-Join-Events an (nur für Admins).")
 @commands.has_permissions(administrator=True)
@@ -720,6 +1050,191 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
     if log_needs_update_user_list:
         formatted_current_users = [f"***{u}***" for u in USERS]
         await send_log_message(f"👥 {len(USERS)} Nutzer online: {', '.join(formatted_current_users) if USERS else 'keine'}", target_channel_ids=target_ids_vc)
+
+# --------- Daily Inactivity Check Task ---------
+@tasks.loop(hours=24) # Set to 24 for production, can be lower for testing (e.g. minutes=1)
+async def check_inactive_threads_task():
+    logger.info("Starting daily check for inactive threads...")
+    now = datetime.datetime.now(datetime.timezone.utc)
+    all_tracked_threads = get_all_thread_activities()
+    
+    if not all_tracked_threads:
+        logger.info("No threads currently tracked for inactivity. Task iteration complete.")
+        return
+
+    tech_support_forum = None
+    if TECHSUPPORT_CHANNEL_ID:
+        try:
+            tech_support_forum = bot.get_channel(TECHSUPPORT_CHANNEL_ID) or await bot.fetch_channel(TECHSUPPORT_CHANNEL_ID)
+            if not isinstance(tech_support_forum, discord.ForumChannel):
+                logger.error(f"TECHSUPPORT_CHANNEL_ID {TECHSUPPORT_CHANNEL_ID} is not a ForumChannel. Cannot proceed with inactivity check.")
+                tech_support_forum = None # Ensure it's None if not a forum
+        except (discord.NotFound, discord.Forbidden) as e:
+            logger.error(f"Could not fetch Tech Support Forum (ID: {TECHSUPPORT_CHANNEL_ID}): {e}. Cannot proceed with inactivity check.")
+            tech_support_forum = None # Ensure it's None
+        except Exception as e:
+            logger.error(f"Unexpected error fetching Tech Support Forum (ID: {TECHSUPPORT_CHANNEL_ID}): {e}", exc_info=True)
+            tech_support_forum = None # Ensure it's None
+
+
+    closed_tag_object = None
+    if tech_support_forum: # Only try to get tag if forum exists
+        try:
+            closed_tag_object = await get_forum_tag_by_name(tech_support_forum, CLOSED_TAG_NAME)
+            if not closed_tag_object:
+                logger.warning(f"'{CLOSED_TAG_NAME}' tag not found in forum '{tech_support_forum.name}'. External closure check by tag will be skipped.")
+        except Exception as e:
+            logger.error(f"Error getting closed_tag_object for forum '{tech_support_forum.name}': {e}", exc_info=True)
+
+
+    threads_processed_count = 0
+    for record in all_tracked_threads:
+        threads_processed_count +=1
+        logger.debug(f"Processing record: {dict(record)}") # Log the whole record for easier debugging
+        try:
+            thread_id = record['thread_id']
+            last_activity_timestamp_iso = record['last_activity_timestamp']
+            warning_sent_timestamp_iso = record['warning_sent_timestamp']
+            reminder_sent_timestamp_iso = record['reminder_sent_timestamp']
+            op_user_id = record['op_user_id']
+            last_message_user_id = record['last_message_user_id']
+
+            if not last_activity_timestamp_iso:
+                logger.warning(f"Thread {thread_id} has no last_activity_timestamp. Skipping.")
+                continue # Should not happen with current logic, but good to check
+
+            try:
+                last_activity_dt = datetime.datetime.fromisoformat(last_activity_timestamp_iso)
+            except ValueError:
+                logger.error(f"Invalid ISO format for last_activity_timestamp '{last_activity_timestamp_iso}' for thread {thread_id}. Skipping.")
+                continue
+            
+            warning_sent_dt = None
+            if warning_sent_timestamp_iso:
+                try:
+                    warning_sent_dt = datetime.datetime.fromisoformat(warning_sent_timestamp_iso)
+                except ValueError:
+                    logger.error(f"Invalid ISO format for warning_sent_timestamp '{warning_sent_timestamp_iso}' for thread {thread_id}. Treating as not sent.")
+            
+            reminder_sent_dt = None
+            if reminder_sent_timestamp_iso:
+                try:
+                    reminder_sent_dt = datetime.datetime.fromisoformat(reminder_sent_timestamp_iso)
+                except ValueError:
+                    logger.error(f"Invalid ISO format for reminder_sent_timestamp '{reminder_sent_timestamp_iso}' for thread {thread_id}. Treating as not sent.")
+
+            thread_object: Optional[discord.Thread] = bot.get_channel(thread_id)
+            if not thread_object:
+                try:
+                    thread_object = await bot.fetch_channel(thread_id)
+                except discord.NotFound:
+                    logger.info(f"Thread {thread_id} not found (deleted?). Removing from tracking.")
+                    remove_thread_activity(thread_id)
+                    continue
+                except discord.Forbidden:
+                    logger.warning(f"Forbidden to fetch thread {thread_id}. Cannot check status. Skipping for now.")
+                    continue # Skip this iteration, might be a temporary permissions issue
+                except Exception as e:
+                    logger.error(f"Error fetching thread {thread_id}: {e}. Skipping for now.", exc_info=True)
+                    continue
+            
+            if not isinstance(thread_object, discord.Thread):
+                logger.warning(f"Channel {thread_id} is not a Thread. Type: {type(thread_object)}. Removing from tracking.")
+                remove_thread_activity(thread_id)
+                continue
+
+            # Check for external closure
+            is_externally_closed = False
+            if thread_object.archived or thread_object.locked:
+                is_externally_closed = True
+                logger.info(f"Thread '{thread_object.name}' (ID: {thread_id}) found to be archived or locked externally.")
+            elif closed_tag_object and closed_tag_object in thread_object.applied_tags:
+                is_externally_closed = True
+                logger.info(f"Thread '{thread_object.name}' (ID: {thread_id}) found to have '{CLOSED_TAG_NAME}' tag externally.")
+            
+            if is_externally_closed:
+                logger.info(f"Removing externally closed/managed thread '{thread_object.name}' (ID: {thread_id}) from activity tracking.")
+                remove_thread_activity(thread_id)
+                continue
+
+            # Fetch users for mentions - do this once before stages
+            op_user_mention = f"<@{op_user_id}>" # Default to raw mention
+            try:
+                target_op_user = await bot.fetch_user(op_user_id)
+                op_user_mention = target_op_user.mention
+            except discord.NotFound:
+                logger.warning(f"OP user {op_user_id} for thread {thread_id} not found. Using raw ID for mention.")
+            except Exception as e_user:
+                logger.error(f"Error fetching OP user {op_user_id} for thread {thread_id}: {e_user}. Using raw ID.", exc_info=True)
+
+            last_msg_user_mention = f"<@{last_message_user_id}>"
+            if last_message_user_id != op_user_id : # Avoid double ping if OP was last poster
+                try:
+                    target_last_msg_user = await bot.fetch_user(last_message_user_id)
+                    last_msg_user_mention = target_last_msg_user.mention
+                except discord.NotFound:
+                    logger.warning(f"Last message user {last_message_user_id} for thread {thread_id} not found. Using raw ID for mention.")
+                except Exception as e_user:
+                    logger.error(f"Error fetching last message user {last_message_user_id} for thread {thread_id}: {e_user}. Using raw ID.", exc_info=True)
+            else: # OP was the last poster
+                last_msg_user_mention = "" # Don't ping the same user twice
+
+            mentions = f"{op_user_mention} {last_msg_user_mention}".strip()
+
+
+            # Stage 3: Closure (after 24h from reminder)
+            if reminder_sent_dt and (now - reminder_sent_dt > datetime.timedelta(days=1)): # Check Stage 3 first
+                logger.info(f"Thread '{thread_object.name}' (ID: {thread_id}) is due for closure. Last activity: {last_activity_dt}, Reminder: {reminder_sent_dt}.")
+                try:
+                    await thread_object.send(f"Dieser Thread wurde aufgrund von Inaktivität automatisch geschlossen. {mentions}")
+                    await close_support_thread(thread_object, "automatischer Inaktivitäts-Timer")
+                    remove_thread_activity(thread_id) # Successfully closed and removed
+                    logger.info(f"Thread '{thread_object.name}' (ID: {thread_id}) automatically closed and removed from tracking.")
+                except discord.Forbidden:
+                    logger.error(f"Forbidden to close or send message in thread '{thread_object.name}' (ID: {thread_id}). Will retry next cycle.")
+                except Exception as e_close:
+                    logger.error(f"Error during auto-closure of thread '{thread_object.name}' (ID: {thread_id}): {e_close}", exc_info=True)
+                continue # Move to next thread record
+
+            # Stage 2: Reminder (after 24h from warning)
+            elif warning_sent_dt and not reminder_sent_dt and (now - warning_sent_dt > datetime.timedelta(days=1)):
+                logger.info(f"Thread '{thread_object.name}' (ID: {thread_id}) is due for a 24h reminder. Last activity: {last_activity_dt}, Warning: {warning_sent_dt}.")
+                try:
+                    await thread_object.send(f"Erinnerung: Dieser Thread ist weiterhin inaktiv und wird in 24 Stunden automatisch geschlossen, wenn keine neue Antwort erfolgt. {mentions}")
+                    update_thread_reminder_sent(thread_id, now.isoformat())
+                    logger.info(f"Sent 24h reminder for thread '{thread_object.name}' (ID: {thread_id}).")
+                except discord.Forbidden:
+                    logger.error(f"Forbidden to send reminder in thread '{thread_object.name}' (ID: {thread_id}). Will retry next cycle.")
+                except Exception as e_remind:
+                    logger.error(f"Error sending reminder for thread '{thread_object.name}' (ID: {thread_id}): {e_remind}", exc_info=True)
+                continue
+
+            # Stage 1: Warning (after 48h from last activity)
+            elif not warning_sent_dt and (now - last_activity_dt > datetime.timedelta(days=2)):
+                logger.info(f"Thread '{thread_object.name}' (ID: {thread_id}) is due for a 48h warning. Last activity: {last_activity_dt}.")
+                try:
+                    await thread_object.send(f"Dieser Thread ist seit 48 Stunden inaktiv und wird in weiteren 48 Stunden automatisch geschlossen, wenn keine neue Antwort erfolgt. {mentions}")
+                    update_thread_warning_sent(thread_id, now.isoformat())
+                    logger.info(f"Sent 48h warning for thread '{thread_object.name}' (ID: {thread_id}).")
+                except discord.Forbidden:
+                    logger.error(f"Forbidden to send warning in thread '{thread_object.name}' (ID: {thread_id}). Will retry next cycle.")
+                except Exception as e_warn:
+                    logger.error(f"Error sending warning for thread '{thread_object.name}' (ID: {thread_id}): {e_warn}", exc_info=True)
+                continue
+            else:
+                logger.debug(f"Thread '{thread_object.name}' (ID: {thread_id}) not yet due for any inactivity action.")
+
+        except Exception as e_outer:
+            thread_id_for_log = record.get('thread_id', 'UNKNOWN_ID') if record else 'UNKNOWN_RECORD'
+            logger.error(f"Unhandled exception processing thread record for ID {thread_id_for_log} in check_inactive_threads_task: {e_outer}", exc_info=True)
+            # Continue to the next record to prevent one bad record from stopping the entire task
+            
+    logger.info(f"Daily check for inactive threads completed. Processed {threads_processed_count} DB records.")
+
+@check_inactive_threads_task.before_loop
+async def before_check_inactive_threads_task():
+    await bot.wait_until_ready()
+    logger.info("check_inactive_threads_task: Bot is ready, starting loop.")
 
 
 @tasks.loop(hours=24)
