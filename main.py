@@ -12,7 +12,7 @@ from typing import Dict, List, Optional
 import signal
 import asyncio
 
-BOT_VERSION = "1.11"
+BOT_VERSION = "1.12"
 CONFIG_DIR = "config"
 DATABASE_NAME = "user_log.db"
 DATABASE_PATH = os.path.join(CONFIG_DIR, DATABASE_NAME)
@@ -231,6 +231,7 @@ shutdown_initiated = False
 
 # --------- User Log Database Initialization Function ---------
 def init_user_log_db():
+    os.makedirs(CONFIG_DIR, exist_ok=True)
     logger.info(f"Attempting to initialize database at: {DATABASE_PATH}")
     conn = None # Initialize conn to None before the try block
     try:
@@ -812,6 +813,7 @@ async def close_support_thread(thread: Thread, trigger_source: str, set_tag: boo
 
 @bot.event
 async def on_ready():
+    global LOG_CHANNEL_ID, BOT_AUDIT_ID, TESTING, HIDDEN_CHANNELS, TECHSUPPORT_CHANNEL_ID, DEFAULT_LOG_CHANNEL_ID, DEFAULT_BOT_AUDIT_ID, DEFAULT_TECHSUPPORT_CHANNEL_ID, DEFAULT_HIDDEN_CHANNELS_LIST, TESTING_CHANNEL_ID
     logger.info(f"Eingeloggt als {bot.user} (ID: {bot.user.id})")
     logger.info(f"Bot version: {BOT_VERSION} starting up...")
     if not os.path.exists(IMAGES_FOLDER):
