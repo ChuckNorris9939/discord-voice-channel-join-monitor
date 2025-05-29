@@ -13,6 +13,9 @@ import signal
 import asyncio
 
 BOT_VERSION = "1.10"
+CONFIG_DIR = "config"
+DATABASE_NAME = "user_log.db"
+DATABASE_PATH = os.path.join(CONFIG_DIR, DATABASE_NAME)
 
 # --------- Logging ---------
 import logging
@@ -37,7 +40,7 @@ app = Flask(__name__, template_folder='templates')
 def home():
     # Diese print-Anweisung kann bleiben oder zu logger.debug/info für Flask-spezifische Logs werden
     # logger.info("Flask: Health-Check-Endpunkt / wurde aufgerufen.")
-    return render_template('home.html')
+    return render_template('home.html', app_testing_mode=TESTING)
 
 @app.route('/view_join_logs')
 def view_join_logs_page():
@@ -45,7 +48,7 @@ def view_join_logs_page():
     logs = []
     current_filter_username = request.args.get('username_filter', '').strip()
     try:
-        conn = sqlite3.connect('user_log.db')
+        conn = sqlite3.connect(DATABASE_PATH)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -166,6 +169,25 @@ def settings_route():
     
     return render_template('settings.html', current_settings=current_settings_display, message=message, error=error)
 
+@app.route('/restart_bot', methods=['POST'])
+async def restart_bot_route():
+    if request.method == 'POST':
+        logger.info("Restart command received via web UI.")
+        if bot.loop:
+            logger.info("Scheduling graceful_shutdown via bot's event loop.")
+            asyncio.run_coroutine_threadsafe(graceful_shutdown(), bot.loop)
+            # Optionally, add a message to be displayed on the settings page after redirect
+            # For example, using Flask's flash messaging:
+            # flash("Bot shutdown initiated. It should restart if a process manager is active.", "info")
+        else:
+            logger.error("Bot event loop not available. Cannot schedule graceful_shutdown.")
+            # Optionally, flash an error message:
+            # flash("Error: Bot event loop not available. Cannot initiate restart.", "error")
+        
+        # Redirect back to the settings page (or home)
+        # The actual shutdown happens in the background.
+        return redirect(url_for('settings_route'))
+
 def run_flask():
     host = "0.0.0.0"
     port = int(os.environ.get("PORT", 8080))
@@ -210,7 +232,7 @@ shutdown_initiated = False
 # --------- User Log Database Initialization Function ---------
 def init_user_log_db():
     try:
-        conn = sqlite3.connect('user_log.db')
+        conn = sqlite3.connect(DATABASE_PATH)
         cursor = conn.cursor()
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS user_joins (
@@ -262,7 +284,7 @@ def init_user_log_db():
 def add_or_update_thread_activity(thread_id: int, guild_id: int, last_activity_timestamp_iso: str, op_user_id: int, last_message_user_id: int):
     conn = None
     try:
-        conn = sqlite3.connect('user_log.db')
+        conn = sqlite3.connect(DATABASE_PATH)
         cursor = conn.cursor()
         
         # Try to insert, if it fails (because thread_id exists), then update
@@ -295,7 +317,7 @@ def add_or_update_thread_activity(thread_id: int, guild_id: int, last_activity_t
 def get_thread_activity(thread_id: int) -> Optional[sqlite3.Row]:
     conn = None
     try:
-        conn = sqlite3.connect('user_log.db')
+        conn = sqlite3.connect(DATABASE_PATH)
         conn.row_factory = sqlite3.Row # To access columns by name
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM inactive_threads WHERE thread_id = ?", (thread_id,))
@@ -432,7 +454,7 @@ async def scan_existing_threads():
 def get_all_thread_activities() -> List[sqlite3.Row]:
     conn = None
     try:
-        conn = sqlite3.connect('user_log.db')
+        conn = sqlite3.connect(DATABASE_PATH)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM inactive_threads")
@@ -452,7 +474,7 @@ def get_all_thread_activities() -> List[sqlite3.Row]:
 def remove_thread_activity(thread_id: int):
     conn = None
     try:
-        conn = sqlite3.connect('user_log.db')
+        conn = sqlite3.connect(DATABASE_PATH)
         cursor = conn.cursor()
         cursor.execute("DELETE FROM inactive_threads WHERE thread_id = ?", (thread_id,))
         conn.commit()
@@ -471,7 +493,7 @@ def remove_thread_activity(thread_id: int):
 def update_thread_warning_sent(thread_id: int, timestamp_iso: str):
     conn = None
     try:
-        conn = sqlite3.connect('user_log.db')
+        conn = sqlite3.connect(DATABASE_PATH)
         cursor = conn.cursor()
         cursor.execute("UPDATE inactive_threads SET warning_sent_timestamp = ? WHERE thread_id = ?", (timestamp_iso, thread_id))
         conn.commit()
@@ -487,7 +509,7 @@ def update_thread_warning_sent(thread_id: int, timestamp_iso: str):
 def update_thread_reminder_sent(thread_id: int, timestamp_iso: str):
     conn = None
     try:
-        conn = sqlite3.connect('user_log.db')
+        conn = sqlite3.connect(DATABASE_PATH)
         cursor = conn.cursor()
         cursor.execute("UPDATE inactive_threads SET reminder_sent_timestamp = ? WHERE thread_id = ?", (timestamp_iso, thread_id))
         conn.commit()
@@ -504,7 +526,7 @@ def update_thread_reminder_sent(thread_id: int, timestamp_iso: str):
 def get_setting(setting_name: str, default_value: Optional[str] = None) -> Optional[str]:
     conn = None
     try:
-        conn = sqlite3.connect('user_log.db')
+        conn = sqlite3.connect(DATABASE_PATH)
         # No need for conn.row_factory = sqlite3.Row if we access by index (row[0])
         # If accessing by column name (row['setting_value']), then it's needed.
         # For consistency with other helpers, let's add it.
@@ -531,7 +553,7 @@ def get_setting(setting_name: str, default_value: Optional[str] = None) -> Optio
 def save_setting(setting_name: str, setting_value: str):
     conn = None
     try:
-        conn = sqlite3.connect('user_log.db')
+        conn = sqlite3.connect(DATABASE_PATH)
         cursor = conn.cursor()
         cursor.execute("INSERT OR REPLACE INTO bot_settings (setting_name, setting_value) VALUES (?, ?)", (setting_name, setting_value))
         conn.commit()
@@ -822,6 +844,10 @@ async def on_ready():
     if not msg_purge_task.is_running():
         msg_purge_task.start()
         logger.info("msg_purge_task gestartet.")
+
+    # Ensure configuration directory exists before initializing DB or loading settings
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    logger.info(f"Ensured configuration directory '{CONFIG_DIR}' exists.")
 
     init_user_log_db() # Ensures DB tables are ready
 
@@ -1178,7 +1204,7 @@ async def on_message(message: discord.Message):
 async def viewlogs(ctx: commands.Context):
     conn = None
     try:
-        conn = sqlite3.connect('user_log.db')
+        conn = sqlite3.connect(DATABASE_PATH)
         cursor = conn.cursor()
         # Fetch last 10 records, ordering by id descending to get the latest entries
         cursor.execute("SELECT user_id, username, channel_id, channel_name, timestamp FROM user_joins ORDER BY id DESC LIMIT 10")
@@ -1283,7 +1309,7 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
         
         # Log user join to database
         try:
-            conn = sqlite3.connect('user_log.db')
+            conn = sqlite3.connect(DATABASE_PATH)
             cursor = conn.cursor()
             timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
             cursor.execute("""
