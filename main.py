@@ -12,7 +12,7 @@ from typing import Dict, List, Optional
 import signal
 import asyncio
 
-BOT_VERSION = "1.10"
+BOT_VERSION = "1.11"
 CONFIG_DIR = "config"
 DATABASE_NAME = "user_log.db"
 DATABASE_PATH = os.path.join(CONFIG_DIR, DATABASE_NAME)
@@ -231,8 +231,25 @@ shutdown_initiated = False
 
 # --------- User Log Database Initialization Function ---------
 def init_user_log_db():
+    logger.info(f"Attempting to initialize database at: {DATABASE_PATH}")
+    conn = None # Initialize conn to None before the try block
     try:
         conn = sqlite3.connect(DATABASE_PATH)
+        logger.info(f"Successfully connected to database: {DATABASE_PATH}")
+    except sqlite3.Error as e:
+        logger.error(f"SQLite error during connect to {DATABASE_PATH}: {e}", exc_info=True)
+        # If connection fails, we cannot proceed further in this function.
+        # Close connection if it was somehow partially opened, though unlikely here.
+        if conn:
+            conn.close()
+        return # Exit the function if connection failed
+    except Exception as e:
+        logger.error(f"Unexpected error during connect to {DATABASE_PATH}: {e}", exc_info=True)
+        if conn:
+            conn.close()
+        return # Exit the function
+
+    try:
         cursor = conn.cursor()
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS user_joins (
@@ -244,6 +261,7 @@ def init_user_log_db():
                 timestamp TEXT
             )
         """)
+        logger.info("Attempted to create table 'user_joins'.")
         conn.commit()
         logger.info("Table 'user_joins' ensured to exist in user_log.db.")
 
@@ -259,11 +277,12 @@ def init_user_log_db():
                 last_message_user_id INTEGER
             )
         """)
+        logger.info("Attempted to create table 'inactive_threads'.")
         conn.commit()
         logger.info("Table 'inactive_threads' ensured to exist in user_log.db.")
 
         # Create bot_settings table
-        logger.info("Initializing bot_settings table...")
+        logger.info("Attempting to create table 'bot_settings'.")
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS bot_settings (
                 setting_name TEXT PRIMARY KEY,
@@ -275,10 +294,13 @@ def init_user_log_db():
         
         logger.info("User log database (user_log.db) and its tables initialized successfully.")
     except sqlite3.Error as e:
-        logger.error(f"SQLite error during user_log_db initialization: {e}")
+        logger.error(f"SQLite error during user_log_db table creation or commit: {e}", exc_info=True) # Added exc_info
+    except Exception as e: # Generic exception handler for other potential errors
+        logger.error(f"Unexpected error during user_log_db table creation or commit: {e}", exc_info=True)
     finally:
         if conn:
             conn.close()
+            logger.info(f"Database connection to {DATABASE_PATH} closed after init attempt.")
 
 # --------- Helper Functions for inactive_threads Table ---------
 def add_or_update_thread_activity(thread_id: int, guild_id: int, last_activity_timestamp_iso: str, op_user_id: int, last_message_user_id: int):
@@ -850,6 +872,20 @@ async def on_ready():
     logger.info(f"Ensured configuration directory '{CONFIG_DIR}' exists.")
 
     init_user_log_db() # Ensures DB tables are ready
+
+    # ---- Verification of database file after init ----
+    logger.info(f"Verifying database file at {DATABASE_PATH} after initialization...")
+    if os.path.exists(DATABASE_PATH):
+        try:
+            db_size = os.path.getsize(DATABASE_PATH)
+            logger.info(f"Database file {DATABASE_PATH} exists. Size: {db_size} bytes.")
+            if db_size == 0:
+                logger.warning(f"WARNING: Database file {DATABASE_PATH} is 0 bytes after initialization. This may indicate problems with table creation or disk persistence.")
+        except OSError as e:
+            logger.error(f"Error accessing database file {DATABASE_PATH} to check size: {e}", exc_info=True)
+    else:
+        logger.error(f"CRITICAL: Database file {DATABASE_PATH} does NOT exist after initialization attempt. Settings and other DB operations will likely fail.")
+    # ---- End of database file verification ----
 
     # Load all settings from DB, potentially overriding ENV VARs or hardcoded defaults
     load_all_settings_to_globals() 
