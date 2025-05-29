@@ -22,6 +22,7 @@ Or include it in your `.env` file if you are using one.
 
 ### Testing Mode
 You can enable a testing mode by setting the `APP_TESTING_MODE` environment variable to `true`.
+This setting can also be managed via the `/settings` page in the web UI.
 ```bash
 export APP_TESTING_MODE=true
 ```
@@ -33,6 +34,7 @@ When testing mode is active:
 
 This bot includes a feature to log user voice channel join events.
 When a user joins a visible voice channel, the following information is recorded in an SQLite database file named `user_log.db`:
+- The SQLite database (`user_log.db`) is stored within a `config/` directory, which is automatically created in the bot's root folder if it doesn't exist.
 - User ID
 - Username
 - Voice Channel ID
@@ -52,8 +54,22 @@ To view the latest join events, administrators can use the `viewlogs` command.
 The output will be sent as an ephemeral message, visible only to the administrator who invoked the command.
 
 ### Web Interface for Logs
-A web interface is available to browse all user join logs stored in the database. You can access it at the following path on the server where the bot is running:
+A web interface is available to browse all user join logs stored in the database and manage bot settings. You can access it at the following paths on the server where the bot is running:
 
-`/view_join_logs`
+*   `/view_join_logs`: Browse user join logs.
+*   `/settings`: View and modify bot settings.
 
-For example, if your bot is accessible at `http://localhost:8080`, the log interface would be at `http://localhost:8080/view_join_logs`. The port is the same one used by the Flask server for health checks (default 8080, configurable via the `PORT` environment variable).
+For example, if your bot is accessible at `http://localhost:8080`, the interfaces would be at `http://localhost:8080/view_join_logs` and `http://localhost:8080/settings`. The port is the same one used by the Flask server for health checks (default 8080, configurable via the `PORT` environment variable).
+
+#### Bot Settings Page (`/settings`)
+The `/settings` page allows for dynamic configuration of several bot parameters, including:
+- App Testing Mode
+- Hidden Channel IDs
+- Log Channel ID
+- Bot Audit ID
+- Tech Support Channel ID
+
+Changes saved here are stored in the database and loaded by the bot. Some settings might also be influenced by environment variables as initial defaults.
+
+##### Restart Bot Functionality
+The `/settings` page includes a "Restart Bot" button. Clicking this button will trigger a graceful shutdown of the bot. **Important:** For the bot to restart automatically after shutdown, you must be running it using a process manager (like Docker with a restart policy, systemd, pm2, or a simple `while true` loop in a shell script) that handles automatic restarts after process termination. Without a process manager, the bot will simply stop.
