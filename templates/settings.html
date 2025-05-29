@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Bot Settings</title>
+    <style>
+        body { font-family: sans-serif; margin: 20px; }
+        .container { width: 800px; margin: auto; }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        input[type="text"], input[type="password"], select {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        input[type="checkbox"] { margin-right: 5px; }
+        .token-display { 
+            background-color: #f0f0f0; 
+            padding: 8px; 
+            border-radius: 4px; 
+            font-family: monospace;
+            margin-bottom: 5px;
+        }
+        .note { font-size: 0.9em; color: #666; margin-top: 5px; }
+        .button-group button { padding: 10px 15px; margin-right: 10px; border: none; border-radius: 4px; cursor: pointer; }
+        .save-button { background-color: #4CAF50; color: white; }
+        .restart-button { background-color: #f44336; color: white; }
+        .home-link { margin-top: 20px; display: inline-block; }
+    </style>
+</head><body>
+    <div class="container">
+        <h1>Bot Settings</h1>
+
+        {% if message %}
+            <p style="color: green;">{{ message }}</p>
+        {% endif %}
+        {% if error %}
+            <p style="color: red;">{{ error }}</p>
+        {% endif %}
+
+        <form method="POST" action="{{ url_for('settings_route') }}">
+            <!-- Discord Token -->
+            <div class="form-group">
+                <label for="discord_token_display">Discord Token</label>
+                <div class="token-display">
+                    {{ current_settings.get('DISCORD_TOKEN_DISPLAY', 'Token not configured or not readable') }}
+                </div>
+                <input type="password" name="discord_token" id="discord_token" placeholder="Enter new token (optional)">
+                <p class="note">Leave blank if you don't want to change the token.
+                    Changing the token requires a bot restart. The full token is never stored by this settings page.
+                </p>
+            </div>
+
+            <!-- App Testing Mode -->
+            <div class="form-group">
+                <label for="app_testing_mode">App Testing Mode</label>
+                <select name="app_testing_mode" id="app_testing_mode">
+                    <option value="true" {% if current_settings.get('APP_TESTING_MODE') == 'true' %}selected{% endif %}>True</option>
+                    <option value="false" {% if current_settings.get('APP_TESTING_MODE') == 'false' %}selected{% endif %}>False</option>
+                </select>
+            </div>
+
+            <!-- Hidden Channels -->
+            <div class="form-group">
+                <label for="hidden_channels">Hidden Channels (comma-separated IDs)</label>
+                <input type="text" name="hidden_channels" id="hidden_channels" value="{{ current_settings.get('HIDDEN_CHANNELS', '') }}">
+            </div>
+
+            <!-- Log Channel ID -->
+            <div class="form-group">
+                <label for="log_channel_id">Log Channel ID</label>
+                <input type="text" name="log_channel_id" id="log_channel_id" value="{{ current_settings.get('LOG_CHANNEL_ID', '') }}">
+            </div>
+            
+            <!-- Bot Audit ID -->
+            <div class="form-group">
+                <label for="bot_audit_id">Bot Audit ID</label>
+                <input type="text" name="bot_audit_id" id="bot_audit_id" value="{{ current_settings.get('BOT_AUDIT_ID', '') }}">
+            </div>
+
+            <!-- Tech Support Channel ID -->
+            <div class="form-group">
+                <label for="techsupport_channel_id">Tech Support Channel ID (Forum)</label>
+                <input type="text" name="techsupport_channel_id" id="techsupport_channel_id" value="{{ current_settings.get('TECHSUPPORT_CHANNEL_ID', '') }}">
+            </div>
+
+            <div class="button-group">
+                <button type="submit" class="save-button">Save Settings</button>
+                <!-- The restart button functionality will be handled later.
+                     It might POST to a different endpoint or use JavaScript. -->
+                <button type="button" class="restart-button" onclick="alert('Restart functionality to be implemented. This may trigger a bot shutdown.');">Restart Bot (Requires Setup)</button>
+            </div>
+        </form>
+        <a href="{{ url_for('home') }}" class="home-link">Back to Home</a>
+    </div>
+</body>
+</html>
