@@ -120,3 +120,63 @@ This guide outlines the steps to manually test the thread inactivity monitoring 
 2.  **Discord Channels:** Check the channels specified by `LOG_CHANNEL_ID` and `BOT_AUDIT_ID` in your Discord server. You should see a message similar to:
     `✅ Bot version 1.9 gestartet und einsatzbereit.`
     (Replace "1.9" with the actual value of `BOT_VERSION` if it differs).
+
+---
+
+## Testing Configurable Database Path
+
+1.  **Initial Startup:**
+    *   Before starting the bot for the first time with this change, ensure there is no `config` directory and no `user_log.db` in the root or `config` directory.
+    *   Start the bot.
+    *   **Expected:**
+        *   A `config` directory is created in the bot's root directory.
+        *   The `user_log.db` file is created inside the `config` directory.
+        *   The bot operates normally, logging to the console that it's using/created the DB in the `config` directory (check for logs like "Ensured configuration directory 'config' exists." and database connection messages referencing the path).
+2.  **Data Persistence:**
+    *   Perform some actions that would write to the database (e.g., trigger user join/leave for `user_joins`, let a support thread go through an inactivity cycle for `inactive_threads`, change a setting on the `/settings` page for `bot_settings`).
+    *   Stop the bot.
+    *   Restart the bot.
+    *   **Expected:** The bot should load the previous data from `/config/user_log.db`. Verify this by checking logs, the `/settings` page (settings should persist), or other relevant bot behavior (e.g., `viewlogs` command).
+3.  **Existing Database (Migration Test - Manual):**
+    *   If you have an existing `user_log.db` in the root directory from a previous version:
+        *   Manually create a `config` directory.
+        *   Manually move the old `user_log.db` into the `config` directory.
+        *   Start the new version of the bot.
+        *   **Expected:** The bot should pick up and use the existing database from `/config/user_log.db` seamlessly. All previous data should be intact and usable.
+
+---
+
+## Testing Restart Button Functionality
+
+1.  **Prerequisite:** Ensure the bot is run by a process manager (e.g., Docker with restart policy, systemd service, or a simple `while true; do python main.py; done` shell loop) that will automatically restart it if the process exits.
+2.  **Trigger Restart:**
+    *   Navigate to the `/settings` page on the bot's Flask web UI.
+    *   Click the "Restart Bot" button.
+    *   Confirm the action in the browser's confirmation dialog.
+3.  **Observe Behavior:**
+    *   **Expected (Bot Logs):** The bot's console logs should show messages related to `graceful_shutdown` being initiated (e.g., "Restart command received via web UI.", "Scheduling graceful_shutdown...", "Shutdown-Signal empfangen...", "Stoppe msg_purge_task...", "Bot wird gestoppt...", "Bot-Verbindung erfolgreich geschlossen.", "Graceful shutdown abgeschlossen.").
+    *   **Expected (Process):** The bot process should terminate cleanly.
+    *   **Expected (Process Manager):** The configured process manager should detect the termination and restart the `main.py` script.
+    *   **Expected (Bot Logs on Restart):** You should see the normal startup logs, including the version announcement and "Bot gestartet" messages.
+4.  **Caution Note:** If no process manager is active, clicking 'Restart Bot' will simply stop the bot. It will not restart on its own. This is expected behavior.
+
+---
+
+## Testing `APP_TESTING_MODE` Display on Home Page
+
+1.  **Initial State:**
+    *   Start the bot.
+    *   Navigate to the bot's home page (`/`) in a web browser.
+    *   **Expected:** The "Application Testing Mode" status (ON/OFF) should be displayed. This should reflect the current effective setting (from environment variable `APP_TESTING_MODE` initially, or from the database if previously set).
+2.  **Change via `/settings`:**
+    *   Navigate to `/settings`.
+    *   Change the "App Testing Mode" (e.g., from OFF to ON, or ON to OFF). Click "Save Settings".
+    *   Navigate back to the home page (`/`).
+    *   **Expected:** The displayed "Application Testing Mode" status should update to reflect the change made in the settings.
+3.  **Verify Bot Behavior (if applicable):**
+    *   If `APP_TESTING_MODE` influences other behaviors (like logging channels):
+        *   If `TESTING` is set to `True`, check that bot log messages (e.g., from `send_log_message`) are directed to the `TESTING_CHANNEL_ID` (if this channel ID is configured).
+        *   If `TESTING` is set to `False`, check that bot log messages are directed to the production `LOG_CHANNEL_ID` and `BOT_AUDIT_ID`.
+        *   This can be verified by checking the bot's console logs for messages indicating which channel IDs are being used after the setting change and by observing messages in the respective Discord channels.
+
+---
