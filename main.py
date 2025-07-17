@@ -837,11 +837,10 @@ async def on_ready():
         
         logger.info(f"{num_synced} Befehle für Guild {DISCORD_SERVER_ID} synchronisiert: {command_names}")
 
-        if not TESTING:
-            await send_log_message(
-                f"✅ Bot version {BOT_VERSION} gestartet und einsatzbereit.",
-                target_channel_ids=[LOG_CHANNEL_ID, BOT_AUDIT_ID]
-            )
+        await send_log_message(
+            f"✅ Bot version {BOT_VERSION} gestartet und einsatzbereit.",
+            target_channel_ids=[LOG_CHANNEL_ID, BOT_AUDIT_ID]
+        )
         sync_info_msg = f"{num_synced} Befehle für Guild {DISCORD_SERVER_ID} synchronisiert: {command_names}"
         await send_log_message(
             f"ℹ️ {sync_info_msg}",
@@ -880,7 +879,7 @@ async def on_ready():
     # ---- End of database file verification ----
 
     # Load all settings from DB, potentially overriding ENV VARs or hardcoded defaults
-    load_all_settings_to_globals() 
+    load_all_settings_to_globals()
 
     # Re-evaluate TESTING-dependent channel IDs after loading from DB
     if TESTING:
@@ -888,10 +887,6 @@ async def on_ready():
         LOG_CHANNEL_ID = TESTING_CHANNEL_ID
         BOT_AUDIT_ID = TESTING_CHANNEL_ID
     else:
-        # If TESTING was false, LOG_CHANNEL_ID and BOT_AUDIT_ID would have been set
-        # by load_all_settings_to_globals based on DB or their original defaults.
-        # No need to re-assign them here unless TESTING became false *after* being true initially.
-        # The load_all_settings_to_globals function handles the defaults correctly.
         logger.info(f"TESTING MODE INACTIVE (from DB or ENV). LOG_CHANNEL_ID: {LOG_CHANNEL_ID}, BOT_AUDIT_ID: {BOT_AUDIT_ID}.")
     
     # Scan existing threads for activity before fully starting other tasks
@@ -1373,11 +1368,7 @@ async def send_summarized_join_message(channel_id: int):
 
     ch_name_log_format = f"***{channel.name}***"
 
-    if len(online_users) == 1:
-        message = f"➕ {online_users[0]} hat {ch_name_log_format} betreten."
-    else:
-        message = f"➕ {', '.join(online_users)} sind kürzlich {ch_name_log_format} beigetreten."
-
+    message = f"👥 {len(online_users)} Nutzer online: {', '.join(online_users)}"
     await send_log_message(message, target_channel_ids=[LOG_CHANNEL_ID])
 
     # Clean up after sending
