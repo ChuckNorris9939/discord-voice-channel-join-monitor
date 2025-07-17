@@ -12,7 +12,7 @@ from typing import Dict, List, Optional
 import signal
 import asyncio
 
-BOT_VERSION = "1.13"
+BOT_VERSION = "1.14"
 CONFIG_DIR = "config"
 DATABASE_NAME = "user_log.db"
 DATABASE_PATH = os.path.join(CONFIG_DIR, DATABASE_NAME)
@@ -231,8 +231,26 @@ shutdown_initiated = False
 # --------- User Log Database Initialization Function ---------
 def init_user_log_db():
     os.makedirs(CONFIG_DIR, exist_ok=True)
+    is_test_db = DATABASE_PATH == ':memory:'
+    if not is_test_db:
+        logger.info(f"Attempting to initialize database at: {DATABASE_PATH}")
 
-    conn = sqlite3.connect(DATABASE_PATH)
+    conn = None
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        if not is_test_db:
+            logger.info(f"Successfully connected to database: {DATABASE_PATH}")
+    except sqlite3.Error as e:
+        logger.error(f"SQLite error during connect to {DATABASE_PATH}: {e}", exc_info=True)
+        if conn:
+            conn.close()
+        return
+    except Exception as e:
+        logger.error(f"Unexpected error during connect to {DATABASE_PATH}: {e}", exc_info=True)
+        if conn:
+            conn.close()
+        return
+
     try:
         cursor = conn.cursor()
         cursor.execute("""
@@ -245,6 +263,8 @@ def init_user_log_db():
                 timestamp TEXT
             )
         """)
+        conn.commit()
+
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS inactive_threads (
                 thread_id INTEGER PRIMARY KEY,
@@ -256,6 +276,8 @@ def init_user_log_db():
                 last_message_user_id INTEGER
             )
         """)
+        conn.commit()
+
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS bot_settings (
                 setting_name TEXT PRIMARY KEY,
@@ -263,11 +285,17 @@ def init_user_log_db():
             )
         """)
         conn.commit()
+
+        if not is_test_db:
+            logger.info("All database tables ensured to exist.")
     except sqlite3.Error as e:
         logger.error(f"SQLite error during table creation: {e}", exc_info=True)
+    except Exception as e:
+        logger.error(f"Unexpected error during table creation: {e}", exc_info=True)
     finally:
-        if DATABASE_PATH != ':memory:':
+        if conn and not is_test_db:
             conn.close()
+            logger.info(f"Database connection to {DATABASE_PATH} closed after init.")
 
 # --------- Helper Functions for inactive_threads Table ---------
 def add_or_update_thread_activity(thread_id: int, guild_id: int, last_activity_timestamp_iso: str, op_user_id: int, last_message_user_id: int):
@@ -1263,7 +1291,7 @@ recent_joins: Dict[int, List[str]] = {} # Key: channel_id, Value: list of user m
 join_timers: Dict[int, asyncio.Task] = {} # Key: channel_id, Value: asyncio.Task
 
 # Global Vars for AFK Mover
-AFK_CHANNEL_ID = None # Set this to the ID of your AFK voice channel
+AFK_CHANNEL_ID = 482233624234557451 # Set this to the ID of your AFK voice channel
 AFK_TIMER_MINUTES = 10
 fully_muted_users: Dict[int, asyncio.Task] = {} # Key: user_id, Value: asyncio.Task
 
@@ -1290,9 +1318,9 @@ async def move_to_afk(member: discord.Member):
         afk_channel = guild.get_channel(AFK_CHANNEL_ID)
         if afk_channel and isinstance(afk_channel, discord.VoiceChannel):
             try:
-                await member.move_to(afk_channel, reason="User has been fully muted for 10 minutes.")
+                await member.move_to(afk_channel, reason="Benutzer war für 10 Minuten stummgeschaltet.")
                 logger.info(f"AFK Mover: Moved {member.name} to AFK channel.")
-                await send_log_message(f"😴 Moved {member.mention} to AFK channel due to being fully muted for 10 minutes.", target_channel_ids=[BOT_AUDIT_ID])
+                await send_log_message(f"😴 {member.mention} wurde in den AFK-Kanal verschoben, da er/sie für 10 Minuten stummgeschaltet war.", target_channel_ids=[BOT_AUDIT_ID])
             except discord.Forbidden:
                 logger.error(f"AFK Mover: No permission to move {member.name} to AFK channel.")
             except Exception as e:
@@ -1307,7 +1335,7 @@ async def move_to_afk(member: discord.Member):
 async def send_summarized_join_message(channel_id: int):
     """Coroutine to send a summarized message of who joined a channel."""
     if channel_id not in recent_joins or not recent_joins[channel_id]:
-        return # Nothing to send
+        return
 
     channel = bot.get_channel(channel_id)
     if not channel:
@@ -1315,16 +1343,28 @@ async def send_summarized_join_message(channel_id: int):
             channel = await bot.fetch_channel(channel_id)
         except (discord.NotFound, discord.Forbidden):
             logger.error(f"Summarized Join: Could not find channel {channel_id} to send message.")
-            del recent_joins[channel_id] # Clean up
+            del recent_joins[channel_id]
             return
 
-    user_mentions = recent_joins[channel_id]
+    user_names = list(set(recent_joins[channel_id])) # Remove duplicates
+
+    # Filter users who are still in the channel
+    online_users = []
+    for user_name in user_names:
+        member = channel.guild.get_member_named(user_name)
+        if member and member.voice and member.voice.channel and member.voice.channel.id == channel_id:
+            online_users.append(f"***{user_name}***")
+
+    if not online_users:
+        del recent_joins[channel_id]
+        return
+
     ch_name_log_format = f"***{channel.name}***"
 
-    if len(user_mentions) == 1:
-        message = f"➕ {user_mentions[0]} has joined {ch_name_log_format}."
+    if len(online_users) == 1:
+        message = f"➕ {online_users[0]} hat {ch_name_log_format} betreten."
     else:
-        message = f"➕ {', '.join(user_mentions)} have recently joined {ch_name_log_format}."
+        message = f"➕ {', '.join(online_users)} sind kürzlich {ch_name_log_format} beigetreten."
 
     await send_log_message(message, target_channel_ids=[LOG_CHANNEL_ID])
 
@@ -1405,7 +1445,7 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
         else:
             # Send immediate message if timer is disabled
             ch_name_log_format = f"***{after.channel.name}***"
-            await send_log_message(f"➕ {user_name_log_format} has joined {ch_name_log_format}.", target_channel_ids=target_ids_vc)
+            await send_log_message(f"➕ {user_name_log_format} hat {ch_name_log_format} betreten.", target_channel_ids=target_ids_vc)
         
         # Log user join to database (this remains immediate)
         try:
