@@ -1,5 +1,5 @@
 # discord-voice-channel-join-monitor
-**Version 1.13**
+**Version 1.14**
 
 Sends messages when user joins to a voice channel
 
