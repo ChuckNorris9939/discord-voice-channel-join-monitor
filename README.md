@@ -1,4 +1,6 @@
 # discord-voice-channel-join-monitor
+**Version 1.13**
+
 Sends messages when user joins to a voice channel
 
 clone command: `git clone --branch master --single-branch https://github.com/ChuckNorris9939/discord-voice-channel-join-monitor.git`
