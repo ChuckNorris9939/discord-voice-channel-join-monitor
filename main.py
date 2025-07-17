@@ -1500,7 +1500,7 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
     elif switched_between_visible_channels:
         pass # Channel switch logging removed
 
-    if log_needs_update_user_list:
+    if log_needs_update_user_list and not JOIN_MESSAGE_TIMER_ENABLED:
         formatted_current_users = [f"***{u}***" for u in USERS]
         await send_log_message(f"👥 {len(USERS)} users online: {', '.join(formatted_current_users) if USERS else 'none'}", target_channel_ids=target_ids_vc)
 
