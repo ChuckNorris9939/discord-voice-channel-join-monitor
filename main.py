@@ -38,9 +38,7 @@ app = Flask(__name__, template_folder='templates')
 
 @app.route("/")
 def home():
-    # Diese print-Anweisung kann bleiben oder zu logger.debug/info für Flask-spezifische Logs werden
-    # logger.info("Flask: Health-Check-Endpunkt / wurde aufgerufen.")
-    return render_template('home.html', app_testing_mode=TESTING)
+    return render_template('home.html', app_testing_mode=TESTING, bot_version=BOT_VERSION)
 
 @app.route('/view_join_logs')
 def view_join_logs_page():

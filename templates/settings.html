@@ -41,18 +41,7 @@
         {% endif %}
 
         <form method="POST" action="{{ url_for('settings_route') }}">
-            <!-- Discord Token -->
-            <div class="form-group">
-                <label for="discord_token_display">Discord Token</label>
-                <div class="token-display">
-                    {{ current_settings.get('DISCORD_TOKEN_DISPLAY', 'Token not configured or not readable') }}
-                </div>
-                <input type="password" name="discord_token" id="discord_token" placeholder="Enter new token (optional)">
-                <p class="note">Leave blank if you don't want to change the token.
-                    Changing the token requires a bot restart. The full token is never stored by this settings page.
-                </p>
-            </div>
-
+            <h2>Settings</h2>
             <!-- App Testing Mode -->
             <div class="form-group">
                 <label for="app_testing_mode">App Testing Mode</label>
@@ -62,6 +51,28 @@
                 </select>
             </div>
 
+            <h2>Timer settings</h2>
+            <!-- Purge Older Than Days -->
+            <div class="form-group">
+                <label for="purge_older_than_days">Purge Messages Older Than (Days)</label>
+                <input type="number" name="purge_older_than_days" id="purge_older_than_days" value="{{ current_settings.get('PURGE_OLDER_THAN_DAYS', '7') }}" min="1" max="14" style="width: 100px;">
+                <p class="note">Discord API limits bulk deletion to messages not older than 14 days.</p>
+            </div>
+
+            <!-- Join Message Timer -->
+            <div class="form-group">
+                <label>Summarized Join Messages</label>
+                <select name="join_message_timer_enabled" id="join_message_timer_enabled">
+                    <option value="true" {% if current_settings.get('JOIN_MESSAGE_TIMER_ENABLED') == 'true' %}selected{% endif %}>Enabled</option>
+                    <option value="false" {% if current_settings.get('JOIN_MESSAGE_TIMER_ENABLED') == 'false' %}selected{% endif %}>Disabled</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="join_message_timer_minutes">Join Message Timer (Minutes)</label>
+                <input type="number" name="join_message_timer_minutes" id="join_message_timer_minutes" value="{{ current_settings.get('JOIN_MESSAGE_TIMER_MINUTES', '7') }}" min="1" style="width: 100px;">
+            </div>
+
+            <h2>Channel IDs</h2>
             <!-- Hidden Channels -->
             <div class="form-group">
                 <label for="hidden_channels">Hidden Channels (comma-separated IDs)</label>
@@ -92,30 +103,8 @@
                 <input type="text" name="afk_channel_id" id="afk_channel_id" value="{{ current_settings.get('AFK_CHANNEL_ID', '') }}">
             </div>
 
-            <!-- Purge Older Than Days -->
-            <div class="form-group">
-                <label for="purge_older_than_days">Purge Messages Older Than (Days)</label>
-                <input type="number" name="purge_older_than_days" id="purge_older_than_days" value="{{ current_settings.get('PURGE_OLDER_THAN_DAYS', '7') }}" min="1" max="14">
-                <p class="note">Discord API limits bulk deletion to messages not older than 14 days.</p>
-            </div>
-
-            <!-- Join Message Timer -->
-            <div class="form-group">
-                <label>Summarized Join Messages</label>
-                <select name="join_message_timer_enabled" id="join_message_timer_enabled">
-                    <option value="true" {% if current_settings.get('JOIN_MESSAGE_TIMER_ENABLED') == 'true' %}selected{% endif %}>Enabled</option>
-                    <option value="false" {% if current_settings.get('JOIN_MESSAGE_TIMER_ENABLED') == 'false' %}selected{% endif %}>Disabled</option>
-                </select>
-            </div>
-            <div class="form-group">
-                <label for="join_message_timer_minutes">Join Message Timer (Minutes)</label>
-                <input type="number" name="join_message_timer_minutes" id="join_message_timer_minutes" value="{{ current_settings.get('JOIN_MESSAGE_TIMER_MINUTES', '7') }}" min="1">
-            </div>
-
             <div class="button-group">
                 <button type="submit" class="save-button">Save Settings</button>
-                <!-- The restart button functionality will be handled later.
-                     It might POST to a different endpoint or use JavaScript. -->
                 <button type="button" class="restart-button" onclick="alert('Restart functionality to be implemented. This may trigger a bot shutdown.');">Restart Bot (Requires Setup)</button>
             </div>
         </form>
