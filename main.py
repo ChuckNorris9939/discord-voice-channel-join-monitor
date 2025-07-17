@@ -837,13 +837,16 @@ async def on_ready():
         
         logger.info(f"{num_synced} Befehle für Guild {DISCORD_SERVER_ID} synchronisiert: {command_names}")
 
-        target_ids = [LOG_CHANNEL_ID, BOT_AUDIT_ID]
         if TESTING:
-            target_ids = [TESTING_CHANNEL_ID]
-        await send_log_message(
-            f"✅ Bot version {BOT_VERSION} gestartet und einsatzbereit.",
-            target_channel_ids=target_ids
-        )
+            await send_log_message(
+                f"✅ Bot version {BOT_VERSION} gestartet und einsatzbereit.",
+                target_channel_ids=[TESTING_CHANNEL_ID]
+            )
+        else:
+            await send_log_message(
+                f"✅ Bot version {BOT_VERSION} gestartet und einsatzbereit.",
+                target_channel_ids=[LOG_CHANNEL_ID, BOT_AUDIT_ID]
+            )
         sync_info_msg = f"{num_synced} Befehle für Guild {DISCORD_SERVER_ID} synchronisiert: {command_names}"
         await send_log_message(
             f"ℹ️ {sync_info_msg}",
