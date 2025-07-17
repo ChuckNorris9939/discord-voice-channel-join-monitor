@@ -130,6 +130,11 @@ def settings_route():
             save_setting(DB_KEY_JOIN_MESSAGE_TIMER_MINUTES, join_timer_minutes_str)
             logger.info(f"Saved {DB_KEY_JOIN_MESSAGE_TIMER_MINUTES}: {join_timer_minutes_str}")
 
+            # Handle AFK_TIMER_MINUTES
+            afk_timer_minutes_str = request.form.get('afk_timer_minutes', '10')
+            save_setting(DB_KEY_AFK_TIMER_MINUTES, afk_timer_minutes_str)
+            logger.info(f"Saved {DB_KEY_AFK_TIMER_MINUTES}: {afk_timer_minutes_str}")
+
             # Reload settings into global scope
             load_all_settings_to_globals()
             
@@ -163,6 +168,7 @@ def settings_route():
     current_settings_display['PURGE_OLDER_THAN_DAYS'] = str(PURGE_OLDER_THAN_DAYS)
     current_settings_display['JOIN_MESSAGE_TIMER_ENABLED'] = str(JOIN_MESSAGE_TIMER_ENABLED).lower()
     current_settings_display['JOIN_MESSAGE_TIMER_MINUTES'] = str(JOIN_MESSAGE_TIMER_MINUTES)
+    current_settings_display['AFK_TIMER_MINUTES'] = str(AFK_TIMER_MINUTES)
 
     return render_template('settings.html', current_settings=current_settings_display, message=message, error=error)
 
@@ -591,6 +597,7 @@ DB_KEY_AFK_CHANNEL_ID = "AFK_CHANNEL_ID"
 DB_KEY_PURGE_OLDER_THAN_DAYS = "PURGE_OLDER_THAN_DAYS"
 DB_KEY_JOIN_MESSAGE_TIMER_ENABLED = "JOIN_MESSAGE_TIMER_ENABLED"
 DB_KEY_JOIN_MESSAGE_TIMER_MINUTES = "JOIN_MESSAGE_TIMER_MINUTES"
+DB_KEY_AFK_TIMER_MINUTES = "AFK_TIMER_MINUTES"
 
 
 # Original hardcoded default values (pre-database settings)
@@ -600,7 +607,7 @@ DEFAULT_TECHSUPPORT_CHANNEL_ID = 1139952610883928134
 DEFAULT_HIDDEN_CHANNELS_LIST = [1255930025463644232, 1233872680680296499, 374159356717039620]
 
 def load_all_settings_to_globals():
-    global TESTING, HIDDEN_CHANNELS, LOG_CHANNEL_ID, BOT_AUDIT_ID, TECHSUPPORT_CHANNEL_ID, AFK_CHANNEL_ID, PURGE_OLDER_THAN_DAYS, JOIN_MESSAGE_TIMER_ENABLED, JOIN_MESSAGE_TIMER_MINUTES
+    global TESTING, HIDDEN_CHANNELS, LOG_CHANNEL_ID, BOT_AUDIT_ID, TECHSUPPORT_CHANNEL_ID, AFK_CHANNEL_ID, PURGE_OLDER_THAN_DAYS, JOIN_MESSAGE_TIMER_ENABLED, JOIN_MESSAGE_TIMER_MINUTES, AFK_TIMER_MINUTES
     
     logger.info("Loading dynamic settings from database...")
 
@@ -671,6 +678,16 @@ def load_all_settings_to_globals():
         logger.warning(f"Could not parse JOIN_MESSAGE_TIMER_MINUTES '{join_timer_minutes_str}'. Using default 7.")
         JOIN_MESSAGE_TIMER_MINUTES = 7
     logger.info(f"Loaded JOIN_MESSAGE_TIMER_MINUTES: {JOIN_MESSAGE_TIMER_MINUTES}")
+
+    # --- AFK_TIMER_MINUTES ---
+    afk_timer_minutes_str = get_setting(DB_KEY_AFK_TIMER_MINUTES, default_value='10')
+    save_setting(DB_KEY_AFK_TIMER_MINUTES, afk_timer_minutes_str)
+    try:
+        AFK_TIMER_MINUTES = int(afk_timer_minutes_str)
+    except (ValueError, TypeError):
+        logger.warning(f"Could not parse AFK_TIMER_MINUTES '{afk_timer_minutes_str}'. Using default 10.")
+        AFK_TIMER_MINUTES = 10
+    logger.info(f"Loaded AFK_TIMER_MINUTES: {AFK_TIMER_MINUTES}")
 
     logger.info("Finished loading dynamic settings.")
 
@@ -820,14 +837,11 @@ async def on_ready():
         
         logger.info(f"{num_synced} Befehle für Guild {DISCORD_SERVER_ID} synchronisiert: {command_names}")
 
-        await send_log_message(
-            "✅ Bot gestartet.",
-            target_channel_ids=[LOG_CHANNEL_ID, BOT_AUDIT_ID]
-        )
-        await send_log_message(
-            f"✅ Bot version {BOT_VERSION} gestartet und einsatzbereit.",
-            target_channel_ids=[LOG_CHANNEL_ID, BOT_AUDIT_ID]
-        )
+        if not TESTING:
+            await send_log_message(
+                f"✅ Bot version {BOT_VERSION} gestartet und einsatzbereit.",
+                target_channel_ids=[LOG_CHANNEL_ID, BOT_AUDIT_ID]
+            )
         sync_info_msg = f"{num_synced} Befehle für Guild {DISCORD_SERVER_ID} synchronisiert: {command_names}"
         await send_log_message(
             f"ℹ️ {sync_info_msg}",
@@ -1424,12 +1438,15 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
 
 
     if joined_visible_channel:
+        ch_name_log_format = f"***{after.channel.name}***"
+        await send_log_message(f"➕ {user_name_log_format} hat {ch_name_log_format} betreten.", target_channel_ids=target_ids_vc)
+
         if JOIN_MESSAGE_TIMER_ENABLED:
             channel_id = after.channel.id
             if channel_id not in recent_joins:
                 recent_joins[channel_id] = []
 
-            recent_joins[channel_id].append(member.mention)
+            recent_joins[channel_id].append(member.name)
 
             if channel_id not in join_timers:
                 logger.info(f"Summarized Join: Starting {JOIN_MESSAGE_TIMER_MINUTES} min timer for channel {channel_id}.")
@@ -1440,10 +1457,6 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
                 join_timers[channel_id].add_done_callback(
                     lambda fut: asyncio.create_task(send_summarized_join_message(fut.result()))
                 )
-        else:
-            # Send immediate message if timer is disabled
-            ch_name_log_format = f"***{after.channel.name}***"
-            await send_log_message(f"➕ {user_name_log_format} hat {ch_name_log_format} betreten.", target_channel_ids=target_ids_vc)
         
         # Log user join to database (this remains immediate)
         try:

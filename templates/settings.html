@@ -50,6 +50,14 @@
                     <option value="false" {% if current_settings.get('APP_TESTING_MODE') == 'false' %}selected{% endif %}>False</option>
                 </select>
             </div>
+            <!-- Join Message Timer -->
+            <div class="form-group">
+                <label>Summarized Join Messages</label>
+                <select name="join_message_timer_enabled" id="join_message_timer_enabled">
+                    <option value="true" {% if current_settings.get('JOIN_MESSAGE_TIMER_ENABLED') == 'true' %}selected{% endif %}>Enabled</option>
+                    <option value="false" {% if current_settings.get('JOIN_MESSAGE_TIMER_ENABLED') == 'false' %}selected{% endif %}>Disabled</option>
+                </select>
+            </div>
 
             <h2>Timer settings</h2>
             <!-- Purge Older Than Days -->
@@ -59,17 +67,14 @@
                 <p class="note">Discord API limits bulk deletion to messages not older than 14 days.</p>
             </div>
 
-            <!-- Join Message Timer -->
-            <div class="form-group">
-                <label>Summarized Join Messages</label>
-                <select name="join_message_timer_enabled" id="join_message_timer_enabled">
-                    <option value="true" {% if current_settings.get('JOIN_MESSAGE_TIMER_ENABLED') == 'true' %}selected{% endif %}>Enabled</option>
-                    <option value="false" {% if current_settings.get('JOIN_MESSAGE_TIMER_ENABLED') == 'false' %}selected{% endif %}>Disabled</option>
-                </select>
-            </div>
             <div class="form-group">
                 <label for="join_message_timer_minutes">Join Message Timer (Minutes)</label>
                 <input type="number" name="join_message_timer_minutes" id="join_message_timer_minutes" value="{{ current_settings.get('JOIN_MESSAGE_TIMER_MINUTES', '7') }}" min="1" style="width: 100px;">
+            </div>
+
+            <div class="form-group">
+                <label for="afk_timer_minutes">AFK Timer (Minutes)</label>
+                <input type="number" name="afk_timer_minutes" id="afk_timer_minutes" value="{{ current_settings.get('AFK_TIMER_MINUTES', '10') }}" min="1" style="width: 100px;">
             </div>
 
             <h2>Channel IDs</h2>
