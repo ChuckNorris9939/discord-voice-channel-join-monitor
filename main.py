@@ -901,6 +901,27 @@ async def on_ready():
     await asyncio.sleep(5) # Wait for 5 seconds for cache to populate
     logger.info("Populating initial USERS list...")
 
+    USERS = get_user_list()
+    user_list_msg = f"👥 {len(USERS)} Nutzer online (beim Start): {', '.join(formatted_users) if USERS else 'keine'}"
+    await send_log_message(user_list_msg, target_channel_ids=[LOG_CHANNEL_ID])
+    logger.info(f"Sent initial user list to log channel: {user_list_msg}")
+
+    try:
+        tech_support_forum = bot.get_channel(TECHSUPPORT_CHANNEL_ID) or await bot.fetch_channel(TECHSUPPORT_CHANNEL_ID)
+        if isinstance(tech_support_forum, discord.ForumChannel):
+            closed_tag_obj_on_ready = await get_forum_tag_by_name(tech_support_forum, CLOSED_TAG_NAME)
+            if not closed_tag_obj_on_ready:
+                await send_log_message(f"⚠️ WICHTIG: Der Tag '{CLOSED_TAG_NAME}' konnte im Forum '{tech_support_forum.name}' (ID: {tech_support_forum.id}) nicht gefunden werden. Die automatische Schließung per Tag funktioniert nicht korrekt.", target_channel_ids=[BOT_AUDIT_ID])
+        elif tech_support_forum:
+            await send_log_message(f"⚠️ Tech-Support-Kanal {TECHSUPPORT_CHANNEL_ID} ('{tech_support_forum.name}') ist kein Forum-Kanal.", target_channel_ids=[BOT_AUDIT_ID])
+        else:
+            await send_log_message(f"⚠️ Tech-Support-Kanal {TECHSUPPORT_CHANNEL_ID} konnte nicht gefunden werden.", target_channel_ids=[BOT_AUDIT_ID])
+    except Exception as e:
+        logger.error(f"Fehler bei der initialen Prüfung des Tech-Support-Forums (on_ready): {e}", exc_info=True)
+        await send_log_message(f"⚠️ Fehler bei der initialen Prüfung des Tech-Support-Forums (on_ready): {e}", target_channel_ids=[BOT_AUDIT_ID])
+
+
+asybc def get_user_list:
     logger.info(f"Attempting to fetch guild with ID: {DISCORD_SERVER_ID}")
     guild = bot.get_guild(DISCORD_SERVER_ID)
     if guild:
@@ -927,24 +948,8 @@ async def on_ready():
         logger.warning(f"Could not find guild with ID {DISCORD_SERVER_ID}. User list will be empty.")
         USERS.clear() # Ensure USERS is empty if guild not found
 
-    formatted_users = [f"***{u}***" for u in USERS]
-    user_list_msg = f"👥 {len(USERS)} Nutzer online (beim Start): {', '.join(formatted_users) if USERS else 'keine'}"
-    await send_log_message(user_list_msg, target_channel_ids=[LOG_CHANNEL_ID])
-    logger.info(f"Sent initial user list to log channel: {user_list_msg}")
+    return formatted_users = [f"***{u}***" for u in USERS]
 
-    try:
-        tech_support_forum = bot.get_channel(TECHSUPPORT_CHANNEL_ID) or await bot.fetch_channel(TECHSUPPORT_CHANNEL_ID)
-        if isinstance(tech_support_forum, discord.ForumChannel):
-            closed_tag_obj_on_ready = await get_forum_tag_by_name(tech_support_forum, CLOSED_TAG_NAME)
-            if not closed_tag_obj_on_ready:
-                await send_log_message(f"⚠️ WICHTIG: Der Tag '{CLOSED_TAG_NAME}' konnte im Forum '{tech_support_forum.name}' (ID: {tech_support_forum.id}) nicht gefunden werden. Die automatische Schließung per Tag funktioniert nicht korrekt.", target_channel_ids=[BOT_AUDIT_ID])
-        elif tech_support_forum:
-            await send_log_message(f"⚠️ Tech-Support-Kanal {TECHSUPPORT_CHANNEL_ID} ('{tech_support_forum.name}') ist kein Forum-Kanal.", target_channel_ids=[BOT_AUDIT_ID])
-        else:
-            await send_log_message(f"⚠️ Tech-Support-Kanal {TECHSUPPORT_CHANNEL_ID} konnte nicht gefunden werden.", target_channel_ids=[BOT_AUDIT_ID])
-    except Exception as e:
-        logger.error(f"Fehler bei der initialen Prüfung des Tech-Support-Forums (on_ready): {e}", exc_info=True)
-        await send_log_message(f"⚠️ Fehler bei der initialen Prüfung des Tech-Support-Forums (on_ready): {e}", target_channel_ids=[BOT_AUDIT_ID])
 
 @bot.hybrid_command(name="close", description="Schließt den aktuellen Support-Thread.")
 async def close(ctx: commands.Context):
@@ -1347,41 +1352,11 @@ async def move_to_afk(member: discord.Member):
 
 async def send_summarized_join_message(channel_id: int):
     """Coroutine to send a summarized message of who joined a channel."""
-    if channel_id not in recent_joins or not recent_joins[channel_id]:
-        return
 
-    channel = bot.get_channel(channel_id)
-    if not channel:
-        try:
-            channel = await bot.fetch_channel(channel_id)
-        except (discord.NotFound, discord.Forbidden):
-            logger.error(f"Summarized Join: Could not find channel {channel_id} to send message.")
-            del recent_joins[channel_id]
-            return
-
-    user_names = list(set(recent_joins[channel_id])) # Remove duplicates
-
-    # Filter users who are still in the channel
-    online_users = []
-    for user_name in user_names:
-        member = channel.guild.get_member_named(user_name)
-        if member and member.voice and member.voice.channel and member.voice.channel.id == channel_id:
-            online_users.append(f"***{user_name}***")
-
-    if not online_users:
-        del recent_joins[channel_id]
-        return
-
-    ch_name_log_format = f"***{channel.name}***"
-
+    online_users = get_user_list()
     message = f"👥 {len(online_users)} Nutzer online: {', '.join(online_users)}"
     await send_log_message(message, target_channel_ids=[LOG_CHANNEL_ID])
 
-    # Clean up after sending
-    if channel_id in recent_joins:
-        del recent_joins[channel_id]
-    if channel_id in join_timers:
-        del join_timers[channel_id]
 
 @bot.event
 async def on_voice_state_update(member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
