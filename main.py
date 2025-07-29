@@ -1,4 +1,4 @@
-# v1.8 (Umstellung von print auf logger)
+# v1.15 - Fix summarized join + added get_user_list()
 import os
 import threading
 import datetime
@@ -12,7 +12,7 @@ from typing import Dict, List, Optional
 import signal
 import asyncio
 
-BOT_VERSION = "1.14"
+BOT_VERSION = "1.15"
 CONFIG_DIR = "config"
 DATABASE_NAME = "user_log.db"
 DATABASE_PATH = os.path.join(CONFIG_DIR, DATABASE_NAME)
@@ -1354,7 +1354,6 @@ async def move_to_afk(member: discord.Member):
 async def send_summarized_join_message(channel_id: int):
     """Coroutine to send a summarized message of who joined a channel."""
 
-    online_users = await get_user_list()
     USERS = await get_user_list()
     online_users = [f"***{u}***" for u in USERS]
     message = f"👥 {len(online_users)} Nutzer online: {', '.join(online_users)}"
