@@ -901,7 +901,7 @@ async def on_ready():
     await asyncio.sleep(5) # Wait for 5 seconds for cache to populate
     logger.info("Populating initial USERS list...")
 
-    USERS = get_user_list()
+    USERS = await get_user_list()
     user_list_msg = f"👥 {len(USERS)} Nutzer online (beim Start): {', '.join(formatted_users) if USERS else 'keine'}"
     await send_log_message(user_list_msg, target_channel_ids=[LOG_CHANNEL_ID])
     logger.info(f"Sent initial user list to log channel: {user_list_msg}")
@@ -1353,7 +1353,7 @@ async def move_to_afk(member: discord.Member):
 async def send_summarized_join_message(channel_id: int):
     """Coroutine to send a summarized message of who joined a channel."""
 
-    online_users = get_user_list()
+    online_users = await get_user_list()
     message = f"👥 {len(online_users)} Nutzer online: {', '.join(online_users)}"
     await send_log_message(message, target_channel_ids=[LOG_CHANNEL_ID])
 
