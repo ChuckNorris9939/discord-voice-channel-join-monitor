@@ -1455,7 +1455,7 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
 
     elif left_visible_channel:
         ch_name_log_format = f"***{before.channel.name}***"
-        await send_log_message(f"➖ {user_name_log_format} hat {ch_name_log_format}.", target_channel_ids=target_ids_vc + " verlassen")
+        await send_log_message(f"➖ {user_name_log_format} hat {ch_name_log_format}.", target_channel_ids=target_ids_vc, " verlassen")
 
         user_still_in_any_visible_vc_on_this_guild = False
         guild = bot.get_guild(DISCORD_SERVER_ID)
