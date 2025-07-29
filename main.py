@@ -948,7 +948,7 @@ async def get_user_list():
         logger.warning(f"Could not find guild with ID {DISCORD_SERVER_ID}. User list will be empty.")
         USERS.clear() # Ensure USERS is empty if guild not found
 
-    return formatted_users = [f"***{u}***" for u in USERS]
+    return [f"***{u}***" for u in USERS]
 
 
 @bot.hybrid_command(name="close", description="Schließt den aktuellen Support-Thread.")
