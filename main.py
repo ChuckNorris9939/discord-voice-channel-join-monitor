@@ -412,7 +412,7 @@ async def scan_existing_threads():
             last_message = None
             try:
                 # Attempt to fetch the last message
-                messages = await thread.history(limit=1).get() # Default is newest first
+                messages = await thread.history(limit=1) # Default is newest first
                 if not messages:
                     logger.info(f"Thread '{thread.name}' (ID: {thread.id}) is empty or history is inaccessible. Skipping.")
                     continue
