@@ -902,6 +902,7 @@ async def on_ready():
     logger.info("Populating initial USERS list...")
 
     USERS = await get_user_list()
+    formatted_users = [f"***{u}***" for u in USERS]
     user_list_msg = f"👥 {len(USERS)} Nutzer online (beim Start): {', '.join(formatted_users) if USERS else 'keine'}"
     await send_log_message(user_list_msg, target_channel_ids=[LOG_CHANNEL_ID])
     logger.info(f"Sent initial user list to log channel: {user_list_msg}")
@@ -948,7 +949,7 @@ async def get_user_list():
         logger.warning(f"Could not find guild with ID {DISCORD_SERVER_ID}. User list will be empty.")
         USERS.clear() # Ensure USERS is empty if guild not found
 
-    return [f"***{u}***" for u in USERS]
+    return USERS
 
 
 @bot.hybrid_command(name="close", description="Schließt den aktuellen Support-Thread.")
@@ -1354,6 +1355,8 @@ async def send_summarized_join_message(channel_id: int):
     """Coroutine to send a summarized message of who joined a channel."""
 
     online_users = await get_user_list()
+    USERS = await get_user_list()
+    online_users = [f"***{u}***" for u in USERS]
     message = f"👥 {len(online_users)} Nutzer online: {', '.join(online_users)}"
     await send_log_message(message, target_channel_ids=[LOG_CHANNEL_ID])
 
