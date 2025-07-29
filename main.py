@@ -921,7 +921,7 @@ async def on_ready():
         await send_log_message(f"⚠️ Fehler bei der initialen Prüfung des Tech-Support-Forums (on_ready): {e}", target_channel_ids=[BOT_AUDIT_ID])
 
 
-async def get_user_list:
+async def get_user_list():
     logger.info(f"Attempting to fetch guild with ID: {DISCORD_SERVER_ID}")
     guild = bot.get_guild(DISCORD_SERVER_ID)
     if guild:
