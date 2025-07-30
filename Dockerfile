@@ -11,7 +11,5 @@ COPY . /app
 #Dies weist Python an, stdout und stderr nicht zu puffern. brauchen wir nicht da logger. zeigt aber mehr an... 
 #ENV PYTHONUNBUFFERED=1
 
-
-
-RUN pip install --no-cache-dir discord flask waitress
+RUN pip install --no-cache-dir "discord.py[voice]" flask waitress
 CMD ["python", "main.py"]
