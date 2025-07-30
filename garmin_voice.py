@@ -5,12 +5,22 @@ import wave
 import threading
 import difflib
 import logging
+import subprocess
+import queue
 from typing import Final
 from pathlib import Path
 
 import discord
 import speech_recognition as sr
 from discord.ext import voice_recv
+
+# --------------------------------------------------
+# Patch BasicSink backlog so no frames are dropped
+# --------------------------------------------------
+class BigSink(voice_recv.BasicSink):
+    """Same as BasicSink but with a much larger internal backlog so that
+    callback latency never drops frames (default = 512)."""
+    MAX_SIZE = 4096
 
 try:
     import vosk  # optional, only needed for offline STT
@@ -74,14 +84,14 @@ TRIGGERS = [
     {  # wake word
         "name": "ding",
         "phrase": "okay garmin",
-        "threshold": 0.85,
+        "threshold": 0.65,
         "sound": SOUND_DING,
         "save": False,
     },
     {  # follow‑up within 5 s after wake word
         "name": "save",
         "phrase": "video speichern",
-        "threshold": 0.85,
+        "threshold": 0.65,
         "sound": SOUND_DINGDING,
         "save": True,
     },
@@ -104,6 +114,10 @@ class GarminVoiceManager:
         self.bot = bot
         self.audio_buffer = bytearray()
         self._buf_lock   = threading.Lock()
+        # thread‑safe PCM hand‑off
+        # unlimited queue to prevent frame drops
+        self.pcm_queue: queue.Queue[bytes] = queue.Queue()
+        threading.Thread(target=self._buffer_worker, daemon=True).start()
 
         self.recognizer = sr.Recognizer()
         self.recognizer.dynamic_energy_threshold = True
@@ -131,18 +145,23 @@ class GarminVoiceManager:
 
     # ------------------------- Discord voice callbacks -------------------------
     def callback(self, user: discord.User | None, data: voice_recv.VoiceData):
-        self._append_to_buffer(data.pcm)
+        """Called by discord‑voice‑recv for every PCM frame (20 ms). Put into
+        queue so the audio thread never blocks."""
+        self.pcm_queue.put(data.pcm)  # block briefly if backlog
         now = time.time()
         if not self.is_processing and (now - self.last_process_time >= PROCESS_INTERVAL_S):
             threading.Thread(target=self._process_audio_data, daemon=True).start()
 
-    def _append_to_buffer(self, chunk: bytes):
-        with self._buf_lock:
-            self.audio_buffer.extend(chunk)
-            if len(self.audio_buffer) > MAX_BUFFER_SIZE:
-                del self.audio_buffer[: len(self.audio_buffer) - MAX_BUFFER_SIZE]
-
-    # ------------------------------ Speech‑rec thread ---------------------------
+    def _buffer_worker(self):
+        """Continuously move PCM frames from queue into the bytearray buffer
+        without resizing it while other threads hold a view."""
+        while True:
+            chunk = self.pcm_queue.get()
+            with self._buf_lock:
+                self.audio_buffer.extend(chunk)
+                if len(self.audio_buffer) > MAX_BUFFER_SIZE:
+                    del self.audio_buffer[:len(self.audio_buffer) - MAX_BUFFER_SIZE]
+# ------------------------------ Speech‑rec thread ---------------------------
     def _process_audio_data(self):
         self.is_processing = True
         self.last_process_time = time.time()
@@ -231,16 +250,32 @@ class GarminVoiceManager:
 
     # ------------------------------ Helpers ------------------------------------
     def save_recording(self):
-        filename = f"garmin_recording_{int(time.time())}.wav"
-        path = os.path.join(OUTPUT_DIR, filename)
+        """Encode the current in‑memory PCM buffer to MP3 using ffmpeg."""
+        timestamp = int(time.time())
+        path = os.path.join(OUTPUT_DIR, f"garmin_recording_{timestamp}.mp3")
         with self._buf_lock:
-            data = bytes(self.audio_buffer)
-        with wave.open(path, "wb") as wf:
-            wf.setnchannels(CHANNELS)
-            wf.setsampwidth(BYTES_PER_SAMPLE)
-            wf.setframerate(SAMPLERATE)
-            wf.writeframes(data)
-        logger.info("Recording saved: %s", path)
+            pcm_data = bytes(self.audio_buffer)
+
+        cmd = [
+            "ffmpeg",
+            "-loglevel", "error",
+            "-y",
+            "-f", "s16le",
+            "-ar", str(SAMPLERATE),
+            "-ac", str(CHANNELS),
+            "-i", "pipe:0",
+            "-codec:a", "libmp3lame",
+            "-b:a", "192k",
+            path,
+        ]
+        try:
+            subprocess.run(cmd, input=pcm_data, check=True)
+            logger.info("Recording saved: %s", path)
+            # reset ring buffer so old gaps aren't re‑saved
+            with self._buf_lock:
+                self.audio_buffer.clear()
+        except subprocess.CalledProcessError as e:
+            logger.error("ffmpeg failed: %s", e)
 
     def play_sound(self, filepath: str):
         if self.vc and os.path.isfile(filepath):
@@ -254,7 +289,7 @@ class GarminVoiceManager:
         if self.vc:
             await self.leave_channel()
         self.vc = await channel.connect(cls=voice_recv.VoiceRecvClient)
-        self.vc.listen(voice_recv.BasicSink(self.callback))
+        self.vc.listen(BigSink(self.callback))
         logger.info("🔊 Joined voice channel '%s' (STT engine: %s)", channel.name, STT_ENGINE)
 
     async def leave_channel(self):
