@@ -3,81 +3,69 @@ from unittest.mock import MagicMock, patch, AsyncMock
 import os
 import time
 import asyncio
-from garmin_voice import GarminVoiceManager, voice_recv
+from garmin_voice import GarminVoiceManager, NativeVoiceClient
 
-class TestGarminVoiceFileBased(unittest.IsolatedAsyncioTestCase):
+class TestGarminVoiceAudioRec(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self):
         self.bot = MagicMock()
-        self.bot.loop = asyncio.get_event_loop()
         self.manager = GarminVoiceManager(self.bot)
-        # Ensure the output directory exists
         os.makedirs("garmin-output", exist_ok=True)
 
     def tearDown(self):
         # Clean up any created files
-        for f in self.manager.recording_files:
-            if os.path.exists(f):
-                os.remove(f)
-        concat_list = "garmin-output/concat_list.txt"
-        if os.path.exists(concat_list):
-            os.remove(concat_list)
+        timestamp = int(time.time()) # This is a bit of a hack to guess the filename
+        filename_wav = f"garmin-output/garmin_recording_{timestamp}.wav"
+        filename_mp3 = f"garmin-output/garmin_recording_{timestamp}.mp3"
+        if os.path.exists(filename_wav):
+            os.remove(filename_wav)
+        if os.path.exists(filename_mp3):
+            os.remove(filename_mp3)
 
-    @patch('garmin_voice.voice_recv.VoiceRecvClient')
-    async def test_join_and_leave_channel(self, mock_vc_class):
-        # Configure the mock to be an async context manager
-        mock_vc_instance = AsyncMock()
-        mock_vc_instance.is_connected.return_value = True
-
-        async def connect_coro(*args, **kwargs):
-            return mock_vc_instance
-
+    async def test_join_and_leave_channel(self):
+        # Mock the connect method to return a mock NativeVoiceClient
+        mock_vc_instance = AsyncMock(spec=NativeVoiceClient)
         channel = MagicMock()
-        channel.connect = MagicMock(side_effect=connect_coro)
+        channel.connect = AsyncMock(return_value=mock_vc_instance)
 
-        # Join channel
+        # Join
         await self.manager.join_channel(channel)
-        self.assertIsNotNone(self.manager.vc)
-        self.assertIsNotNone(self.manager.recording_task)
-        recording_task = self.manager.recording_task
+        channel.connect.assert_awaited_once_with(cls=NativeVoiceClient)
+        self.assertIs(self.manager.vc, mock_vc_instance)
+        self.manager.vc.record.assert_called_once()
 
-        # Leave channel
+        # Leave
+        mock_vc = self.manager.vc
         await self.manager.leave_channel()
-
-        # The task is cancelled, but we need to await it to let it finish
-        with self.assertRaises(asyncio.CancelledError):
-            await recording_task
-
+        mock_vc.stop_record.assert_awaited_once()
+        mock_vc.disconnect.assert_awaited_once()
         self.assertIsNone(self.manager.vc)
-        self.assertTrue(recording_task.cancelled())
-        mock_vc_instance.disconnect.assert_awaited_once()
 
     @patch('garmin_voice.subprocess.run')
-    def test_save_recording(self, mock_subprocess_run):
-        # Create some dummy recording files
-        dummy_files = ["garmin-output/chunk_1.wav", "garmin-output/chunk_2.wav"]
-        for f in dummy_files:
-            with open(f, 'w') as wf:
-                wf.write("dummy data")
+    @patch('time.time')
+    async def test_save_recording(self, mock_time, mock_subprocess_run):
+        mock_timestamp = 1234567890
+        mock_time.return_value = mock_timestamp
 
-        self.manager.recording_files = dummy_files
+        self.manager.vc = AsyncMock(spec=NativeVoiceClient)
+        self.manager.vc.is_recording.return_value = True
+        self.manager.vc.stop_record.return_value = b"dummy_wav_bytes"
 
-        # Call save
-        self.manager.save_recording()
+        await self.manager.save_recording()
 
-        # Assert ffmpeg was called
+        # Check that recording was stopped and restarted
+        self.manager.vc.stop_record.assert_awaited_once()
+        self.manager.vc.record.assert_called_once()
+
+        # Check that the WAV file was created and then deleted
+        filename_wav = f"garmin-output/garmin_recording_{mock_timestamp}.wav"
+        self.assertFalse(os.path.exists(filename_wav))
+
+        # Check that ffmpeg was called correctly
         mock_subprocess_run.assert_called_once()
         args = mock_subprocess_run.call_args[0][0]
-        self.assertIn("concat", args)
-        self.assertIn("garmin-output/concat_list.txt", args)
-
-        # Assert concat list was created and then deleted
-        self.assertFalse(os.path.exists("garmin-output/concat_list.txt"))
-
-        # Cleanup dummy files
-        for f in dummy_files:
-            if os.path.exists(f):
-                os.remove(f)
+        self.assertIn(filename_wav, args)
+        self.assertIn(os.path.join("garmin-output", f"garmin_recording_{mock_timestamp}.mp3"), args)
 
 if __name__ == '__main__':
     unittest.main()

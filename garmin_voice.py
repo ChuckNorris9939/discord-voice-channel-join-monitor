@@ -13,32 +13,7 @@ import asyncio
 
 import discord
 import speech_recognition as sr
-from discord.ext import voice_recv
-
-# --------------------------------------------------
-# Custom Buffering Sink
-# --------------------------------------------------
-class BufferingSink(voice_recv.AudioSink):
-    def __init__(self):
-        super().__init__()
-        self.buffer = bytearray()
-        self.lock = threading.Lock()
-
-    def wants_opus(self) -> bool:
-        return False
-
-    def write(self, user, data: voice_recv.VoiceData):
-        with self.lock:
-            self.buffer.extend(data.pcm)
-
-    def get_and_swap_buffer(self) -> bytearray:
-        with self.lock:
-            old_buffer = self.buffer
-            self.buffer = bytearray()
-            return old_buffer
-
-    def cleanup(self):
-        pass
+from discord.ext.audiorec import NativeVoiceClient
 
 try:
     import vosk  # optional, only needed for offline STT
@@ -126,167 +101,71 @@ OUTPUT_DIR: Final[str] = "garmin-output"
 
 
 class GarminVoiceManager:
-    """Manages voice channel activity, recording, and speech recognition."""
+    """Manages voice channel activity using discord.ext.audiorec."""
 
     def __init__(self, bot: discord.Client):
         self.bot = bot
-        self.recognizer = sr.Recognizer()
-        self.recognizer.dynamic_energy_threshold = True
-        self.recording_files = []
-        self.recording_task = None
-        self.stt_task = None
-        self.last_trigger_time = {}
-        self._last_ok_time = 0.0
+        self.vc: NativeVoiceClient | None = None
 
         os.makedirs(OUTPUT_DIR, exist_ok=True)
-        self.vc: voice_recv.VoiceRecvClient | None = None
-
-    def start_recording_chunk(self):
-        """Starts recording a new 5-minute audio chunk."""
-        if not self.vc:
-            return
-
-        timestamp = int(time.time())
-        filepath = os.path.join(OUTPUT_DIR, f"chunk_{timestamp}.wav")
-        self.recording_files.append(filepath)
-
-        # Use a new sink for each file
-        sink = voice_recv.WaveSink(filepath)
-
-        # This is a placeholder for the timed filter logic.
-        # A proper implementation would use a more robust callback system.
-        # For now, we'll rely on the periodic task to handle file rotation.
-        self.vc.listen(sink)
-        logger.info(f"Recording new chunk to {filepath}")
-
-        # Clean up old files
-        while len(self.recording_files) > 3: # Keep last ~15 mins
-            old_file = self.recording_files.pop(0)
-            if os.path.exists(old_file):
-                os.remove(old_file)
-
-    async def recording_loop(self):
-        """Main loop to manage continuous recording."""
-        while self.vc and self.vc.is_connected():
-            self.start_recording_chunk()
-            try:
-                await asyncio.sleep(300) # 5 minutes
-            except asyncio.CancelledError:
-                break
-
-    def stt_loop(self):
-        """Periodically runs STT on the latest full recording chunk."""
-        while self.vc and self.vc.is_connected():
-            if len(self.recording_files) > 1:
-                # Process the second to last file, as the last one is still being written to.
-                filepath = self.recording_files[-2]
-                if os.path.exists(filepath):
-                    text = self._recognize_audio(filepath)
-                    if text:
-                        self._handle_triggers(text)
-            time.sleep(PROCESS_INTERVAL_S * 5) # Check less frequently
-
-    def _recognize_audio(self, filepath: str) -> str:
-        """Perform STT on the given audio file."""
-        try:
-            with sr.AudioFile(filepath) as source:
-                audio = self.recognizer.record(source)
-            return self.recognizer.recognize_google(audio, language="de-DE")
-        except sr.UnknownValueError:
-            return ""
-        except sr.RequestError as e:
-            logger.error(f"Google STT request error for {filepath}: {e}")
-            return ""
-
-    def _handle_triggers(self, text: str):
-        text = text.lower().strip()
-        logger.debug(f"STT: '{text}'")
-
-        now = time.time()
-        for trig in sorted(TRIGGERS, key=lambda t: len(t["phrase"]), reverse=True):
-            if difflib.SequenceMatcher(None, trig["phrase"], text).ratio() < trig["threshold"]:
-                continue
-
-            if trig["name"] == "save" and now - self._last_ok_time > 5:
-                continue
-
-            if now - self.last_trigger_time.get(trig["name"], 0) < TRIGGER_COOLDOWN_S:
-                continue
-
-            self.last_trigger_time[trig["name"]] = now
-            if trig["name"] == "ding":
-                self._last_ok_time = now
-
-            if trig["save"]:
-                self.save_recording()
-            self.play_sound(trig["sound"])
-            break
 
     async def join_channel(self, channel: discord.VoiceChannel):
         if self.vc:
             await self.leave_channel()
 
-        self.vc = await channel.connect(cls=voice_recv.VoiceRecvClient)
-        self.recording_task = self.bot.loop.create_task(self.recording_loop())
-        self.stt_task = threading.Thread(target=self.stt_loop, daemon=True)
-        self.stt_task.start()
-        logger.info(f"🔊 Joined voice channel '{channel.name}'")
+        self.vc = await channel.connect(cls=NativeVoiceClient)
+        self.vc.record(lambda e: logger.error(f"Error in recording callback: {e}"))
+        logger.info(f"🔊 Joined and started recording in '{channel.name}'")
 
     async def leave_channel(self):
-        if self.recording_task:
-            self.recording_task.cancel()
-            self.recording_task = None
-
-        if self.stt_task:
-            # This thread will exit on its own since the vc is disconnected
-            self.stt_task = None
-
         if self.vc:
-            # Stop listening will cleanup the current sink
-            self.vc.stop()
+            if self.vc.is_recording():
+                await self.vc.stop_record()
             await self.vc.disconnect()
-            logger.info("🔇 Left voice channel")
             self.vc = None
+            logger.info("🔇 Left voice channel and stopped recording.")
 
-        # Clean up any remaining recording files
-        for f in self.recording_files:
-            if os.path.exists(f):
-                os.remove(f)
-        self.recording_files.clear()
-
-    def save_recording(self):
-        """Concatenates recent recording chunks and saves as MP3."""
-        if not self.recording_files:
-            logger.warning("No recording files to save.")
+    async def save_recording(self):
+        """Stops the current recording, saves it, and immediately starts a new one."""
+        if not self.vc or not self.vc.is_recording():
+            logger.warning("Not recording, cannot save.")
             return
 
-        # Create a file list for ffmpeg
-        concat_list_path = os.path.join(OUTPUT_DIR, "concat_list.txt")
-        with open(concat_list_path, "w") as f:
-            for filepath in self.recording_files:
-                if os.path.exists(filepath):
-                    f.write(f"file '{os.path.abspath(filepath)}'\n")
+        wav_bytes = await self.vc.stop_record()
+
+        # Immediately start the next recording to minimize downtime
+        self.vc.record(lambda e: logger.error(f"Error in recording callback: {e}"))
+        logger.info("Started next recording...")
 
         timestamp = int(time.time())
-        mp3_path = os.path.join(OUTPUT_DIR, f"garmin_recording_{timestamp}.mp3")
+        filename_wav = os.path.join(OUTPUT_DIR, f"garmin_recording_{timestamp}.wav")
+        filename_mp3 = os.path.join(OUTPUT_DIR, f"garmin_recording_{timestamp}.mp3")
+
+        with open(filename_wav, 'wb') as f:
+            f.write(wav_bytes)
 
         cmd = [
-            "ffmpeg", "-y", "-f", "concat", "-safe", "0",
-            "-i", concat_list_path,
-            "-c:a", "libmp3lame", "-b:a", "192k", mp3_path
+            "ffmpeg", "-y", "-i", filename_wav,
+            "-c:a", "libmp3lame", "-b:a", "192k", filename_mp3
         ]
 
         try:
             subprocess.run(cmd, check=True, capture_output=True)
-            logger.info(f"Recording saved: {mp3_path}")
+            logger.info(f"Recording saved: {filename_mp3}")
         except subprocess.CalledProcessError as e:
             logger.error(f"ffmpeg failed: {e.stderr.decode()}")
         finally:
-            if os.path.exists(concat_list_path):
-                os.remove(concat_list_path)
+            if os.path.exists(filename_wav):
+                os.remove(filename_wav)
 
     def play_sound(self, filepath: str):
         if self.vc and os.path.isfile(filepath):
-            self.vc.play(discord.FFmpegPCMAudio(filepath))
+            # The audiorec client might not have a `play` method directly
+            # This might need to be adapted depending on the library's capabilities
+            # For now, we assume it has a similar interface to the default client
+            try:
+                self.vc.play(discord.FFmpegPCMAudio(filepath))
+            except AttributeError:
+                logger.error("The voice client does not support the 'play' method.")
         else:
             logger.warning(f"Sound file '{filepath}' not found or VC is None")
