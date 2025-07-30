@@ -256,6 +256,7 @@ class GarminVoiceManager:
         temp_wav_path = os.path.join(OUTPUT_DIR, f"temp_full_{timestamp}.wav")
 
         with self._buf_lock:
+            saved_length = len(self.audio_buffer)
             pcm_data = bytes(self.audio_buffer)
 
         # Write the entire buffer to a temporary WAV file
@@ -283,9 +284,9 @@ class GarminVoiceManager:
         try:
             subprocess.run(cmd, check=True)
             logger.info("Recording saved: %s", mp3_path)
-            # reset ring buffer so old gaps aren't re-saved
+            # Remove only the saved portion from the buffer
             with self._buf_lock:
-                self.audio_buffer.clear()
+                del self.audio_buffer[:saved_length]
         except subprocess.CalledProcessError as e:
             logger.error("ffmpeg failed: %s", e)
         finally:
