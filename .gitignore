@@ -2,7 +2,6 @@
 config/user_log.db
 garmin-output/
 __pycache__/
-__pycache__/garmin_voice.cpython-312.pyc
 vosk-model-de-0.21/
 vosk-model-de-0.21.zip
 vosk-model-de/
