@@ -836,7 +836,7 @@ async def on_ready():
         command_names = [cmd.name for cmd in synced_commands] if synced_commands else []
         
         logger.info(f"{num_synced} Befehle für Guild {DISCORD_SERVER_ID} synchronisiert: {command_names}")
-        logger.info(f"Aktuelle App‑Commands im Tree:", [c.name for c in bot.tree.get_commands()])
+        # logger.info(f"Aktuelle App‑Commands im Tree:", [c.name for c in bot.tree.get_commands()])
 
 
         if TESTING:
@@ -1366,7 +1366,7 @@ from garmin_voice import GarminVoiceManager
 
 garmin_manager = GarminVoiceManager(bot)
 
-@bot.hybrid_command(name="start_garmin", description="Starts the Garmin voice recording.")
+@bot.hybrid_command(name="garmin_start", description="Starts the Garmin voice recording.")
 @commands.guild_only()
 async def start_garmin(ctx: commands.Context):
     if ctx.author.voice:
@@ -1375,12 +1375,21 @@ async def start_garmin(ctx: commands.Context):
     else:
         await ctx.send("You need to be in a voice channel to start the Garmin voice recording.")
 
-@bot.hybrid_command(name="stop_garmin", description="Stops the Garmin voice recording.")
+@bot.hybrid_command(name="garmin_stop", description="Stops the Garmin voice recording.")
 @commands.guild_only()
 async def stop_garmin(ctx: commands.Context):
     await garmin_manager.leave_channel()
     await ctx.send("Garmin voice recording stopped.")
 
+@bot.hybrid_command(name="garmin_save", description="Saves the Garmin voice recording.")
+@commands.guild_only()
+async def start_garmin(ctx: commands.Context):
+    if ctx.author.voice:
+        garmin_manager.save_recording()
+        await ctx.send("Garmin voice recording saved.")
+    else:
+        await ctx.send("Error saving recording")
+        
 # --------- Daily Inactivity Check Task ---------
 @tasks.loop(hours=24) # Set to 24 for production, can be lower for testing (e.g. minutes=1)
 async def check_inactive_threads_task():
