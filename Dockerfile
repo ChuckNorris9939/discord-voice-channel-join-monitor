@@ -1,15 +1,28 @@
 # Filename: Dockerfile
 FROM python:3.12
 
-EXPOSE 8000
-
+# Install ffmpeg, wget and unzip
+RUN apt-get update && apt-get install -y ffmpeg wget unzip
 
 WORKDIR /app
-# Kein ADD noetig, copy reicht
-COPY . /app
 
-#Dies weist Python an, stdout und stderr nicht zu puffern. brauchen wir nicht da logger. zeigt aber mehr an... 
-#ENV PYTHONUNBUFFERED=1
+# Download and unzip the Vosk model
+# Using the smaller, but still accurate, model for efficiency
+RUN wget https://alphacephei.com/vosk/models/vosk-model-de-0.21.zip && \
+    unzip vosk-model-de-0.21.zip && \
+    mv vosk-model-de-0.21 /app/vosk-model-de && \
+    rm vosk-model-de-0.21.zip
 
-RUN pip install --no-cache-dir "discord.py[voice]" flask waitress
+# Copy requirements first to leverage Docker cache
+COPY requirements.txt .
+
+# Install python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy the rest of the application code
+COPY . .
+
+# Expose port for the web server (matching the default in main.py)
+EXPOSE 8080
+
 CMD ["python", "main.py"]
