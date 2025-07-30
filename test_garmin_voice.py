@@ -11,26 +11,31 @@ class TestGarminVoice(unittest.IsolatedAsyncioTestCase):
         self.bot = MagicMock()
         self.manager = GarminVoiceManager(self.bot)
 
-    def test_save_recording(self):
+    @patch('time.time')
+    def test_save_recording(self, mock_time):
+        # Mock the timestamp
+        mock_timestamp = 1234567890
+        mock_time.return_value = mock_timestamp
+
         # Add some dummy audio data to the buffer
-        self.manager.audio_buffer.extend(b'\x01\x02\x03\x04' * 100)
+        self.manager.audio_buffer.extend(b'\x01\x02\x03\x04' * 1000)
 
         # Call the save_recording method
         self.manager.save_recording()
 
-        # Check that the file was created
-        filepath = f"garmin-output/garmin_recording_{int(time.time())}.wav"
-        self.assertTrue(os.path.exists(filepath))
+        # Check that the MP3 file was created
+        filepath = f"garmin-output/garmin_recording_{mock_timestamp}.mp3"
+        self.assertTrue(os.path.exists(filepath), f"File not found: {filepath}")
 
-        # Check the file content
-        with wave.open(filepath, 'rb') as wf:
-            self.assertEqual(wf.getnchannels(), 2)
-            self.assertEqual(wf.getsampwidth(), 2)
-            self.assertEqual(wf.getframerate(), 48000)
-            self.assertEqual(wf.getnframes(), 100)
+        # Check that the file is not empty
+        self.assertGreater(os.path.getsize(filepath), 0)
 
         # Clean up the created file
         os.remove(filepath)
+
+        # Check that the temporary WAV file was deleted
+        temp_filepath = f"garmin-output/temp_full_{mock_timestamp}.wav"
+        self.assertFalse(os.path.exists(temp_filepath), f"Temp file was not deleted: {temp_filepath}")
 
     @patch('garmin_voice.voice_recv.VoiceRecvClient')
     async def test_join_channel(self, mock_vc):
