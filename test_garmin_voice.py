@@ -2,73 +2,82 @@ import unittest
 from unittest.mock import MagicMock, patch, AsyncMock
 import os
 import time
-from garmin_voice import GarminVoiceManager, BufferingSink, voice_recv
+import asyncio
+from garmin_voice import GarminVoiceManager, voice_recv
 
-class TestGarminVoice(unittest.IsolatedAsyncioTestCase):
+class TestGarminVoiceFileBased(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self):
         self.bot = MagicMock()
+        self.bot.loop = asyncio.get_event_loop()
         self.manager = GarminVoiceManager(self.bot)
+        # Ensure the output directory exists
+        os.makedirs("garmin-output", exist_ok=True)
 
-    @patch('garmin_voice.subprocess.run')
-    @patch('time.time')
-    def test_save_recording(self, mock_time, mock_subprocess_run):
-        # Mock the timestamp
-        mock_timestamp = 1234567890
-        mock_time.return_value = mock_timestamp
-
-        # Add some dummy audio data to the sink's buffer
-        initial_audio = b'\x01\x02\x03\x04' * 1000
-        self.manager.buffer_sink.buffer.extend(initial_audio)
-
-        # Call the save_recording method
-        self.manager.save_recording()
-
-        # --- Assertions ---
-        # 1. The buffer should now be empty after the swap
-        self.assertEqual(len(self.manager.buffer_sink.buffer), 0)
-
-        # 2. Check that ffmpeg was called
-        mock_subprocess_run.assert_called_once()
-
-        # 3. Check that the temporary WAV file was deleted
-        temp_filepath = f"garmin-output/temp_full_{mock_timestamp}.wav"
-        self.assertFalse(os.path.exists(temp_filepath), f"Temp file was not deleted: {temp_filepath}")
+    def tearDown(self):
+        # Clean up any created files
+        for f in self.manager.recording_files:
+            if os.path.exists(f):
+                os.remove(f)
+        concat_list = "garmin-output/concat_list.txt"
+        if os.path.exists(concat_list):
+            os.remove(concat_list)
 
     @patch('garmin_voice.voice_recv.VoiceRecvClient')
-    async def test_join_channel(self, mock_vc):
-        # Mock the connect method to return our mock voice client
+    async def test_join_and_leave_channel(self, mock_vc_class):
+        # Configure the mock to be an async context manager
+        mock_vc_instance = AsyncMock()
+        mock_vc_instance.is_connected.return_value = True
+
+        async def connect_coro(*args, **kwargs):
+            return mock_vc_instance
+
         channel = MagicMock()
-        channel.connect = AsyncMock(return_value=mock_vc)
+        channel.connect = MagicMock(side_effect=connect_coro)
 
-        # Call join_channel
+        # Join channel
         await self.manager.join_channel(channel)
+        self.assertIsNotNone(self.manager.vc)
+        self.assertIsNotNone(self.manager.recording_task)
+        recording_task = self.manager.recording_task
 
-        # Assert that connect was called with the right class
-        channel.connect.assert_called_once_with(cls=voice_recv.VoiceRecvClient)
-        # Assert that listen was called with our sink
-        mock_vc.listen.assert_called_once_with(self.manager.buffer_sink)
-        # Assert that the processing thread was started
-        self.assertIsNotNone(self.manager._processing_thread)
-        self.assertTrue(self.manager._processing_thread.is_alive())
-
-    async def test_leave_channel(self):
-        # Mock the voice client and processing thread
-        mock_vc = AsyncMock()
-        mock_thread = MagicMock()
-        self.manager.vc = mock_vc
-        self.manager._processing_thread = mock_thread
-
-        # Call leave_channel
+        # Leave channel
         await self.manager.leave_channel()
 
-        # Assert that disconnect was called
-        mock_vc.disconnect.assert_called_once()
-        # Assert that the thread was joined
-        mock_thread.join.assert_called_once()
-        # Assert that the vc and thread are now None
+        # The task is cancelled, but we need to await it to let it finish
+        with self.assertRaises(asyncio.CancelledError):
+            await recording_task
+
         self.assertIsNone(self.manager.vc)
-        self.assertIsNone(self.manager._processing_thread)
+        self.assertTrue(recording_task.cancelled())
+        mock_vc_instance.disconnect.assert_awaited_once()
+
+    @patch('garmin_voice.subprocess.run')
+    def test_save_recording(self, mock_subprocess_run):
+        # Create some dummy recording files
+        dummy_files = ["garmin-output/chunk_1.wav", "garmin-output/chunk_2.wav"]
+        for f in dummy_files:
+            with open(f, 'w') as wf:
+                wf.write("dummy data")
+
+        self.manager.recording_files = dummy_files
+
+        # Call save
+        self.manager.save_recording()
+
+        # Assert ffmpeg was called
+        mock_subprocess_run.assert_called_once()
+        args = mock_subprocess_run.call_args[0][0]
+        self.assertIn("concat", args)
+        self.assertIn("garmin-output/concat_list.txt", args)
+
+        # Assert concat list was created and then deleted
+        self.assertFalse(os.path.exists("garmin-output/concat_list.txt"))
+
+        # Cleanup dummy files
+        for f in dummy_files:
+            if os.path.exists(f):
+                os.remove(f)
 
 if __name__ == '__main__':
     unittest.main()
