@@ -250,32 +250,47 @@ class GarminVoiceManager:
 
     # ------------------------------ Helpers ------------------------------------
     def save_recording(self):
-        """Encode the current in‑memory PCM buffer to MP3 using ffmpeg."""
+        """Encode the current in-memory PCM buffer to MP3 using ffmpeg."""
         timestamp = int(time.time())
-        path = os.path.join(OUTPUT_DIR, f"garmin_recording_{timestamp}.mp3")
+        mp3_path = os.path.join(OUTPUT_DIR, f"garmin_recording_{timestamp}.mp3")
+        temp_wav_path = os.path.join(OUTPUT_DIR, f"temp_full_{timestamp}.wav")
+
         with self._buf_lock:
             pcm_data = bytes(self.audio_buffer)
+
+        # Write the entire buffer to a temporary WAV file
+        try:
+            with wave.open(temp_wav_path, "wb") as wf:
+                wf.setnchannels(CHANNELS)
+                wf.setsampwidth(BYTES_PER_SAMPLE)
+                wf.setframerate(SAMPLERATE)
+                wf.writeframes(pcm_data)
+        except Exception as e:
+            logger.error("Failed to write temporary WAV file: %s", e)
+            if os.path.exists(temp_wav_path):
+                os.remove(temp_wav_path)
+            return
 
         cmd = [
             "ffmpeg",
             "-loglevel", "error",
             "-y",
-            "-f", "s16le",
-            "-ar", str(SAMPLERATE),
-            "-ac", str(CHANNELS),
-            "-i", "pipe:0",
+            "-i", temp_wav_path,
             "-codec:a", "libmp3lame",
             "-b:a", "192k",
-            path,
+            mp3_path,
         ]
         try:
-            subprocess.run(cmd, input=pcm_data, check=True)
-            logger.info("Recording saved: %s", path)
-            # reset ring buffer so old gaps aren't re‑saved
+            subprocess.run(cmd, check=True)
+            logger.info("Recording saved: %s", mp3_path)
+            # reset ring buffer so old gaps aren't re-saved
             with self._buf_lock:
                 self.audio_buffer.clear()
         except subprocess.CalledProcessError as e:
             logger.error("ffmpeg failed: %s", e)
+        finally:
+            if os.path.exists(temp_wav_path):
+                os.remove(temp_wav_path)
 
     def play_sound(self, filepath: str):
         if self.vc and os.path.isfile(filepath):
