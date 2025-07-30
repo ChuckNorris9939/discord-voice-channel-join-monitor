@@ -1360,123 +1360,22 @@ async def send_summarized_join_message(channel_id: int):
     await send_log_message(message, target_channel_ids=[LOG_CHANNEL_ID])
 
 
-@bot.event
-async def on_voice_state_update(member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
-    if member.guild.id != DISCORD_SERVER_ID: return
-    if member.bot: return
+from garmin_voice import GarminVoiceManager
 
-    user_name_log_format = f"***{member.name}***"
-    log_needs_update_user_list = False
-    target_ids_vc = [LOG_CHANNEL_ID]
+garmin_manager = GarminVoiceManager(bot)
 
-    # --- AFK Mover Logic ---
-    is_fully_muted = after.channel and (after.self_mute or after.mute)
-    was_fully_muted = before.channel and (before.self_mute or before.mute)
+@bot.hybrid_command(name="start_garmin", description="Starts the Garmin voice recording.")
+async def start_garmin(ctx: commands.Context):
+    if ctx.author.voice:
+        await garmin_manager.join_channel(ctx.author.voice.channel)
+        await ctx.send("Garmin voice recording started.")
+    else:
+        await ctx.send("You need to be in a voice channel to start the Garmin voice recording.")
 
-    if is_fully_muted and not was_fully_muted:
-        # User became fully muted, start the AFK timer
-        if member.id not in fully_muted_users:
-            logger.info(f"AFK Mover: {member.name} is now fully muted. Starting AFK timer.")
-            fully_muted_users[member.id] = asyncio.create_task(move_to_afk(member))
-    elif not is_fully_muted and was_fully_muted:
-        # User is no longer fully muted, cancel the AFK timer
-        if member.id in fully_muted_users:
-            logger.info(f"AFK Mover: {member.name} is no longer muted. Cancelling AFK timer.")
-            fully_muted_users[member.id].cancel()
-            del fully_muted_users[member.id]
-
-    # --- Summarized Join/Leave Message Logic ---
-    before_is_hidden = before.channel and before.channel.id in HIDDEN_CHANNELS
-    after_is_hidden = after.channel and after.channel.id in HIDDEN_CHANNELS
-
-    joined_visible_channel = after.channel and not after_is_hidden and \
-                             (not before.channel or before_is_hidden)
-    
-    left_visible_channel = before.channel and not before_is_hidden and \
-                           (not after.channel or after_is_hidden)
-    
-    switched_between_visible_channels = before.channel and not before_is_hidden and \
-                                       after.channel and not after_is_hidden and \
-                                       before.channel.id != after.channel.id
-    
-    if after.channel and after.channel.id not in HIDDEN_CHANNELS:
-        if not before.self_stream and after.self_stream:
-             pass # Stream start logging removed
-        elif before.self_stream and not after.self_stream:
-             pass # Stream end logging removed
-        
-        if not before.self_video and after.self_video:
-             pass # Camera activation logging removed
-        elif before.self_video and not after.self_video:
-             pass # Camera deactivation logging removed
-
-
-    if joined_visible_channel:
-        ch_name_log_format = f"***{after.channel.name}***"
-        await send_log_message(f"➕ {user_name_log_format} hat {ch_name_log_format} betreten.", target_channel_ids=target_ids_vc)
-
-        if JOIN_MESSAGE_TIMER_ENABLED:
-            channel_id = after.channel.id
-            if channel_id not in recent_joins:
-                recent_joins[channel_id] = []
-
-            recent_joins[channel_id].append(member.name)
-
-            if channel_id not in join_timers:
-                logger.info(f"Summarized Join: Starting {JOIN_MESSAGE_TIMER_MINUTES} min timer for channel {channel_id}.")
-                join_timers[channel_id] = asyncio.create_task(
-                    asyncio.sleep(JOIN_MESSAGE_TIMER_MINUTES * 60, result=channel_id)
-                )
-                # This task will call the sender function when it completes
-                join_timers[channel_id].add_done_callback(
-                    lambda fut: asyncio.create_task(send_summarized_join_message(fut.result()))
-                )
-        
-        # Log user join to database (this remains immediate)
-        try:
-            conn = sqlite3.connect(DATABASE_PATH)
-            cursor = conn.cursor()
-            timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
-            cursor.execute("""
-                INSERT INTO user_joins (user_id, username, channel_id, channel_name, timestamp)
-                VALUES (?, ?, ?, ?, ?)
-            """, (member.id, member.name, after.channel.id, after.channel.name, timestamp))
-            conn.commit()
-        except sqlite3.Error as e:
-            logger.error(f"SQLite error when logging user join: {e}")
-        finally:
-            if conn:
-                conn.close()
-
-        if member.name not in USERS:
-            USERS.append(member.name)
-            USERS.sort()
-            log_needs_update_user_list = True
-
-    elif left_visible_channel:
-        ch_name_log_format = f"***{before.channel.name}***"
-        await send_log_message(f"➖ {user_name_log_format} hat {ch_name_log_format} verlassen.", target_channel_ids=target_ids_vc)
-
-        user_still_in_any_visible_vc_on_this_guild = False
-        guild = bot.get_guild(DISCORD_SERVER_ID)
-        if guild:
-            member_on_guild = guild.get_member(member.id)
-            if member_on_guild and member_on_guild.voice and member_on_guild.voice.channel and \
-               member_on_guild.voice.channel.id not in HIDDEN_CHANNELS:
-                user_still_in_any_visible_vc_on_this_guild = True
-        
-        if not user_still_in_any_visible_vc_on_this_guild and member.name in USERS:
-            try: 
-                USERS.remove(member.name)
-                log_needs_update_user_list = True
-            except ValueError: pass
-
-    elif switched_between_visible_channels:
-        pass # Channel switch logging removed
-
-    if log_needs_update_user_list and not JOIN_MESSAGE_TIMER_ENABLED:
-        formatted_current_users = [f"***{u}***" for u in USERS]
-        await send_log_message(f"👥 {len(USERS)} users online: {', '.join(formatted_current_users) if USERS else 'none'}", target_channel_ids=target_ids_vc)
+@bot.hybrid_command(name="stop_garmin", description="Stops the Garmin voice recording.")
+async def stop_garmin(ctx: commands.Context):
+    await garmin_manager.leave_channel()
+    await ctx.send("Garmin voice recording stopped.")
 
 # --------- Daily Inactivity Check Task ---------
 @tasks.loop(hours=24) # Set to 24 for production, can be lower for testing (e.g. minutes=1)
