@@ -2,7 +2,7 @@
 FROM python:3.12
 
 # Install ffmpeg, wget and unzip
-RUN apt-get update && apt-get install -y ffmpeg wget unzip
+RUN apt-get update && apt-get install -y ffmpeg wget unzip portaudio19-dev python3-dev
 
 WORKDIR /app
 
