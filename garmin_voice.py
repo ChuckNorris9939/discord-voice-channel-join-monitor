@@ -36,10 +36,6 @@ class BufferingSink(voice_recv.AudioSink):
             self.buffer = bytearray()
             return old_buffer
 
-    def get_buffer_view(self) -> memoryview:
-        """Returns a memoryview of the buffer for reading without locking."""
-        return memoryview(self.buffer)
-
     def cleanup(self):
         pass
 
@@ -181,11 +177,10 @@ class GarminVoiceManager:
             if len(self.buffer_sink.buffer) > MAX_BUFFER_SIZE:
                 del self.buffer_sink.buffer[:len(self.buffer_sink.buffer) - MAX_BUFFER_SIZE]
 
-            buf_view = self.buffer_sink.get_buffer_view()
-            if len(buf_view) < WINDOW_BYTES_MIN:
+            if len(self.buffer_sink.buffer) < WINDOW_BYTES_MIN:
                 return
 
-            window = buf_view[-min(len(buf_view), WINDOW_BYTES_MAX):]
+            window = self.buffer_sink.buffer[-min(len(self.buffer_sink.buffer), WINDOW_BYTES_MAX):]
             buf_copy = bytes(window)
 
         # --- Speech-to-Text ---
