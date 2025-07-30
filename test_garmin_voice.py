@@ -5,16 +5,17 @@ import time
 import asyncio
 from garmin_voice import GarminVoiceManager, NativeVoiceClient
 
-class TestGarminVoiceAudioRec(unittest.IsolatedAsyncioTestCase):
+class TestGarminVoiceFinal(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self):
         self.bot = MagicMock()
+        self.bot.loop = asyncio.get_event_loop()
         self.manager = GarminVoiceManager(self.bot)
         os.makedirs("garmin-output", exist_ok=True)
 
     def tearDown(self):
         # Clean up any created files
-        timestamp = int(time.time()) # This is a bit of a hack to guess the filename
+        timestamp = int(time.time())
         filename_wav = f"garmin-output/garmin_recording_{timestamp}.wav"
         filename_mp3 = f"garmin-output/garmin_recording_{timestamp}.mp3"
         if os.path.exists(filename_wav):
@@ -23,49 +24,45 @@ class TestGarminVoiceAudioRec(unittest.IsolatedAsyncioTestCase):
             os.remove(filename_mp3)
 
     async def test_join_and_leave_channel(self):
-        # Mock the connect method to return a mock NativeVoiceClient
-        mock_vc_instance = AsyncMock(spec=NativeVoiceClient)
-        channel = MagicMock()
-        channel.connect = AsyncMock(return_value=mock_vc_instance)
+        ctx = MagicMock()
+        ctx.author.voice.channel = MagicMock()
+        ctx.voice_client = None
+
+        mock_vc = AsyncMock(spec=NativeVoiceClient)
+        ctx.author.voice.channel.connect = AsyncMock(return_value=mock_vc)
 
         # Join
-        await self.manager.join_channel(channel)
-        channel.connect.assert_awaited_once_with(cls=NativeVoiceClient)
-        self.assertIs(self.manager.vc, mock_vc_instance)
-        self.manager.vc.record.assert_called_once()
+        await self.manager.join_channel(ctx)
+        ctx.author.voice.channel.connect.assert_awaited_once_with(cls=NativeVoiceClient)
+        self.assertIsNotNone(self.manager.stt_task)
+        self.assertIsNotNone(self.manager.trim_task)
 
         # Leave
-        mock_vc = self.manager.vc
-        await self.manager.leave_channel()
-        mock_vc.stop_record.assert_awaited_once()
+        stt_task = self.manager.stt_task
+        trim_task = self.manager.trim_task
+        await self.manager.leave_channel(ctx)
+        await asyncio.sleep(0) # allow cancellation to propagate
+        self.assertTrue(stt_task.cancelled())
+        self.assertTrue(trim_task.cancelled())
         mock_vc.disconnect.assert_awaited_once()
-        self.assertIsNone(self.manager.vc)
 
     @patch('garmin_voice.subprocess.run')
     @patch('time.time')
-    async def test_save_recording(self, mock_time, mock_subprocess_run):
+    def test_save_recording(self, mock_time, mock_subprocess_run):
         mock_timestamp = 1234567890
         mock_time.return_value = mock_timestamp
 
-        self.manager.vc = AsyncMock(spec=NativeVoiceClient)
-        self.manager.vc.is_recording.return_value = True
-        self.manager.vc.stop_record.return_value = b"dummy_wav_bytes"
+        self.manager.audio_buffer.extend(b"dummy_wav_bytes")
+        self.manager.save_recording()
 
-        await self.manager.save_recording()
-
-        # Check that recording was stopped and restarted
-        self.manager.vc.stop_record.assert_awaited_once()
-        self.manager.vc.record.assert_called_once()
-
-        # Check that the WAV file was created and then deleted
-        filename_wav = f"garmin-output/garmin_recording_{mock_timestamp}.wav"
-        self.assertFalse(os.path.exists(filename_wav))
-
-        # Check that ffmpeg was called correctly
+        # Check that ffmpeg was called
         mock_subprocess_run.assert_called_once()
         args = mock_subprocess_run.call_args[0][0]
+        filename_wav = f"garmin-output/garmin_recording_{mock_timestamp}.wav"
         self.assertIn(filename_wav, args)
-        self.assertIn(os.path.join("garmin-output", f"garmin_recording_{mock_timestamp}.mp3"), args)
+
+        # Check that the WAV file was created and then deleted
+        self.assertFalse(os.path.exists(filename_wav))
 
 if __name__ == '__main__':
     unittest.main()
