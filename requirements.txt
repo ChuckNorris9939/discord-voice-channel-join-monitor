@@ -36,3 +36,4 @@ frozenlist
 idna
 multidict
 yarl
+vosk
