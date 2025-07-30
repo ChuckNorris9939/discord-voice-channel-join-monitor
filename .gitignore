@@ -1,2 +1,4 @@
 .env
 config/user_log.db
+garmin-output/
+__pycache__/
