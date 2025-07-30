@@ -8,10 +8,11 @@ WORKDIR /app
 
 # Download and unzip the Vosk model
 # Using the smaller, but still accurate, model for efficiency
-RUN wget https://alphacephei.com/vosk/models/vosk-model-de-0.21.zip && \
-    unzip vosk-model-de-0.21.zip && \
-    mv vosk-model-de-0.21 /app/vosk-model-de && \
-    rm vosk-model-de-0.21.zip
+#RUN wget https://alphacephei.com/vosk/models/vosk-model-de-0.21.zip && \
+#    unzip vosk-model-de-0.21.zip && \
+#    mv vosk-model-de-0.21 /app/vosk-model-de && \
+#    rm vosk-model-de-0.21.zip
+# Vosk Model ist nicht im Container mit drinnnen, sondern als Volume gemounted
 
 # Copy requirements first to leverage Docker cache
 COPY requirements.txt .
