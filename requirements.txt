@@ -37,3 +37,4 @@ idna
 multidict
 yarl
 vosk
+python-dotenv

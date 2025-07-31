@@ -12,6 +12,18 @@ from typing import Dict, List, Optional
 import signal
 import asyncio
 
+# Load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+    print("✅ .env file loaded successfully")
+except ImportError:
+    print("⚠️ python-dotenv not installed. Install with: pip install python-dotenv")
+    print("   Environment variables will only be loaded from system environment")
+except Exception as e:
+    print(f"⚠️ Error loading .env file: {e}")
+    print("   Environment variables will only be loaded from system environment")
+
 BOT_VERSION = "1.15"
 CONFIG_DIR = "config"
 DATABASE_NAME = "user_log.db"

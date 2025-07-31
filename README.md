@@ -14,6 +14,29 @@ Install the required Python packages using pip:
 pip install -r requirements.txt
 ```
 
+### Environment Configuration
+The bot supports loading environment variables from a `.env` file for easier configuration management.
+
+1. **Copy the example file:**
+   ```bash
+   cp env.example .env
+   ```
+
+2. **Edit the `.env` file** with your actual values:
+   ```bash
+   # Required: Your Discord bot token
+   DISCORD_TOKEN=your_actual_discord_bot_token_here
+   
+   # Optional: Other configuration settings
+   APP_TESTING_MODE=false
+   LOG_LEVEL=INFO
+   PORT=8080
+   ```
+
+3. **Important:** Never commit your `.env` file to version control as it contains sensitive information like your Discord token.
+
+The bot will automatically load the `.env` file when it starts. If the file is not found or there's an error loading it, the bot will fall back to system environment variables.
+
 ### Health Check Port
 The bot runs a small web server for health checks on port 8080 by default. If this port is already in use on your system (you might see an `OSError: [Errno 98] Address already in use`), you can specify a different port by setting the `PORT` environment variable before running the bot:
 ```bash

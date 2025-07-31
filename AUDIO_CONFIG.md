@@ -4,6 +4,8 @@ This document describes all configurable settings for the Garmin voice recording
 
 ## Environment Variables
 
+> **Note**: These environment variables can be set in a `.env` file for easier configuration. Copy `env.example` to `.env` and modify the values as needed.
+
 ### Audio Settings
 
 | Variable | Default | Description |
@@ -58,25 +60,28 @@ This document describes all configurable settings for the Garmin voice recording
 
 1. **For Low-End Systems**
    ```bash
-   export GARMIN_RECORD_SECONDS=300
-   export GARMIN_FRAMES_PER_BUFFER=1920
-   export GARMIN_BUFFER_MONITOR_INTERVAL=60.0
-   export GARMIN_MAX_RECORDING_ERRORS=3
+   # In your .env file:
+   GARMIN_RECORD_SECONDS=300
+   GARMIN_FRAMES_PER_BUFFER=1920
+   GARMIN_BUFFER_MONITOR_INTERVAL=60.0
+   GARMIN_MAX_RECORDING_ERRORS=3
    ```
 
 2. **For High-Performance Systems**
    ```bash
-   export GARMIN_RECORD_SECONDS=1200
-   export GARMIN_FRAMES_PER_BUFFER=480
-   export GARMIN_BUFFER_MONITOR_INTERVAL=15.0
-   export GARMIN_MAX_RECORDING_ERRORS=10
+   # In your .env file:
+   GARMIN_RECORD_SECONDS=1200
+   GARMIN_FRAMES_PER_BUFFER=480
+   GARMIN_BUFFER_MONITOR_INTERVAL=15.0
+   GARMIN_MAX_RECORDING_ERRORS=10
    ```
 
 3. **For Network-Unstable Environments**
    ```bash
-   export GARMIN_RECORDING_RESTART_DELAY=2.0
-   export GARMIN_BUFFER_MONITOR_INTERVAL=45.0
-   export GARMIN_MAX_RECORDING_ERRORS=8
+   # In your .env file:
+   GARMIN_RECORDING_RESTART_DELAY=2.0
+   GARMIN_BUFFER_MONITOR_INTERVAL=45.0
+   GARMIN_MAX_RECORDING_ERRORS=8
    ```
 
 ## Health Monitoring
