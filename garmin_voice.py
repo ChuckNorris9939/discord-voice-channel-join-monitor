@@ -6,6 +6,7 @@ import threading
 import difflib
 import logging
 import asyncio
+import queue
 from typing import Final
 from pathlib import Path
 
@@ -50,6 +51,7 @@ _init_logging()
 # ==================================================
 # Configurable Speech‑to‑Text backend
 # ==================================================
+STT_ENABLED: Final[bool] = os.getenv("STT_ENABLED", "true").lower() in ("1", "true", "yes")
 STT_ENGINE: Final[str] = os.getenv("STT_ENGINE", "google").lower()
 VOSK_MODEL_PATH: Final[str] = os.getenv("VOSK_MODEL_PATH", "vosk-model-de")
 
@@ -68,9 +70,9 @@ CHUNK_SIZE: Final[int] = FRAMES_PER_BUFFER * CHANNELS * BYTES_PER_SAMPLE
 # --------------------------------------------------
 # Buffer management for stuttering prevention
 # --------------------------------------------------
-BUFFER_PREFILL_THRESHOLD: Final[int] = int(os.getenv("GARMIN_BUFFER_PREFILL", "192000"))  # Start processing after 4s of audio
-BUFFER_OVERFLOW_THRESHOLD: Final[float] = float(os.getenv("GARMIN_BUFFER_OVERFLOW", "0.7"))  # 70% of max buffer size
-PROCESS_INTERVAL_S: Final[float] = float(os.getenv("GARMIN_PROCESS_INTERVAL", "1.0"))  # Less frequent processing
+BUFFER_PREFILL_THRESHOLD: Final[int] = int(os.getenv("GARMIN_BUFFER_PREFILL", "384000"))  # Start processing after 8s of audio
+BUFFER_OVERFLOW_THRESHOLD: Final[float] = float(os.getenv("GARMIN_BUFFER_OVERFLOW", "0.6"))  # 60% of max buffer size
+PROCESS_INTERVAL_S: Final[float] = float(os.getenv("GARMIN_PROCESS_INTERVAL", "3.0"))  # Much less frequent processing
 
 # --------------------------------------------------
 # Additional audio processing constants for stuttering prevention
@@ -132,6 +134,11 @@ class GarminVoiceManager:
         self.audio_buffer = bytearray()
         self._buf_lock   = threading.Lock()
 
+        # STT processing queue to prevent conflicts
+        self.stt_queue = queue.Queue(maxsize=2)
+        self.stt_worker_thread = None
+        self.stt_worker_running = False
+
         self.recognizer = sr.Recognizer()
         self.recognizer.dynamic_energy_threshold = True
 
@@ -169,14 +176,25 @@ class GarminVoiceManager:
         self._append_to_buffer(data.pcm)
         now = time.time()
         
+        # Skip STT processing if disabled
+        if not STT_ENABLED:
+            return
+        
         # Only process if we have enough audio data and enough time has passed
         with self._buf_lock:
             buffer_size = len(self.audio_buffer)
         
-        if (not self.is_processing and 
-            buffer_size >= BUFFER_PREFILL_THRESHOLD and 
+        if (buffer_size >= BUFFER_PREFILL_THRESHOLD and 
             (now - self.last_process_time >= PROCESS_INTERVAL_S)):
-            threading.Thread(target=self._process_audio_data, daemon=True).start()
+            
+            # Use queue-based processing to prevent conflicts
+            try:
+                if not self.stt_queue.full():
+                    self.stt_queue.put_nowait(now)
+                    self.last_process_time = now
+                    logger.debug(f"Queued STT processing request (buffer: {buffer_size} bytes)")
+            except queue.Full:
+                logger.debug("STT queue full, skipping processing request")
 
     def _append_to_buffer(self, chunk: bytes):
         """Append audio data to buffer with improved overflow management."""
@@ -194,10 +212,38 @@ class GarminVoiceManager:
                 logger.debug(f"Buffer overflow prevented: removed {excess} bytes")
 
     # ------------------------------ Speech‑rec thread ---------------------------
-    def _process_audio_data(self):
+    def _start_stt_worker(self):
+        """Start the STT worker thread."""
+        if not self.stt_worker_running:
+            self.stt_worker_running = True
+            self.stt_worker_thread = threading.Thread(target=self._stt_worker, daemon=True)
+            self.stt_worker_thread.start()
+            logger.debug("STT worker thread started")
+
+    def _stop_stt_worker(self):
+        """Stop the STT worker thread."""
+        self.stt_worker_running = False
+        if self.stt_worker_thread and self.stt_worker_thread.is_alive():
+            self.stt_worker_thread.join(timeout=5)
+            logger.debug("STT worker thread stopped")
+
+    def _stt_worker(self):
+        """Worker thread for STT processing."""
+        while self.stt_worker_running:
+            try:
+                # Wait for processing request
+                request_time = self.stt_queue.get(timeout=1.0)
+                self._process_audio_data(request_time)
+                self.stt_queue.task_done()
+            except queue.Empty:
+                continue
+            except Exception as e:
+                logger.error(f"Error in STT worker: {e}")
+                self.recording_errors += 1
+
+    def _process_audio_data(self, request_time: float):
         """Process audio data for speech recognition with improved buffer handling."""
         self.is_processing = True
-        self.last_process_time = time.time()
         tmp_path = None
         try:
             # Get a copy of the buffer for processing
@@ -342,12 +388,20 @@ class GarminVoiceManager:
             await self.leave_channel()
         self.vc = await channel.connect(cls=voice_recv.VoiceRecvClient)
         self.vc.listen(voice_recv.BasicSink(self.callback))
+        
+        # Only start STT worker if STT is enabled
+        if STT_ENABLED:
+            self._start_stt_worker()
+            logger.info("🔊 Joined voice channel '%s' (STT engine: %s)", channel.name, STT_ENGINE)
+        else:
+            logger.info("🔊 Joined voice channel '%s' (STT disabled)", channel.name)
+        
         await self._start_recording()
-        logger.info("🔊 Joined voice channel '%s' (STT engine: %s)", channel.name, STT_ENGINE)
 
     async def leave_channel(self):
         """Disconnect from the current voice connection (if any)."""
         await self._stop_recording()
+        self._stop_stt_worker()
         if self.vc:
             await self.vc.disconnect()
             logger.info("🔇 Left voice channel")
@@ -460,6 +514,7 @@ class GarminVoiceManager:
             "recording_errors": self.recording_errors,
             "max_errors": self.max_errors,
             "is_processing": self.is_processing,
-            "stt_engine": STT_ENGINE,
+            "stt_enabled": STT_ENABLED,
+            "stt_engine": STT_ENGINE if STT_ENABLED else "disabled",
             "last_process_time": self.last_process_time
         }

@@ -30,25 +30,25 @@ APP_TESTING_MODE=true
 
 ## Configuration Solutions
 
-### Solution 1: Buffer Underrun Fix (Based on Your Spectrogram)
-**This is specifically for your stuttering pattern with 1-2 second gaps and sharp vertical lines.**
+### Solution 1: STT Processing Fix (Based on Your Latest Spectrogram)
+**This is specifically for your stuttering pattern with continuous audio but sharp vertical lines caused by STT processing overhead.**
 
 Add these to your `.env` file:
 ```bash
-# CRITICAL: Fix for buffer underrun stuttering
+# CRITICAL: Fix for STT processing stuttering
 GARMIN_FRAMES_PER_BUFFER=1920
-GARMIN_PROCESS_INTERVAL=1.0
-GARMIN_BUFFER_PREFILL=192000
-GARMIN_BUFFER_OVERFLOW=0.7
+GARMIN_PROCESS_INTERVAL=3.0
+GARMIN_BUFFER_PREFILL=384000
+GARMIN_BUFFER_OVERFLOW=0.6
 LOG_LEVEL=DEBUG
 APP_TESTING_MODE=true
 ```
 
 **Why this fixes your specific issue:**
-- `GARMIN_FRAMES_PER_BUFFER=1920`: Larger buffer prevents underruns
-- `GARMIN_BUFFER_PREFILL=192000`: Ensures 4 seconds of audio before processing
-- `GARMIN_PROCESS_INTERVAL=1.0`: Less frequent processing reduces buffer drain
-- `GARMIN_BUFFER_OVERFLOW=0.7`: More conservative buffer management
+- `GARMIN_PROCESS_INTERVAL=3.0`: Much less frequent STT processing (was 1.0s)
+- `GARMIN_BUFFER_PREFILL=384000`: Ensures 8 seconds of audio before processing
+- `GARMIN_BUFFER_OVERFLOW=0.6`: More conservative buffer management
+- **New**: Queue-based STT processing prevents threading conflicts
 
 ### Solution 2: Conservative Buffer Settings (Alternative)
 Add these to your `.env` file:
@@ -111,6 +111,16 @@ STT_ENGINE=vosk
 VOSK_MODEL_PATH=vosk-model-de
 ```
 
+### 4. Disable STT to Test Audio Recording
+To determine if stuttering is caused by STT processing:
+```bash
+# Disable STT completely
+STT_ENABLED=false
+
+# This will still record audio but skip all STT processing
+# Use this to test if the issue persists without STT overhead
+```
+
 ## Environment-Specific Solutions
 
 ### Windows
@@ -144,6 +154,23 @@ GARMIN_BUFFER_PREFILL=192000
 3. **Monitor logs** for any errors or warnings
 4. **Test with actual speech** to trigger STT processing
 5. **Check the health** with `/garmin_health`
+
+## Testing Without STT
+
+To determine if stuttering is caused by STT processing:
+
+1. **Set STT_ENABLED=false** in your `.env` file
+2. **Restart the bot**
+3. **Join a voice channel** - you should see "STT disabled" in logs
+4. **Record audio** for several minutes
+5. **Check spectrogram** - if stuttering is gone, the issue is STT-related
+6. **Run `/garmin_health`** - should show "🔴 Disabled" for STT Status
+
+**Expected Results:**
+- ✅ **No STT processing logs** (no "Processing audio window" messages)
+- ✅ **Clean audio recording** (if STT was the cause)
+- ✅ **Health check shows STT disabled**
+- ❌ **Stuttering persists** = issue is not STT-related
 
 ## When to Contact Support
 

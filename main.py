@@ -1453,10 +1453,11 @@ async def garmin_health(ctx: commands.Context):
         inline=True
     )
     
-    # STT Engine
+    # STT Status
+    stt_status = f"{'🟢' if health_data['stt_enabled'] else '🔴'} {health_data['stt_engine'].title()}"
     embed.add_field(
-        name="STT Engine",
-        value=health_data['stt_engine'].title(),
+        name="STT Status",
+        value=stt_status,
         inline=True
     )
     
