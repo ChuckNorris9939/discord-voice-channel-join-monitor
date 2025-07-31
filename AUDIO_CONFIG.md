@@ -16,6 +16,14 @@ This document describes all configurable settings for the Garmin voice recording
 | `GARMIN_BYTES_PER_SAMPLE` | `2` | Bytes per sample (16-bit) |
 | `GARMIN_FRAMES_PER_BUFFER` | `960` | Frames per buffer (20ms @ 48kHz) |
 
+### Audio Pipeline Health Monitoring
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GARMIN_AUDIO_CALLBACK_TIMEOUT` | `5.0` | Maximum seconds between audio callbacks before restart |
+| `GARMIN_MIN_AUDIO_CHUNK` | `1920` | Minimum expected audio chunk size in bytes |
+| `GARMIN_MAX_AUDIO_CHUNK` | `9600` | Maximum expected audio chunk size in bytes |
+
 ### Recording Management
 
 | Variable | Default | Description |
@@ -96,6 +104,11 @@ Use `/garmin_health` to monitor the recording system status:
 - **Recording Errors**: Number of errors vs. maximum allowed
 - **Processing Status**: Whether STT processing is active
 - **STT Engine**: Which speech recognition engine is being used
+- **Audio Pipeline Health**: Whether the audio pipeline is healthy
+- **Audio Callback Errors**: Number of audio callback errors
+- **Time Since Last Audio**: Seconds since last audio callback
+- **Audio Callback Rate**: Callbacks per second (should be ~50)
+- **Last Chunk Size**: Size of the last audio chunk received
 
 ### Automatic Recovery
 
