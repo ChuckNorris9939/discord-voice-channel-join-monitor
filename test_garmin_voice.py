@@ -24,24 +24,21 @@ class TestGarminVoiceFinal(unittest.IsolatedAsyncioTestCase):
             os.remove(filename_mp3)
 
     async def test_join_and_leave_channel(self):
-        ctx = MagicMock()
-        ctx.author.voice.channel = MagicMock()
-        ctx.voice_client = None
-
+        channel = MagicMock()
         mock_vc = AsyncMock(spec=NativeVoiceClient)
-        ctx.author.voice.channel.connect = AsyncMock(return_value=mock_vc)
+        channel.connect = AsyncMock(return_value=mock_vc)
 
         # Join
-        await self.manager.join_channel(ctx)
-        ctx.author.voice.channel.connect.assert_awaited_once_with(cls=NativeVoiceClient)
+        await self.manager.join_channel(channel)
+        channel.connect.assert_awaited_once_with(cls=NativeVoiceClient)
         self.assertIsNotNone(self.manager.stt_task)
         self.assertIsNotNone(self.manager.trim_task)
 
         # Leave
         stt_task = self.manager.stt_task
         trim_task = self.manager.trim_task
-        await self.manager.leave_channel(ctx)
-        await asyncio.sleep(0) # allow cancellation to propagate
+        await self.manager.leave_channel()
+        await asyncio.sleep(0)
         self.assertTrue(stt_task.cancelled())
         self.assertTrue(trim_task.cancelled())
         mock_vc.disconnect.assert_awaited_once()

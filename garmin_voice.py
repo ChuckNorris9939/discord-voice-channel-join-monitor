@@ -207,8 +207,11 @@ class GarminVoiceManager:
         filename_wav = os.path.join(OUTPUT_DIR, f"garmin_recording_{timestamp}.wav")
         filename_mp3 = os.path.join(OUTPUT_DIR, f"garmin_recording_{timestamp}.mp3")
 
-        with open(filename_wav, 'wb') as f:
-            f.write(pcm_data)
+        with wave.open(filename_wav, 'wb') as wf:
+            wf.setnchannels(CHANNELS)
+            wf.setsampwidth(BYTES_PER_SAMPLE)
+            wf.setframerate(SAMPLERATE)
+            wf.writeframes(pcm_data)
 
         cmd = [
             "ffmpeg", "-y", "-i", filename_wav,
@@ -233,10 +236,8 @@ class GarminVoiceManager:
         else:
             logger.warning(f"Sound file '{filepath}' not found or VC is None")
 
-    async def join_channel(self, ctx):
-        channel = ctx.author.voice.channel
-        if ctx.voice_client is not None:
-            self.vc = ctx.voice_client
+    async def join_channel(self, channel):
+        if self.vc:
             return await self.vc.move_to(channel)
 
         self.vc = await channel.connect(cls=NativeVoiceClient)
@@ -245,7 +246,7 @@ class GarminVoiceManager:
         self.trim_task = self.bot.loop.create_task(self._trim_buffer_loop())
         logger.info(f"🔊 Joined and started recording in '{channel.name}'")
 
-    async def leave_channel(self, ctx):
+    async def leave_channel(self):
         if self.stt_task:
             self.stt_task.cancel()
             self.stt_task = None
