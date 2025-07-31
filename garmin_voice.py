@@ -66,6 +66,24 @@ FRAMES_PER_BUFFER: Final[int] = int(os.getenv("GARMIN_FRAMES_PER_BUFFER", "960")
 CHUNK_SIZE: Final[int] = FRAMES_PER_BUFFER * CHANNELS * BYTES_PER_SAMPLE
 
 # --------------------------------------------------
+# Buffer management for stuttering prevention
+# --------------------------------------------------
+BUFFER_PREFILL_THRESHOLD: Final[int] = int(os.getenv("GARMIN_BUFFER_PREFILL", "192000"))  # Start processing after 4s of audio
+BUFFER_OVERFLOW_THRESHOLD: Final[float] = float(os.getenv("GARMIN_BUFFER_OVERFLOW", "0.7"))  # 70% of max buffer size
+PROCESS_INTERVAL_S: Final[float] = float(os.getenv("GARMIN_PROCESS_INTERVAL", "1.0"))  # Less frequent processing
+
+# --------------------------------------------------
+# Additional audio processing constants for stuttering prevention
+# --------------------------------------------------
+PROCESS_INTERVAL_S: Final[float] = float(os.getenv("GARMIN_PROCESS_INTERVAL", "0.5"))  # How often to process audio
+WINDOW_BYTES_MIN: Final[int] = int(os.getenv("GARMIN_WINDOW_MIN", "48000"))  # Minimum bytes for STT (1 second)
+WINDOW_BYTES_MAX: Final[int] = int(os.getenv("GARMIN_WINDOW_MAX", "240000"))  # Maximum bytes for STT (5 seconds)
+
+# Buffer management for stuttering prevention
+BUFFER_PREFILL_THRESHOLD: Final[int] = int(os.getenv("GARMIN_BUFFER_PREFILL", "96000"))  # Start processing after 2s of audio
+BUFFER_OVERFLOW_THRESHOLD: Final[float] = float(os.getenv("GARMIN_BUFFER_OVERFLOW", "0.8"))  # 80% of max buffer size
+
+# --------------------------------------------------
 # Recording management constants
 # --------------------------------------------------
 RECORDING_RESTART_DELAY: Final[float] = float(os.getenv("GARMIN_RECORDING_RESTART_DELAY", "1.0"))
@@ -147,28 +165,55 @@ class GarminVoiceManager:
 
     # ------------------------- Discord voice callbacks -------------------------
     def callback(self, user: discord.User | None, data: voice_recv.VoiceData):
+        """Callback for incoming audio data with improved buffer management."""
         self._append_to_buffer(data.pcm)
         now = time.time()
-        if not self.is_processing and (now - self.last_process_time >= PROCESS_INTERVAL_S):
+        
+        # Only process if we have enough audio data and enough time has passed
+        with self._buf_lock:
+            buffer_size = len(self.audio_buffer)
+        
+        if (not self.is_processing and 
+            buffer_size >= BUFFER_PREFILL_THRESHOLD and 
+            (now - self.last_process_time >= PROCESS_INTERVAL_S)):
             threading.Thread(target=self._process_audio_data, daemon=True).start()
 
     def _append_to_buffer(self, chunk: bytes):
+        """Append audio data to buffer with improved overflow management."""
         with self._buf_lock:
             self.audio_buffer.extend(chunk)
-            if len(self.audio_buffer) > MAX_BUFFER_SIZE:
-                del self.audio_buffer[: len(self.audio_buffer) - MAX_BUFFER_SIZE]
+            
+            # More aggressive buffer management to prevent stuttering
+            current_size = len(self.audio_buffer)
+            max_size = int(MAX_BUFFER_SIZE * BUFFER_OVERFLOW_THRESHOLD)
+            
+            if current_size > max_size:
+                # Remove oldest data, keeping the most recent
+                excess = current_size - max_size
+                del self.audio_buffer[:excess]
+                logger.debug(f"Buffer overflow prevented: removed {excess} bytes")
 
     # ------------------------------ Speech‑rec thread ---------------------------
     def _process_audio_data(self):
+        """Process audio data for speech recognition with improved buffer handling."""
         self.is_processing = True
         self.last_process_time = time.time()
         tmp_path = None
         try:
+            # Get a copy of the buffer for processing
             with self._buf_lock:
                 buf_copy = bytes(self.audio_buffer)
+            
+            # Ensure we have enough data to process
             if len(buf_copy) < WINDOW_BYTES_MIN:
+                logger.debug(f"Insufficient audio data: {len(buf_copy)} < {WINDOW_BYTES_MIN}")
                 return
-            window = buf_copy[-min(len(buf_copy), WINDOW_BYTES_MAX):]
+            
+            # Use a sliding window approach for better continuity
+            window_size = min(len(buf_copy), WINDOW_BYTES_MAX)
+            window = buf_copy[-window_size:]
+            
+            logger.debug(f"Processing audio window: {len(window)} bytes ({len(window)/SAMPLERATE/CHANNELS/BYTES_PER_SAMPLE:.2f}s)")
 
             # --- Speech‑to‑Text -------------------------------------------------
             if STT_ENGINE == "vosk":
