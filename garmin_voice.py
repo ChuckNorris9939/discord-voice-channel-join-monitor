@@ -74,14 +74,14 @@ TRIGGERS = [
     {  # wake word
         "name": "ding",
         "phrase": "okay garmin",
-        "threshold": 0.85,
+        "threshold": 0.7,
         "sound": SOUND_DING,
         "save": False,
     },
     {  # follow‑up within 5 s after wake word
         "name": "save",
         "phrase": "video speichern",
-        "threshold": 0.85,
+        "threshold": 0.7,
         "sound": SOUND_DINGDING,
         "save": True,
     },
