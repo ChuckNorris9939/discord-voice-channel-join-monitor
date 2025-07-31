@@ -30,28 +30,29 @@ APP_TESTING_MODE=true
 
 ## Configuration Solutions
 
-### Solution 1: Audio Pipeline Health Monitoring (Latest Fix)
-**This addresses the core audio pipeline issues that persist even with STT disabled.**
+### Solution 1: Discord Bitrate-Aware Audio Pipeline (Latest Fix)
+**This addresses Discord's variable bitrate and reduces false error detection.**
 
 Add these to your `.env` file:
 ```bash
-# CRITICAL: Audio pipeline health monitoring
+# CRITICAL: Discord bitrate-aware audio pipeline
 GARMIN_FRAMES_PER_BUFFER=1920
 GARMIN_PROCESS_INTERVAL=3.0
 GARMIN_BUFFER_PREFILL=384000
 GARMIN_BUFFER_OVERFLOW=0.6
 GARMIN_AUDIO_CALLBACK_TIMEOUT=5.0
-GARMIN_MIN_AUDIO_CHUNK=1920
-GARMIN_MAX_AUDIO_CHUNK=9600
+GARMIN_MIN_AUDIO_CHUNK=960
+GARMIN_MAX_AUDIO_CHUNK=19200
+GARMIN_AUDIO_ERROR_THRESHOLD=10
 LOG_LEVEL=DEBUG
 APP_TESTING_MODE=true
 ```
 
 **Why this addresses your persistent stuttering:**
-- **Audio Pipeline Monitoring**: Detects and restarts on audio callback timeouts
-- **Chunk Size Validation**: Ensures audio data integrity
-- **Automatic Recovery**: Restarts recording when audio pipeline becomes unhealthy
-- **Real-time Health Checks**: Monitors audio callback frequency and timing
+- **Discord Bitrate Awareness**: More lenient chunk size validation for Discord's 128kbps setting
+- **Error Threshold**: Only marks unhealthy after 10+ errors (not immediately)
+- **Auto-Recovery**: Automatically recovers when errors drop below threshold
+- **Persistent Restart**: Only restarts if errors persist (20+ errors)
 
 ### Solution 2: STT Processing Fix (Previous Solution)
 **This was for STT-related stuttering, but your issue persists with STT disabled.**
@@ -142,7 +143,17 @@ Look for these key metrics:
 - **audio_callback_errors**: Should be `0` or very low
 - **time_since_last_audio**: Should be < 1 second during active recording
 - **audio_callback_rate**: Should be ~50 callbacks/second (20ms intervals)
-- **Discord Server**: Server-side issues
+
+### 5. Discord Server Settings
+**Important**: Your Discord voice channel bitrate affects audio quality:
+- **128kbps** (your current setting): Lower quality, more variable chunk sizes
+- **96kbps**: Even lower quality, more compression artifacts
+- **256kbps**: Higher quality, more consistent audio
+
+**Recommendations:**
+- Try increasing your Discord voice channel bitrate to 256kbps if possible
+- This will provide more consistent audio chunks and reduce stuttering
+- If you can't change the bitrate, the new lenient settings should handle 128kbps better
 
 ### 3. Test Different STT Engines
 Try switching between Google and Vosk:

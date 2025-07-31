@@ -84,8 +84,9 @@ WINDOW_BYTES_MAX: Final[int] = int(os.getenv("GARMIN_WINDOW_MAX", "240000"))  # 
 # Audio pipeline health monitoring
 # --------------------------------------------------
 AUDIO_CALLBACK_TIMEOUT: Final[float] = float(os.getenv("GARMIN_AUDIO_CALLBACK_TIMEOUT", "5.0"))  # Max time between audio callbacks
-MIN_AUDIO_CHUNK_SIZE: Final[int] = int(os.getenv("GARMIN_MIN_AUDIO_CHUNK", "1920"))  # Minimum expected chunk size (20ms @ 48kHz stereo)
-MAX_AUDIO_CHUNK_SIZE: Final[int] = int(os.getenv("GARMIN_MAX_AUDIO_CHUNK", "9600"))  # Maximum expected chunk size (100ms @ 48kHz stereo)
+MIN_AUDIO_CHUNK_SIZE: Final[int] = int(os.getenv("GARMIN_MIN_AUDIO_CHUNK", "960"))  # More lenient minimum (10ms @ 48kHz stereo)
+MAX_AUDIO_CHUNK_SIZE: Final[int] = int(os.getenv("GARMIN_MAX_AUDIO_CHUNK", "19200"))  # More lenient maximum (200ms @ 48kHz stereo)
+AUDIO_ERROR_THRESHOLD: Final[int] = int(os.getenv("GARMIN_AUDIO_ERROR_THRESHOLD", "10"))  # Max errors before marking unhealthy
 
 # --------------------------------------------------
 # Recording management constants
@@ -189,11 +190,18 @@ class GarminVoiceManager:
         chunk_size = len(data.pcm)
         self.last_chunk_size = chunk_size
         
-        # Validate audio chunk size
-        if chunk_size < MIN_AUDIO_CHUNK_SIZE or chunk_size > MAX_AUDIO_CHUNK_SIZE:
+        # More lenient audio chunk size validation for Discord's variable bitrate
+        if chunk_size < MIN_AUDIO_CHUNK_SIZE:
             self.audio_callback_errors += 1
-            logger.warning(f"Invalid audio chunk size: {chunk_size} bytes (expected {MIN_AUDIO_CHUNK_SIZE}-{MAX_AUDIO_CHUNK_SIZE})")
+            logger.debug(f"Small audio chunk: {chunk_size} bytes (min: {MIN_AUDIO_CHUNK_SIZE})")
+        elif chunk_size > MAX_AUDIO_CHUNK_SIZE:
+            self.audio_callback_errors += 1
+            logger.debug(f"Large audio chunk: {chunk_size} bytes (max: {MAX_AUDIO_CHUNK_SIZE})")
+        
+        # Only mark unhealthy if we have too many errors
+        if self.audio_callback_errors >= AUDIO_ERROR_THRESHOLD:
             self.audio_pipeline_healthy = False
+            logger.warning(f"Audio pipeline marked unhealthy due to {self.audio_callback_errors} errors")
         
         # Check for audio callback timeouts (indicates stuttering)
         if self.last_audio_callback_time > 0:
@@ -201,7 +209,8 @@ class GarminVoiceManager:
             if time_since_last > AUDIO_CALLBACK_TIMEOUT:
                 self.audio_callback_errors += 1
                 logger.warning(f"Audio callback timeout: {time_since_last:.2f}s since last callback")
-                self.audio_pipeline_healthy = False
+                if self.audio_callback_errors >= AUDIO_ERROR_THRESHOLD:
+                    self.audio_pipeline_healthy = False
         
         self.last_audio_callback_time = now
         
@@ -211,7 +220,8 @@ class GarminVoiceManager:
         except Exception as e:
             self.audio_callback_errors += 1
             logger.error(f"Error appending audio to buffer: {e}")
-            self.audio_pipeline_healthy = False
+            if self.audio_callback_errors >= AUDIO_ERROR_THRESHOLD:
+                self.audio_pipeline_healthy = False
             return
         
         # Skip STT processing if disabled
@@ -504,10 +514,10 @@ class GarminVoiceManager:
                     needs_restart = True
                     restart_reason = f"too many errors ({self.recording_errors})"
                 
-                # Check audio pipeline health
-                elif not self.audio_pipeline_healthy:
+                # Check audio pipeline health - only restart if errors persist
+                elif not self.audio_pipeline_healthy and self.audio_callback_errors >= AUDIO_ERROR_THRESHOLD * 2:
                     needs_restart = True
-                    restart_reason = f"audio pipeline unhealthy (errors: {self.audio_callback_errors})"
+                    restart_reason = f"audio pipeline persistently unhealthy (errors: {self.audio_callback_errors})"
                 
                 # Check for audio callback timeouts (indicates stuttering)
                 elif (self.last_audio_callback_time > 0 and 
@@ -530,6 +540,11 @@ class GarminVoiceManager:
                     logger.debug(f"Recording health OK - duration: {recording_duration:.1f}s, buffer: {buffer_size} bytes, "
                                f"errors: {self.recording_errors}, audio: {audio_status}, "
                                f"audio_errors: {self.audio_callback_errors}, time_since_audio: {time_since_audio:.1f}s")
+                    
+                    # Auto-recover audio pipeline if it's been healthy for a while
+                    if not self.audio_pipeline_healthy and self.audio_callback_errors < AUDIO_ERROR_THRESHOLD:
+                        self.audio_pipeline_healthy = True
+                        logger.info("Audio pipeline auto-recovered - marking as healthy")
                     
             except asyncio.CancelledError:
                 logger.debug("Buffer monitoring task cancelled")
