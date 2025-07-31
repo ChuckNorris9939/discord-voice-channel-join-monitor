@@ -30,12 +30,35 @@ APP_TESTING_MODE=true
 
 ## Configuration Solutions
 
-### Solution 1: STT Processing Fix (Based on Your Latest Spectrogram)
-**This is specifically for your stuttering pattern with continuous audio but sharp vertical lines caused by STT processing overhead.**
+### Solution 1: Audio Pipeline Health Monitoring (Latest Fix)
+**This addresses the core audio pipeline issues that persist even with STT disabled.**
 
 Add these to your `.env` file:
 ```bash
-# CRITICAL: Fix for STT processing stuttering
+# CRITICAL: Audio pipeline health monitoring
+GARMIN_FRAMES_PER_BUFFER=1920
+GARMIN_PROCESS_INTERVAL=3.0
+GARMIN_BUFFER_PREFILL=384000
+GARMIN_BUFFER_OVERFLOW=0.6
+GARMIN_AUDIO_CALLBACK_TIMEOUT=5.0
+GARMIN_MIN_AUDIO_CHUNK=1920
+GARMIN_MAX_AUDIO_CHUNK=9600
+LOG_LEVEL=DEBUG
+APP_TESTING_MODE=true
+```
+
+**Why this addresses your persistent stuttering:**
+- **Audio Pipeline Monitoring**: Detects and restarts on audio callback timeouts
+- **Chunk Size Validation**: Ensures audio data integrity
+- **Automatic Recovery**: Restarts recording when audio pipeline becomes unhealthy
+- **Real-time Health Checks**: Monitors audio callback frequency and timing
+
+### Solution 2: STT Processing Fix (Previous Solution)
+**This was for STT-related stuttering, but your issue persists with STT disabled.**
+
+Add these to your `.env` file:
+```bash
+# Previous fix for STT processing stuttering
 GARMIN_FRAMES_PER_BUFFER=1920
 GARMIN_PROCESS_INTERVAL=3.0
 GARMIN_BUFFER_PREFILL=384000
@@ -44,7 +67,7 @@ LOG_LEVEL=DEBUG
 APP_TESTING_MODE=true
 ```
 
-**Why this fixes your specific issue:**
+**Why this was implemented:**
 - `GARMIN_PROCESS_INTERVAL=3.0`: Much less frequent STT processing (was 1.0s)
 - `GARMIN_BUFFER_PREFILL=384000`: Ensures 8 seconds of audio before processing
 - `GARMIN_BUFFER_OVERFLOW=0.6`: More conservative buffer management
@@ -86,7 +109,16 @@ GARMIN_BUFFER_MONITOR_INTERVAL=15.0
 
 ## Advanced Troubleshooting
 
-### 1. Monitor Buffer Health
+### 1. Monitor Audio Pipeline Health
+Watch the debug logs for these patterns:
+```
+[DEBUG] Recording health OK - duration: X.Xs, buffer: X bytes, errors: X, audio: healthy, audio_errors: X, time_since_audio: X.Xs
+[WARNING] Invalid audio chunk size: X bytes (expected 1920-9600)
+[WARNING] Audio callback timeout: X.Xs since last callback
+[WARNING] Recording health check failed: audio pipeline unhealthy
+```
+
+### 2. Monitor Buffer Health
 Watch the debug logs for these patterns:
 ```
 [DEBUG] Processing audio window: X bytes (Y.YYs)
@@ -94,10 +126,22 @@ Watch the debug logs for these patterns:
 [WARNING] Recording health check failed: buffer overflow
 ```
 
-### 2. Check System Resources
+### 3. Check System Resources
 - **CPU Usage**: High CPU can cause processing delays
 - **Memory**: Insufficient RAM can cause buffer issues
 - **Network**: Unstable internet connection
+
+### 4. Audio Pipeline Diagnostics
+Use the health check to monitor audio pipeline health:
+```
+/garmin_health
+```
+
+Look for these key metrics:
+- **audio_pipeline_healthy**: Should be `true`
+- **audio_callback_errors**: Should be `0` or very low
+- **time_since_last_audio**: Should be < 1 second during active recording
+- **audio_callback_rate**: Should be ~50 callbacks/second (20ms intervals)
 - **Discord Server**: Server-side issues
 
 ### 3. Test Different STT Engines
