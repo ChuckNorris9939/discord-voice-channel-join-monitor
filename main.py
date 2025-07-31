@@ -1383,12 +1383,72 @@ async def stop_garmin(ctx: commands.Context):
 
 @bot.hybrid_command(name="garmin_save", description="Saves the Garmin voice recording.")
 @commands.guild_only()
-async def start_garmin(ctx: commands.Context):
+async def save_garmin(ctx: commands.Context):
     if ctx.author.voice:
         garmin_manager.save_recording()
         await ctx.send("Garmin voice recording saved.")
     else:
         await ctx.send("Error saving recording")
+
+@bot.hybrid_command(name="garmin_health", description="Shows the health status of the Garmin voice recording system.")
+@commands.guild_only()
+async def garmin_health(ctx: commands.Context):
+    health_data = garmin_manager.get_recording_health()
+    
+    embed = discord.Embed(
+        title="🎙️ Garmin Voice Recording Health",
+        color=discord.Color.blue(),
+        timestamp=discord.utils.utcnow()
+    )
+    
+    # Connection status
+    status_emoji = "🟢" if health_data["connected"] else "🔴"
+    embed.add_field(
+        name="Connection Status",
+        value=f"{status_emoji} {'Connected' if health_data['connected'] else 'Disconnected'}",
+        inline=True
+    )
+    
+    # Recording duration
+    duration_str = f"{health_data['recording_duration']:.1f}s" if health_data['recording_duration'] > 0 else "Not recording"
+    embed.add_field(
+        name="Recording Duration",
+        value=duration_str,
+        inline=True
+    )
+    
+    # Buffer size
+    buffer_mb = health_data['buffer_size'] / (1024 * 1024)
+    embed.add_field(
+        name="Buffer Size",
+        value=f"{buffer_mb:.2f} MB",
+        inline=True
+    )
+    
+    # Error count
+    error_color = "🟢" if health_data['recording_errors'] == 0 else "🟡" if health_data['recording_errors'] < health_data['max_errors'] else "🔴"
+    embed.add_field(
+        name="Recording Errors",
+        value=f"{error_color} {health_data['recording_errors']}/{health_data['max_errors']}",
+        inline=True
+    )
+    
+    # Processing status
+    processing_emoji = "🔄" if health_data['is_processing'] else "⏸️"
+    embed.add_field(
+        name="Processing Status",
+        value=f"{processing_emoji} {'Processing' if health_data['is_processing'] else 'Idle'}",
+        inline=True
+    )
+    
+    # STT Engine
+    embed.add_field(
+        name="STT Engine",
+        value=health_data['stt_engine'].title(),
+        inline=True
+    )
+    
+    await ctx.send(embed=embed)
 
 # --------- Daily Inactivity Check Task ---------
 @tasks.loop(hours=24) # Set to 24 for production, can be lower for testing (e.g. minutes=1)
