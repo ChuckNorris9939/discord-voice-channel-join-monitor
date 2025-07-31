@@ -5,6 +5,7 @@ import wave
 import threading
 import difflib
 import logging
+import asyncio
 from typing import Final
 from pathlib import Path
 
@@ -53,16 +54,24 @@ STT_ENGINE: Final[str] = os.getenv("STT_ENGINE", "google").lower()
 VOSK_MODEL_PATH: Final[str] = os.getenv("VOSK_MODEL_PATH", "vosk-model-de")
 
 # --------------------------------------------------
-# Audio / Recording constants
+# Audio / Recording constants (configurable via environment)
 # --------------------------------------------------
-RECORD_SECONDS: Final[int] = 10 * 60     # keep last 10 min
-SAMPLERATE:     Final[int] = 48_000      # Discord standard
-CHANNELS:       Final[int] = 2           # stereo
-BYTES_PER_SAMPLE: Final[int] = 2        # 16‑bit
+RECORD_SECONDS: Final[int] = int(os.getenv("GARMIN_RECORD_SECONDS", "600"))  # 10 min default
+SAMPLERATE: Final[int] = int(os.getenv("GARMIN_SAMPLERATE", "48000"))  # Discord standard
+CHANNELS: Final[int] = int(os.getenv("GARMIN_CHANNELS", "2"))  # stereo
+BYTES_PER_SAMPLE: Final[int] = int(os.getenv("GARMIN_BYTES_PER_SAMPLE", "2"))  # 16‑bit
 MAX_BUFFER_SIZE: Final[int] = RECORD_SECONDS * SAMPLERATE * CHANNELS * BYTES_PER_SAMPLE
 
-FRAMES_PER_BUFFER: Final[int] = 960  # 20 ms @48 kHz
-CHUNK_SIZE:        Final[int] = FRAMES_PER_BUFFER * CHANNELS * BYTES_PER_SAMPLE
+FRAMES_PER_BUFFER: Final[int] = int(os.getenv("GARMIN_FRAMES_PER_BUFFER", "960"))  # 20 ms @48 kHz
+CHUNK_SIZE: Final[int] = FRAMES_PER_BUFFER * CHANNELS * BYTES_PER_SAMPLE
+
+# --------------------------------------------------
+# Recording management constants
+# --------------------------------------------------
+RECORDING_RESTART_DELAY: Final[float] = float(os.getenv("GARMIN_RECORDING_RESTART_DELAY", "1.0"))
+MAX_RECORDING_DURATION: Final[int] = int(os.getenv("GARMIN_MAX_RECORDING_DURATION", "3600"))  # 1 hour
+BUFFER_MONITOR_INTERVAL: Final[float] = float(os.getenv("GARMIN_BUFFER_MONITOR_INTERVAL", "30.0"))
+MAX_RECORDING_ERRORS: Final[int] = int(os.getenv("GARMIN_MAX_RECORDING_ERRORS", "5"))
 
 # --------------------------------------------------
 # Trigger phrase detection
@@ -125,6 +134,13 @@ class GarminVoiceManager:
         self.last_trigger_time = {t["name"]: 0.0 for t in TRIGGERS}
         self._last_ok_time: float = 0.0  # timestamp of last "okay garmin"
         self._last_stt_text: str = ""  # suppress duplicates
+
+        # Recording management attributes
+        self.recording_start_time: float = 0.0
+        self.last_buffer_check: float = 0.0
+        self.recording_errors: int = 0
+        self.max_errors: int = MAX_RECORDING_ERRORS
+        self.buffer_monitor_task: asyncio.Task | None = None
 
         os.makedirs(OUTPUT_DIR, exist_ok=True)
         self.vc: voice_recv.VoiceRecvClient | None = None
@@ -224,6 +240,10 @@ class GarminVoiceManager:
             pass
         except sr.RequestError as e:
             logger.error("Google STT request error: %s", e)
+            self.recording_errors += 1
+        except Exception as e:
+            logger.error("Unexpected error during STT processing: %s", e)
+            self.recording_errors += 1
         finally:
             if tmp_path and os.path.isfile(tmp_path):
                 os.remove(tmp_path)
@@ -231,16 +251,38 @@ class GarminVoiceManager:
 
     # ------------------------------ Helpers ------------------------------------
     def save_recording(self):
-        filename = f"garmin_recording_{int(time.time())}.wav"
-        path = os.path.join(OUTPUT_DIR, filename)
-        with self._buf_lock:
-            data = bytes(self.audio_buffer)
-        with wave.open(path, "wb") as wf:
-            wf.setnchannels(CHANNELS)
-            wf.setsampwidth(BYTES_PER_SAMPLE)
-            wf.setframerate(SAMPLERATE)
-            wf.writeframes(data)
-        logger.info("Recording saved: %s", path)
+        """Save current recording and restart with a delay to prevent stuttering."""
+        try:
+            # Stop current recording monitoring
+            if self.buffer_monitor_task and not self.buffer_monitor_task.done():
+                self.buffer_monitor_task.cancel()
+                logger.debug("Cancelled buffer monitor task for save operation")
+            
+            filename = f"garmin_recording_{int(time.time())}.wav"
+            path = os.path.join(OUTPUT_DIR, filename)
+            
+            with self._buf_lock:
+                data = bytes(self.audio_buffer)
+            
+            with wave.open(path, "wb") as wf:
+                wf.setnchannels(CHANNELS)
+                wf.setsampwidth(BYTES_PER_SAMPLE)
+                wf.setframerate(SAMPLERATE)
+                wf.writeframes(data)
+            
+            logger.info("Recording saved: %s", path)
+            
+            # Clear buffer and restart recording
+            with self._buf_lock:
+                self.audio_buffer.clear()
+            
+            # Schedule restart of recording
+            if self.vc and self.vc.is_connected():
+                asyncio.create_task(self._restart_recording_after_save())
+                
+        except Exception as e:
+            logger.error("Error during save_recording: %s", e)
+            self.recording_errors += 1
 
     def play_sound(self, filepath: str):
         if self.vc and os.path.isfile(filepath):
@@ -255,11 +297,124 @@ class GarminVoiceManager:
             await self.leave_channel()
         self.vc = await channel.connect(cls=voice_recv.VoiceRecvClient)
         self.vc.listen(voice_recv.BasicSink(self.callback))
+        await self._start_recording()
         logger.info("🔊 Joined voice channel '%s' (STT engine: %s)", channel.name, STT_ENGINE)
 
     async def leave_channel(self):
         """Disconnect from the current voice connection (if any)."""
+        await self._stop_recording()
         if self.vc:
             await self.vc.disconnect()
             logger.info("🔇 Left voice channel")
             self.vc = None
+
+    # ------------------------- Recording Management -------------------------
+    async def _start_recording(self):
+        """Initialize recording state and start monitoring."""
+        self.recording_start_time = time.time()
+        self.last_buffer_check = time.time()
+        self.recording_errors = 0
+        logger.debug("Recording started - monitoring buffer health")
+        
+        # Start buffer monitoring task
+        if self.buffer_monitor_task and not self.buffer_monitor_task.done():
+            self.buffer_monitor_task.cancel()
+        self.buffer_monitor_task = asyncio.create_task(self._monitor_recording_buffer())
+
+    async def _stop_recording(self):
+        """Stop recording monitoring."""
+        if self.buffer_monitor_task and not self.buffer_monitor_task.done():
+            self.buffer_monitor_task.cancel()
+            try:
+                await self.buffer_monitor_task
+            except asyncio.CancelledError:
+                pass
+            logger.debug("Recording monitoring stopped")
+
+    async def _restart_recording_after_save(self):
+        """Restart recording after a save operation with delay."""
+        await asyncio.sleep(RECORDING_RESTART_DELAY)
+        if self.vc and self.vc.is_connected():
+            await self._start_recording()
+            logger.debug("Recording restarted after save operation")
+
+    async def _monitor_recording_buffer(self):
+        """Monitor recording health and restart if needed."""
+        while True:
+            try:
+                await asyncio.sleep(BUFFER_MONITOR_INTERVAL)
+                
+                current_time = time.time()
+                recording_duration = current_time - self.recording_start_time
+                buffer_size = len(self.audio_buffer)
+                
+                # Check for issues that require restart
+                needs_restart = False
+                restart_reason = ""
+                
+                # Check recording duration
+                if recording_duration > MAX_RECORDING_DURATION:
+                    needs_restart = True
+                    restart_reason = f"max duration exceeded ({recording_duration:.1f}s)"
+                
+                # Check buffer size
+                elif buffer_size > MAX_BUFFER_SIZE:
+                    needs_restart = True
+                    restart_reason = f"buffer overflow ({buffer_size} bytes)"
+                
+                # Check error count
+                elif self.recording_errors >= self.max_errors:
+                    needs_restart = True
+                    restart_reason = f"too many errors ({self.recording_errors})"
+                
+                # Check if buffer is empty for too long (potential connection issue)
+                elif buffer_size == 0 and (current_time - self.last_buffer_check) > 60:
+                    needs_restart = True
+                    restart_reason = "empty buffer for too long"
+                
+                if needs_restart:
+                    logger.warning(f"Recording health check failed: {restart_reason}. Restarting...")
+                    await self._restart_recording()
+                else:
+                    logger.debug(f"Recording health OK - duration: {recording_duration:.1f}s, buffer: {buffer_size} bytes, errors: {self.recording_errors}")
+                    
+            except asyncio.CancelledError:
+                logger.debug("Buffer monitoring task cancelled")
+                break
+            except Exception as e:
+                logger.error(f"Error in buffer monitoring: {e}")
+                await asyncio.sleep(5)  # Wait before retrying
+
+    async def _restart_recording(self):
+        """Restart recording by clearing state and buffer."""
+        logger.info("Restarting recording system...")
+        
+        # Reset recording state
+        self.recording_start_time = time.time()
+        self.last_buffer_check = time.time()
+        self.recording_errors = 0
+        
+        # Clear audio buffer
+        with self._buf_lock:
+            self.audio_buffer.clear()
+        
+        logger.info("Recording system restarted")
+
+    def get_recording_health(self) -> dict:
+        """Get current recording system health status."""
+        current_time = time.time()
+        recording_duration = current_time - self.recording_start_time
+        
+        with self._buf_lock:
+            buffer_size = len(self.audio_buffer)
+        
+        return {
+            "connected": self.vc is not None and self.vc.is_connected(),
+            "recording_duration": recording_duration,
+            "buffer_size": buffer_size,
+            "recording_errors": self.recording_errors,
+            "max_errors": self.max_errors,
+            "is_processing": self.is_processing,
+            "stt_engine": STT_ENGINE,
+            "last_process_time": self.last_process_time
+        }
