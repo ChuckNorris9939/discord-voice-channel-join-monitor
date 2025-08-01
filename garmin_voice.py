@@ -440,27 +440,83 @@ class GarminVoiceManager:
     # ---------------------- Voice connection helpers ---------------------------
     async def join_channel(self, channel: discord.VoiceChannel):
         """Connect to a voice channel and start listening. Disconnect first if already connected."""
-        if self.vc:
-            await self.leave_channel()
-        self.vc = await channel.connect(cls=voice_recv.VoiceRecvClient)
-        self.vc.listen(voice_recv.BasicSink(self.callback))
+        try:
+            # Ensure clean disconnection if already connected
+            if self.is_connected():
+                await self.leave_channel()
+                # Small delay to ensure clean disconnection
+                await asyncio.sleep(0.5)
+            
+            # Connect to the voice channel
+            self.vc = await channel.connect(cls=voice_recv.VoiceRecvClient)
+            self.vc.listen(voice_recv.BasicSink(self.callback))
+            
+            # Only start STT worker if STT is enabled
+            if STT_ENABLED:
+                self._start_stt_worker()
+                logger.info("🔊 Joined voice channel '%s' (STT engine: %s)", channel.name, STT_ENGINE)
+            else:
+                logger.info("🔊 Joined voice channel '%s' (STT disabled)", channel.name)
+            
+            await self._start_recording()
+            
+        except discord.ClientException as e:
+            logger.error(f"Client exception while joining voice channel '{channel.name}': {e}")
+            # Ensure cleanup on client exception (like "Already connected")
+            if self.vc:
+                try:
+                    await self.vc.disconnect()
+                except:
+                    pass
+            self.vc = None
+            raise
+        except Exception as e:
+            logger.error(f"Failed to join voice channel '{channel.name}': {e}")
+            # Clean up on error
+            if self.vc:
+                try:
+                    await self.vc.disconnect()
+                except:
+                    pass
+                self.vc = None
+            raise
+
+    def is_connected(self) -> bool:
+        """Check if the voice client is properly connected."""
+        if not self.vc:
+            return False
         
-        # Only start STT worker if STT is enabled
-        if STT_ENABLED:
-            self._start_stt_worker()
-            logger.info("🔊 Joined voice channel '%s' (STT engine: %s)", channel.name, STT_ENGINE)
-        else:
-            logger.info("🔊 Joined voice channel '%s' (STT disabled)", channel.name)
-        
-        await self._start_recording()
+        try:
+            # Check if the voice client has the required attributes and is connected
+            return (hasattr(self.vc, 'is_connected') and 
+                   self.vc.is_connected() and 
+                   hasattr(self.vc, 'ws') and 
+                   self.vc.ws and 
+                   hasattr(self.vc.ws, 'close'))
+        except Exception:
+            return False
 
     async def leave_channel(self):
         """Disconnect from the current voice connection (if any)."""
-        await self._stop_recording()
-        self._stop_stt_worker()
-        if self.vc:
-            await self.vc.disconnect()
-            logger.info("🔇 Left voice channel")
+        try:
+            await self._stop_recording()
+            self._stop_stt_worker()
+            
+            if self.vc:
+                # Check if the voice client is in a valid state before disconnecting
+                if self.is_connected():
+                    try:
+                        await self.vc.disconnect()
+                        logger.info("🔇 Left voice channel")
+                    except Exception as e:
+                        logger.warning(f"Error during voice disconnect: {e}")
+                else:
+                    logger.warning("Voice client WebSocket in invalid state, forcing cleanup")
+                
+                self.vc = None
+        except Exception as e:
+            logger.error(f"Error in leave_channel: {e}")
+            # Ensure vc is set to None even on error
             self.vc = None
 
     # ------------------------- Recording Management -------------------------
@@ -489,7 +545,7 @@ class GarminVoiceManager:
     async def _restart_recording_after_save(self):
         """Restart recording after a save operation with delay."""
         await asyncio.sleep(RECORDING_RESTART_DELAY)
-        if self.vc and self.vc.is_connected():
+        if self.is_connected():
             await self._start_recording()
             logger.debug("Recording restarted after save operation")
 
@@ -594,7 +650,7 @@ class GarminVoiceManager:
         audio_callback_rate = self.audio_callback_count / max(recording_duration, 1) if recording_duration > 0 else 0
         
         return {
-            "connected": self.vc is not None and self.vc.is_connected(),
+            "connected": self.is_connected(),
             "recording_duration": recording_duration,
             "buffer_size": buffer_size,
             "recording_errors": self.recording_errors,
