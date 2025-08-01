@@ -1,5 +1,6 @@
 # v1.15 - Fix summarized join + added get_user_list()
 import os
+from pathlib import Path
 import threading
 import datetime
 import random
@@ -11,6 +12,7 @@ from discord.ext import commands, tasks
 from typing import Dict, List, Optional
 import signal
 import asyncio
+import time
 
 # Load environment variables from .env file
 try:
@@ -45,7 +47,7 @@ logger = logging.getLogger("discord_bot") # Spezifischer Name für den Bot-Logge
 
 # --------- Flask-Server für Health Checks ---------
 from waitress import serve
-from flask import Flask, render_template, url_for, request # Ensure request is imported
+from flask import Flask, render_template, url_for, request, send_from_directory, redirect # Ensure request is imported
 app = Flask(__name__, template_folder='templates')
 
 @app.route("/")
@@ -84,6 +86,48 @@ def view_join_logs_page():
             logger.info(f"Database connection closed for /view_join_logs (filter: '{current_filter_username}').")
             
     return render_template('view_logs.html', logs=logs, current_filter_username=current_filter_username)
+
+@app.route('/garmin_recordings')
+def garmin_recordings_page():
+    import os
+    from pathlib import Path
+    
+    recordings = []
+    output_dir = Path("garmin-output")
+    
+    if output_dir.exists():
+        for file_path in output_dir.glob("*.wav"):
+            if file_path.is_file():
+                # Get file stats
+                stat = file_path.stat()
+                file_size = stat.st_size
+                modified_time = stat.st_mtime
+                
+                recordings.append({
+                    'filename': file_path.name,
+                    'size_mb': round(file_size / (1024 * 1024), 2),
+                    'modified': time.strftime('%d.%m.%Y %H:%M', time.localtime(modified_time)),
+                    'path': str(file_path)
+                })
+    
+    # Sort by modification time (newest first)
+    recordings.sort(key=lambda x: x['modified'], reverse=True)
+    
+    return render_template('garmin_recordings.html', recordings=recordings)
+
+@app.route('/download_recording/<filename>')
+def download_recording(filename):
+    """Download a specific recording file."""
+    import os
+    from pathlib import Path
+    
+    output_dir = Path("garmin-output")
+    file_path = output_dir / filename
+    
+    if file_path.exists() and file_path.is_file():
+        return send_from_directory(output_dir, filename, as_attachment=True)
+    else:
+        return "File not found", 404
 
 @app.route('/settings', methods=['GET', 'POST'])
 def settings_route():
@@ -147,7 +191,7 @@ def settings_route():
             # Handle Garmin Recorder Settings
             save_setting(DB_KEY_STT_ENABLED, request.form.get('stt_enabled', 'true'))
             save_setting(DB_KEY_STT_ENGINE, request.form.get('stt_engine', 'google'))
-            save_setting(DB_KEY_VOSK_MODEL_PATH, request.form.get('vosk_model_path', 'vosk-model-de/vosk-model-de-0.21/'))
+            save_setting(DB_KEY_VOSK_MODEL_PATH, request.form.get('vosk_model_path', 'vosk-model/vosk-model-de-0.21/'))
             save_setting(DB_KEY_GARMIN_AUTO_JOIN_ENABLED, request.form.get('garmin_auto_join_enabled', 'true'))
             save_setting(DB_KEY_GARMIN_AUTO_JOIN_CHANNELS, request.form.get('garmin_auto_join_channels', '1080202313211326584,571755941725208616,492036470681632778'))
             save_setting(DB_KEY_GARMIN_RECORD_SECONDS, request.form.get('garmin_record_seconds', '600'))
@@ -171,6 +215,48 @@ def settings_route():
         except Exception as e:
             logger.error(f"Error saving settings: {e}", exc_info=True)
             error = f"Error saving settings: {e}"
+
+    # Scan for available Vosk models
+    vosk_models = []
+    try:
+        import os
+        current_dir = os.getcwd()
+        logger.info(f"Flask server working directory: {current_dir}")
+        
+        vosk_model_dir = Path("vosk-model")
+        logger.info(f"Looking for vosk-model directory: {vosk_model_dir.absolute()}")
+        logger.info(f"Directory exists: {vosk_model_dir.exists()}")
+        logger.info(f"Is directory: {vosk_model_dir.is_dir()}")
+        
+        if vosk_model_dir.exists() and vosk_model_dir.is_dir():
+            # Check if there are subdirectories (like vosk-model-de, vosk-model-en, etc.)
+            subdirs = [item for item in vosk_model_dir.iterdir() if item.is_dir()]
+            logger.info(f"Found subdirectories: {[str(item) for item in subdirs]}")
+            
+            if subdirs:
+                # If there are subdirectories, use them
+                for item in subdirs:
+                    model_path = str(item) + "/"
+                    vosk_models.append(model_path)
+                    logger.info(f"Added model path: {model_path}")
+            else:
+                # If no subdirectories, check if this is a direct model directory
+                # Look for typical Vosk model files
+                model_files = list(vosk_model_dir.glob("*.conf")) + list(vosk_model_dir.glob("am"))
+                logger.info(f"Found model files: {[str(f) for f in model_files]}")
+                if model_files:
+                    # This appears to be a direct model directory
+                    model_path = str(vosk_model_dir) + "/"
+                    vosk_models.append(model_path)
+                    logger.info(f"Added direct model path: {model_path}")
+            
+            vosk_models.sort()  # Sort alphabetically
+            logger.info(f"Final sorted list: {vosk_models}")
+            logger.info(f"Found {len(vosk_models)} Vosk models: {vosk_models}")
+        else:
+            logger.warning("vosk-model directory not found")
+    except Exception as e:
+        logger.error(f"Error scanning vosk-model directory: {e}", exc_info=True)
 
     current_settings_display = {}
     
@@ -203,7 +289,7 @@ def settings_route():
     # General Settings
     current_settings_display['LOG_LEVEL'] = cfg.LOG_LEVEL
 
-    return render_template('settings.html', current_settings=current_settings_display, message=message, error=error)
+    return render_template('settings.html', current_settings=current_settings_display, message=message, error=error, vosk_models=vosk_models)
 
 @app.route('/restart_bot', methods=['POST'])
 async def restart_bot_route():

@@ -4,31 +4,150 @@
     <meta charset="UTF-8">
     <title>Bot Settings</title>
     <style>
-        body { font-family: sans-serif; margin: 20px; }
-        .container { width: 800px; margin: auto; }
+        body { 
+            font-family: sans-serif; 
+            margin: 20px; 
+            background-color: #1a1a1a; 
+            color: #e0e0e0; 
+        }
+        .container { 
+            width: 800px; 
+            margin: auto; 
+            background-color: #2d2d2d; 
+            padding: 20px; 
+            border-radius: 8px; 
+            box-shadow: 0 4px 8px rgba(0,0,0,0.3); 
+            border: 1px solid #404040;
+        }
         .form-group { margin-bottom: 15px; }
-        label { display: block; margin-bottom: 5px; font-weight: bold; }
-        input[type="text"], input[type="password"], select {
-            width: 100%;
+        label { 
+            display: block; 
+            margin-bottom: 5px; 
+            font-weight: bold; 
+            color: #ffffff; 
+        }
+        input[type="text"], input[type="password"], input[type="number"], select {
+            width: 100px;
             padding: 8px;
-            border: 1px solid #ccc;
+            border: 1px solid #555;
             border-radius: 4px;
             box-sizing: border-box;
+            background-color: #404040;
+            color: #e0e0e0;
         }
-        input[type="checkbox"] { margin-right: 5px; }
+        input[type="text"]:focus, input[type="password"]:focus, input[type="number"]:focus, select:focus {
+            outline: none;
+            border-color: #007bff;
+            box-shadow: 0 0 5px rgba(0,123,255,0.3);
+        }
+        input[type="checkbox"] { 
+            margin-right: 5px; 
+            accent-color: #007bff;
+        }
         .token-display { 
-            background-color: #f0f0f0; 
+            background-color: #404040; 
             padding: 8px; 
             border-radius: 4px; 
             font-family: monospace;
             margin-bottom: 5px;
+            color: #e0e0e0;
+            border: 1px solid #555;
         }
-        .note { font-size: 0.9em; color: #666; margin-top: 5px; }
-        .button-group button { padding: 10px 15px; margin-right: 10px; border: none; border-radius: 4px; cursor: pointer; }
-        .save-button { background-color: #4CAF50; color: white; }
-        .restart-button { background-color: #f44336; color: white; }
-        .home-link { margin-top: 20px; display: inline-block; }
+        .note { 
+            font-size: 0.9em; 
+            color: #aaaaaa; 
+            margin-top: 5px; 
+        }
+        .button-group button { 
+            padding: 10px 15px; 
+            margin-right: 10px; 
+            border: none; 
+            border-radius: 4px; 
+            cursor: pointer; 
+            transition: background-color 0.3s;
+        }
+        .save-button { 
+            background-color: #28a745; 
+            color: white; 
+        }
+        .save-button:hover { 
+            background-color: #218838; 
+        }
+        .restart-button { 
+            background-color: #dc3545; 
+            color: white; 
+        }
+        .restart-button:hover { 
+            background-color: #c82333; 
+        }
+        .home-link { 
+            margin-top: 20px; 
+            display: inline-block; 
+            color: #007bff; 
+            text-decoration: none; 
+        }
+        .home-link:hover { 
+            color: #0056b3; 
+        }
+        h1, h2 { 
+            color: #ffffff; 
+        }
+        p[style*="color: green"] { 
+            color: #28a745 !important; 
+        }
+        p[style*="color: red"] { 
+            color: #dc3545 !important; 
+        }
+        .category-header {
+            background-color: #404040;
+            padding: 10px 15px;
+            margin: 20px 0 10px 0;
+            border-radius: 5px;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: background-color 0.3s;
+        }
+        .category-header:hover {
+            background-color: #505050;
+        }
+        .category-header h2 {
+            margin: 0;
+            font-size: 18px;
+        }
+        .category-content {
+            padding: 10px 0;
+            border-left: 3px solid #404040;
+            margin-left: 10px;
+            padding-left: 20px;
+        }
+        .category-content.collapsed {
+            display: none;
+        }
+        .toggle-icon {
+            font-size: 20px;
+            transition: transform 0.3s;
+        }
+        .toggle-icon.collapsed {
+            transform: rotate(-90deg);
+        }
     </style>
+    <script>
+        function toggleCategory(categoryId) {
+            const content = document.getElementById(categoryId);
+            const header = document.querySelector(`[onclick="toggleCategory('${categoryId}')"]`);
+            const icon = header.querySelector('.toggle-icon');
+            
+            if (content.classList.contains('collapsed')) {
+                content.classList.remove('collapsed');
+                icon.classList.remove('collapsed');
+            } else {
+                content.classList.add('collapsed');
+                icon.classList.add('collapsed');
+            }
+        }
+    </script>
 </head><body>
     <div class="container">
         <h1>Bot Settings</h1>
@@ -41,128 +160,159 @@
         {% endif %}
 
         <form method="POST" action="{{ url_for('settings_route') }}">
-            <h2>Settings</h2>
-            <!-- App Testing Mode -->
-            <div class="form-group">
-                <label for="app_testing_mode">App Testing Mode</label>
-                <select name="app_testing_mode" id="app_testing_mode">
-                    <option value="true" {% if current_settings.get('APP_TESTING_MODE') == 'true' %}selected{% endif %}>True</option>
-                    <option value="false" {% if current_settings.get('APP_TESTING_MODE') == 'false' %}selected{% endif %}>False</option>
-                </select>
+            <div class="category-header" onclick="toggleCategory('settings-category')">
+                <h2>Settings</h2>
+                <span class="toggle-icon">▼</span>
             </div>
-            <!-- Join Message Timer -->
-            <div class="form-group">
-                <label>Summarized Join Messages</label>
-                <select name="join_message_timer_enabled" id="join_message_timer_enabled">
-                    <option value="true" {% if current_settings.get('JOIN_MESSAGE_TIMER_ENABLED') == 'true' %}selected{% endif %}>Enabled</option>
-                    <option value="false" {% if current_settings.get('JOIN_MESSAGE_TIMER_ENABLED') == 'false' %}selected{% endif %}>Disabled</option>
-                </select>
+            <div id="settings-category" class="category-content">
+                <!-- App Testing Mode -->
+                <div class="form-group">
+                    <label for="app_testing_mode">App Testing Mode</label>
+                    <select name="app_testing_mode" id="app_testing_mode">
+                        <option value="true" {% if current_settings.get('APP_TESTING_MODE') == 'true' %}selected{% endif %}>True</option>
+                        <option value="false" {% if current_settings.get('APP_TESTING_MODE') == 'false' %}selected{% endif %}>False</option>
+                    </select>
+                </div>
+                <!-- Join Message Timer -->
+                <div class="form-group">
+                    <label>Summarized Join Messages</label>
+                    <select name="join_message_timer_enabled" id="join_message_timer_enabled">
+                        <option value="true" {% if current_settings.get('JOIN_MESSAGE_TIMER_ENABLED') == 'true' %}selected{% endif %}>Enabled</option>
+                        <option value="false" {% if current_settings.get('JOIN_MESSAGE_TIMER_ENABLED') == 'false' %}selected{% endif %}>Disabled</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="log_level">Log Level</label>
+                    <select name="log_level" id="log_level">
+                        <option value="DEBUG" {% if current_settings.get('LOG_LEVEL') == 'DEBUG' %}selected{% endif %}>DEBUG</option>
+                        <option value="INFO" {% if current_settings.get('LOG_LEVEL') == 'INFO' %}selected{% endif %}>INFO</option>
+                        <option value="WARNING" {% if current_settings.get('LOG_LEVEL') == 'WARNING' %}selected{% endif %}>WARNING</option>
+                        <option value="ERROR" {% if current_settings.get('LOG_LEVEL') == 'ERROR' %}selected{% endif %}>ERROR</option>
+                        <option value="CRITICAL" {% if current_settings.get('LOG_LEVEL') == 'CRITICAL' %}selected{% endif %}>CRITICAL</option>
+                    </select>
+                </div>
             </div>
 
-            <div class="form-group">
-                <label for="log_level">Log Level</label>
-                <select name="log_level" id="log_level">
-                    <option value="DEBUG" {% if current_settings.get('LOG_LEVEL') == 'DEBUG' %}selected{% endif %}>DEBUG</option>
-                    <option value="INFO" {% if current_settings.get('LOG_LEVEL') == 'INFO' %}selected{% endif %}>INFO</option>
-                    <option value="WARNING" {% if current_settings.get('LOG_LEVEL') == 'WARNING' %}selected{% endif %}>WARNING</option>
-                    <option value="ERROR" {% if current_settings.get('LOG_LEVEL') == 'ERROR' %}selected{% endif %}>ERROR</option>
-                    <option value="CRITICAL" {% if current_settings.get('LOG_LEVEL') == 'CRITICAL' %}selected{% endif %}>CRITICAL</option>
-                </select>
+            <div class="category-header" onclick="toggleCategory('garmin-category')">
+                <h2>Garmin Recorder Settings</h2>
+                <span class="toggle-icon collapsed">▼</span>
+            </div>
+            <div id="garmin-category" class="category-content collapsed">
+                <!-- STT Enabled -->
+                <div class="form-group">
+                    <label for="stt_enabled">STT Enabled</label>
+                    <select name="stt_enabled" id="stt_enabled">
+                        <option value="true" {% if current_settings.get('STT_ENABLED') == 'true' %}selected{% endif %}>True</option>
+                        <option value="false" {% if current_settings.get('STT_ENABLED') == 'false' %}selected{% endif %}>False</option>
+                    </select>
+                </div>
+                <!-- STT Engine -->
+                <div class="form-group">
+                    <label for="stt_engine">STT Engine</label>
+                    <select name="stt_engine" id="stt_engine">
+                        <option value="google" {% if current_settings.get('STT_ENGINE') == 'google' %}selected{% endif %}>Google</option>
+                        <option value="vosk" {% if current_settings.get('STT_ENGINE') == 'vosk' %}selected{% endif %}>Vosk</option>
+                    </select>
+                </div>
+                <!-- Vosk Model Path -->
+                <div class="form-group">
+                    <label for="vosk_model_path">Vosk Model Path</label>
+                    <select name="vosk_model_path" id="vosk_model_path" style="width: 300px;">
+                        {% if vosk_models %}
+                            {% for model_path in vosk_models %}
+                                <option value="{{ model_path }}" {% if current_settings.get('VOSK_MODEL_PATH') == model_path %}selected{% endif %}>{{ model_path }}</option>
+                            {% endfor %}
+                                        {% else %}
+                    <option value="vosk-model/vosk-model-de-0.21/" {% if current_settings.get('VOSK_MODEL_PATH') == 'vosk-model/vosk-model-de-0.21/' %}selected{% endif %}>vosk-model/vosk-model-de-0.21/ (default)</option>
+                {% endif %}
+                    </select>
+                    {% if not vosk_models %}
+                        <p class="note">No Vosk models found in vosk-model/ directory. Please add models to enable this feature.</p>
+                    {% endif %}
+                </div>
+                <!-- Garmin Auto Join Enabled -->
+                <div class="form-group">
+                    <label for="garmin_auto_join_enabled">Garmin Auto Join Enabled</label>
+                    <select name="garmin_auto_join_enabled" id="garmin_auto_join_enabled">
+                        <option value="true" {% if current_settings.get('GARMIN_AUTO_JOIN_ENABLED') == 'true' %}selected{% endif %}>True</option>
+                        <option value="false" {% if current_settings.get('GARMIN_AUTO_JOIN_ENABLED') == 'false' %}selected{% endif %}>False</option>
+                    </select>
+                </div>
+                <!-- Garmin Auto Join Channels -->
+                <div class="form-group">
+                    <label for="garmin_auto_join_channels">Garmin Auto Join Channels (comma-separated IDs)</label>
+                    <input type="text" name="garmin_auto_join_channels" id="garmin_auto_join_channels" value="{{ current_settings.get('GARMIN_AUTO_JOIN_CHANNELS', '') }}" style="width: 100%;">
+                </div>
+                <!-- Garmin Record Seconds -->
+                <div class="form-group">
+                    <label for="garmin_record_seconds">Garmin Record Seconds</label>
+                    <input type="number" name="garmin_record_seconds" id="garmin_record_seconds" value="{{ current_settings.get('GARMIN_RECORD_SECONDS', '600') }}" min="1">
+                </div>
+                <!-- Garmin Max Recording Duration -->
+                <div class="form-group">
+                    <label for="garmin_max_recording_duration">Garmin Max Recording Duration</label>
+                    <input type="number" name="garmin_max_recording_duration" id="garmin_max_recording_duration" value="{{ current_settings.get('GARMIN_MAX_RECORDING_DURATION', '3600') }}" min="1">
+                </div>
             </div>
 
-            <h2>Garmin Recorder Settings</h2>
-            <!-- STT Enabled -->
-            <div class="form-group">
-                <label for="stt_enabled">STT Enabled</label>
-                <select name="stt_enabled" id="stt_enabled">
-                    <option value="true" {% if current_settings.get('STT_ENABLED') == 'true' %}selected{% endif %}>True</option>
-                    <option value="false" {% if current_settings.get('STT_ENABLED') == 'false' %}selected{% endif %}>False</option>
-                </select>
+            <div class="category-header" onclick="toggleCategory('timer-category')">
+                <h2>Timer settings</h2>
+                <span class="toggle-icon collapsed">▼</span>
             </div>
-            <!-- STT Engine -->
-            <div class="form-group">
-                <label for="stt_engine">STT Engine</label>
-                <select name="stt_engine" id="stt_engine">
-                    <option value="google" {% if current_settings.get('STT_ENGINE') == 'google' %}selected{% endif %}>Google</option>
-                    <option value="vosk" {% if current_settings.get('STT_ENGINE') == 'vosk' %}selected{% endif %}>Vosk</option>
-                </select>
-            </div>
-            <!-- Vosk Model Path -->
-            <div class="form-group">
-                <label for="vosk_model_path">Vosk Model Path</label>
-                <input type="text" name="vosk_model_path" id="vosk_model_path" value="{{ current_settings.get('VOSK_MODEL_PATH', '') }}">
-            </div>
-            <!-- Garmin Auto Join Enabled -->
-            <div class="form-group">
-                <label for="garmin_auto_join_enabled">Garmin Auto Join Enabled</label>
-                <select name="garmin_auto_join_enabled" id="garmin_auto_join_enabled">
-                    <option value="true" {% if current_settings.get('GARMIN_AUTO_JOIN_ENABLED') == 'true' %}selected{% endif %}>True</option>
-                    <option value="false" {% if current_settings.get('GARMIN_AUTO_JOIN_ENABLED') == 'false' %}selected{% endif %}>False</option>
-                </select>
-            </div>
-            <!-- Garmin Auto Join Channels -->
-            <div class="form-group">
-                <label for="garmin_auto_join_channels">Garmin Auto Join Channels (comma-separated IDs)</label>
-                <input type="text" name="garmin_auto_join_channels" id="garmin_auto_join_channels" value="{{ current_settings.get('GARMIN_AUTO_JOIN_CHANNELS', '') }}">
-            </div>
-            <!-- Garmin Record Seconds -->
-            <div class="form-group">
-                <label for="garmin_record_seconds">Garmin Record Seconds</label>
-                <input type="number" name="garmin_record_seconds" id="garmin_record_seconds" value="{{ current_settings.get('GARMIN_RECORD_SECONDS', '600') }}" min="1" style="width: 100px;">
-            </div>
-            <!-- Garmin Max Recording Duration -->
-            <div class="form-group">
-                <label for="garmin_max_recording_duration">Garmin Max Recording Duration</label>
-                <input type="number" name="garmin_max_recording_duration" id="garmin_max_recording_duration" value="{{ current_settings.get('GARMIN_MAX_RECORDING_DURATION', '3600') }}" min="1" style="width: 100px;">
+            <div id="timer-category" class="category-content collapsed">
+                <!-- Purge Older Than Days -->
+                <div class="form-group">
+                    <label for="purge_older_than_days">Purge Messages Older Than (Days)</label>
+                    <input type="number" name="purge_older_than_days" id="purge_older_than_days" value="{{ current_settings.get('PURGE_OLDER_THAN_DAYS', '7') }}" min="1" max="14">
+                    <p class="note">Discord API limits bulk deletion to messages not older than 14 days.</p>
+                </div>
+
+                <div class="form-group">
+                    <label for="join_message_timer_minutes">Join Message Timer (Minutes)</label>
+                    <input type="number" name="join_message_timer_minutes" id="join_message_timer_minutes" value="{{ current_settings.get('JOIN_MESSAGE_TIMER_MINUTES', '7') }}" min="1">
+                </div>
+
+                <div class="form-group">
+                    <label for="afk_timer_minutes">AFK Timer (Minutes)</label>
+                    <input type="number" name="afk_timer_minutes" id="afk_timer_minutes" value="{{ current_settings.get('AFK_TIMER_MINUTES', '10') }}" min="1">
+                </div>
             </div>
 
-            <h2>Timer settings</h2>
-            <!-- Purge Older Than Days -->
-            <div class="form-group">
-                <label for="purge_older_than_days">Purge Messages Older Than (Days)</label>
-                <input type="number" name="purge_older_than_days" id="purge_older_than_days" value="{{ current_settings.get('PURGE_OLDER_THAN_DAYS', '7') }}" min="1" max="14" style="width: 100px;">
-                <p class="note">Discord API limits bulk deletion to messages not older than 14 days.</p>
+            <div class="category-header" onclick="toggleCategory('channels-category')">
+                <h2>Channel IDs</h2>
+                <span class="toggle-icon collapsed">▼</span>
             </div>
+            <div id="channels-category" class="category-content collapsed">
+                <!-- Hidden Channels -->
+                <div class="form-group">
+                    <label for="hidden_channels">Hidden Channels (comma-separated IDs)</label>
+                    <input type="text" name="hidden_channels" id="hidden_channels" value="{{ current_settings.get('HIDDEN_CHANNELS', '') }}" style="width: 100%;">
+                </div>
 
-            <div class="form-group">
-                <label for="join_message_timer_minutes">Join Message Timer (Minutes)</label>
-                <input type="number" name="join_message_timer_minutes" id="join_message_timer_minutes" value="{{ current_settings.get('JOIN_MESSAGE_TIMER_MINUTES', '7') }}" min="1" style="width: 100px;">
-            </div>
+                <!-- Log Channel ID -->
+                <div class="form-group">
+                    <label for="log_channel_id">Log Channel ID</label>
+                    <input type="text" name="log_channel_id" id="log_channel_id" value="{{ current_settings.get('LOG_CHANNEL_ID', '') }}" style="width: 100%;">
+                </div>
+                
+                <!-- Bot Audit ID -->
+                <div class="form-group">
+                    <label for="bot_audit_id">Bot Audit ID</label>
+                    <input type="text" name="bot_audit_id" id="bot_audit_id" value="{{ current_settings.get('BOT_AUDIT_ID', '') }}" style="width: 100%;">
+                </div>
 
-            <div class="form-group">
-                <label for="afk_timer_minutes">AFK Timer (Minutes)</label>
-                <input type="number" name="afk_timer_minutes" id="afk_timer_minutes" value="{{ current_settings.get('AFK_TIMER_MINUTES', '10') }}" min="1" style="width: 100px;">
-            </div>
+                <!-- Tech Support Channel ID -->
+                <div class="form-group">
+                    <label for="techsupport_channel_id">Tech Support Channel ID (Forum)</label>
+                    <input type="text" name="techsupport_channel_id" id="techsupport_channel_id" value="{{ current_settings.get('TECHSUPPORT_CHANNEL_ID', '') }}" style="width: 100%;">
+                </div>
 
-            <h2>Channel IDs</h2>
-            <!-- Hidden Channels -->
-            <div class="form-group">
-                <label for="hidden_channels">Hidden Channels (comma-separated IDs)</label>
-                <input type="text" name="hidden_channels" id="hidden_channels" value="{{ current_settings.get('HIDDEN_CHANNELS', '') }}">
-            </div>
-
-            <!-- Log Channel ID -->
-            <div class="form-group">
-                <label for="log_channel_id">Log Channel ID</label>
-                <input type="text" name="log_channel_id" id="log_channel_id" value="{{ current_settings.get('LOG_CHANNEL_ID', '') }}">
-            </div>
-            
-            <!-- Bot Audit ID -->
-            <div class="form-group">
-                <label for="bot_audit_id">Bot Audit ID</label>
-                <input type="text" name="bot_audit_id" id="bot_audit_id" value="{{ current_settings.get('BOT_AUDIT_ID', '') }}">
-            </div>
-
-            <!-- Tech Support Channel ID -->
-            <div class="form-group">
-                <label for="techsupport_channel_id">Tech Support Channel ID (Forum)</label>
-                <input type="text" name="techsupport_channel_id" id="techsupport_channel_id" value="{{ current_settings.get('TECHSUPPORT_CHANNEL_ID', '') }}">
-            </div>
-
-            <!-- AFK Channel ID -->
-            <div class="form-group">
-                <label for="afk_channel_id">AFK Channel ID</label>
-                <input type="text" name="afk_channel_id" id="afk_channel_id" value="{{ current_settings.get('AFK_CHANNEL_ID', '') }}">
+                <!-- AFK Channel ID -->
+                <div class="form-group">
+                    <label for="afk_channel_id">AFK Channel ID</label>
+                    <input type="text" name="afk_channel_id" id="afk_channel_id" value="{{ current_settings.get('AFK_CHANNEL_ID', '') }}" style="width: 100%;">
+                </div>
             </div>
 
             <div class="button-group">

@@ -38,7 +38,7 @@ This document describes all configurable settings for the Garmin voice recording
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `STT_ENGINE` | `google` | STT engine: `google` or `vosk` |
-| `VOSK_MODEL_PATH` | `vosk-model-de` | Path to Vosk model for offline STT |
+| `VOSK_MODEL_PATH` | `vosk-model` | Path to Vosk model for offline STT |
 
 ## Troubleshooting Audio Stuttering
 

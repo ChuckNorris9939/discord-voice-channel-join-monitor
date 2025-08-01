@@ -11,6 +11,6 @@ services:
     volumes:
       - ./images/:/images/
       - ./config/:/app/config/
-      - ./vosk-model-de/:/app/vosk-model-de/
+      - ./vosk-model/:/app/vosk-model/
       - ./garmin-output/:/app/garmin-output/
 
