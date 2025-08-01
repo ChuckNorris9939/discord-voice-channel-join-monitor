@@ -6,6 +6,7 @@ __pycache__/garmin_voice.cpython-312.pyc
 *.pyc
 vosk-model-de-0.21/
 vosk-model-de-0.21.zip
-vosk-model-de/
+vosk-model/
 vosk-model-small-de-0.15.zip
 venv/
+vosk-model/

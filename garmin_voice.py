@@ -20,33 +20,9 @@ except ImportError:
     vosk = None
 
 # --------------------------------------------------
-# Logging setup (honours APP_TESTING_MODE and LOG_LEVEL)
+# Logging setup - now handled by config_loader.py
 # --------------------------------------------------
 logger = logging.getLogger(__name__)
-
-def _init_logging():
-    """Set log level:
-    - LOG_LEVEL=DEBUG  → always DEBUG
-    - else APP_TESTING_MODE=true/1/yes → DEBUG
-    - default INFO"""
-    default_level = logging.INFO
-    testing = os.getenv("APP_TESTING_MODE", "false").lower() in ("1", "true", "yes")
-    env_level = os.getenv("LOG_LEVEL", "").upper()
-    if env_level == "DEBUG":
-        default_level = logging.DEBUG
-    elif testing:
-        default_level = logging.DEBUG
-
-    if not logging.getLogger().handlers:
-        logging.basicConfig(
-            level=default_level,
-            format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-            stream=sys.stdout,
-        )
-    logger.setLevel(default_level)
-    logger.debug("Logger initialised at %s", logging.getLevelName(default_level))
-
-_init_logging()
 
 import config_loader as cfg
 # ==================================================
@@ -105,6 +81,13 @@ TRIGGERS = [
         "threshold": 0.7,
         "sound": SOUND_DING,
         "save": False,
+    },
+        {  # wake word 2
+        "name": "ding2",
+        "phrase": "okay garmin video speichern",
+        "threshold": 0.7,
+        "sound": SOUND_DINGDING,
+        "save": True,
     },
     {  # follow‑up within 5 s after wake word
         "name": "save",
@@ -395,7 +378,7 @@ class GarminVoiceManager:
                 self.buffer_monitor_task.cancel()
                 logger.debug("Cancelled buffer monitor task for save operation")
             
-            filename = f"garmin_recording_{int(time.time())}.wav"
+            filename = f"recording_{time.strftime('%d.%m.%Y_%H-%M', time.localtime())}.wav"
             path = os.path.join(OUTPUT_DIR, filename)
             
             with self._buf_lock:
@@ -415,15 +398,11 @@ class GarminVoiceManager:
             
             # Schedule restart of recording
             if self.vc and self.vc.is_connected():
-                try:
-                    # Try to create task if we're in an async context
-                    asyncio.create_task(self._restart_recording_after_save())
-                except RuntimeError:
-                    # If no event loop, schedule it on the bot's event loop
-                    if hasattr(self.bot, 'loop') and self.bot.loop and self.bot.loop.is_running():
-                        asyncio.run_coroutine_threadsafe(self._restart_recording_after_save(), self.bot.loop)
-                    else:
-                        logger.warning("No event loop available to restart recording after save")
+                # Schedule the restart coroutine on the bot's event loop
+                if hasattr(self.bot, 'loop') and self.bot.loop and self.bot.loop.is_running():
+                    asyncio.run_coroutine_threadsafe(self._restart_recording_after_save(), self.bot.loop)
+                else:
+                    logger.warning("No event loop available to restart recording after save")
                 
         except Exception as e:
             logger.error("Error during save_recording: %s", e)

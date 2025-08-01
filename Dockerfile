@@ -10,7 +10,7 @@ WORKDIR /app
 # Using the smaller, but still accurate, model for efficiency
 #RUN wget https://alphacephei.com/vosk/models/vosk-model-de-0.21.zip && \
 #    unzip vosk-model-de-0.21.zip && \
-#    mv vosk-model-de-0.21 /app/vosk-model-de && \
+#    mv vosk-model-de-0.21 /app/vosk-model && \
 #    rm vosk-model-de-0.21.zip
 # Vosk Model ist nicht im Container mit drinnnen, sondern als Volume gemounted
 
