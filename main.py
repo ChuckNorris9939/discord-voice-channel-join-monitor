@@ -242,6 +242,11 @@ HIDDEN_CHANNELS = [1255930025463644232, 1233872680680296499, 374159356717039620]
 USERS: List[str] = []
 IMAGES_FOLDER = "images"
 
+# Garmin Auto-Join Configuration
+GARMIN_AUTO_JOIN_ENABLED = os.environ.get('GARMIN_AUTO_JOIN_ENABLED', 'false').lower() == 'true'
+GARMIN_AUTO_JOIN_CHANNELS_STR = os.environ.get('GARMIN_AUTO_JOIN_CHANNELS', '1080202313211326584,571755941725208616,492036470681632778')
+GARMIN_AUTO_JOIN_CHANNELS = [int(channel_id.strip()) for channel_id in GARMIN_AUTO_JOIN_CHANNELS_STR.split(',') if channel_id.strip().isdigit()]
+
 shutdown_initiated = False
 
 # --------- User Log Database Initialization Function ---------
@@ -921,6 +926,31 @@ async def on_ready():
     await send_log_message(user_list_msg, target_channel_ids=[LOG_CHANNEL_ID])
     logger.info(f"Sent initial user list to log channel: {user_list_msg}")
 
+    # Check for existing users in monitored channels and auto-join if enabled
+    if GARMIN_AUTO_JOIN_ENABLED:
+        logger.info(f"Auto-join enabled. Checking monitored channels: {GARMIN_AUTO_JOIN_CHANNELS}")
+        guild = bot.get_guild(DISCORD_SERVER_ID)
+        if guild:
+            for channel_id in GARMIN_AUTO_JOIN_CHANNELS:
+                channel = guild.get_channel(channel_id)
+                if channel and isinstance(channel, discord.VoiceChannel):
+                    # Check if there are non-bot users in the channel
+                    non_bot_users = [member for member in channel.members if not member.bot]
+                    if non_bot_users:
+                        logger.info(f"Found {len(non_bot_users)} users in monitored channel {channel.name} (ID: {channel_id}), auto-joining")
+                        try:
+                            await garmin_manager.join_channel(channel)
+                            logger.info(f"Successfully auto-joined channel {channel.name} on startup")
+                            break  # Only join the first channel with users
+                        except Exception as e:
+                            logger.error(f"Failed to auto-join channel {channel.name} on startup: {e}")
+                    else:
+                        logger.info(f"No users found in monitored channel {channel.name} (ID: {channel_id})")
+        else:
+            logger.warning("Could not fetch guild for auto-join check")
+    else:
+        logger.info("Auto-join disabled, skipping startup channel check")
+
     try:
         tech_support_forum = bot.get_channel(TECHSUPPORT_CHANNEL_ID) or await bot.fetch_channel(TECHSUPPORT_CHANNEL_ID)
         if isinstance(tech_support_forum, discord.ForumChannel):
@@ -1247,6 +1277,44 @@ async def on_message(message: discord.Message):
     # if message.guild and message.guild.id == DISCORD_SERVER_ID:
     # await bot.process_commands(message) # This line is now at the top of on_message
 
+@bot.event
+async def on_voice_state_update(member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
+    """Handle voice state updates for automatic Garmin joining."""
+    if not GARMIN_AUTO_JOIN_ENABLED:
+        return
+    
+    # Skip bot's own voice state changes
+    if member.bot:
+        return
+    
+    # Check if user joined a monitored channel
+    if before.channel != after.channel and after.channel and after.channel.id in GARMIN_AUTO_JOIN_CHANNELS:
+        logger.info(f"User {member.name} joined monitored channel {after.channel.name} (ID: {after.channel.id})")
+        
+        # Check if bot is already in a voice channel
+        if garmin_manager.vc and garmin_manager.vc.is_connected():
+            logger.info("Bot is already connected to a voice channel, skipping auto-join")
+            return
+        
+        # Join the channel
+        try:
+            await garmin_manager.join_channel(after.channel)
+            logger.info(f"Auto-joined channel {after.channel.name} due to user {member.name} joining")
+        except Exception as e:
+            logger.error(f"Failed to auto-join channel {after.channel.name}: {e}")
+    
+    # Check if user left a monitored channel and no other users remain
+    elif before.channel and before.channel.id in GARMIN_AUTO_JOIN_CHANNELS and (not after.channel or after.channel.id not in GARMIN_AUTO_JOIN_CHANNELS):
+        # Check if any non-bot users remain in the channel
+        remaining_users = [m for m in before.channel.members if not m.bot]
+        
+        if not remaining_users and garmin_manager.vc and garmin_manager.vc.is_connected():
+            logger.info(f"All users left channel {before.channel.name}, leaving voice channel")
+            try:
+                await garmin_manager.leave_channel()
+            except Exception as e:
+                logger.error(f"Failed to leave channel {before.channel.name}: {e}")
+
 @bot.hybrid_command(name="viewlogs", description="Zeigt die letzten 10 Benutzer-Join-Events an (nur für Admins).")
 @commands.has_permissions(administrator=True)
 @commands.guild_only()
@@ -1460,6 +1528,63 @@ async def garmin_health(ctx: commands.Context):
         value=stt_status,
         inline=True
     )
+    
+    await ctx.send(embed=embed)
+
+@bot.hybrid_command(name="garmin_autojoin", description="Shows the current auto-join configuration and status.")
+@commands.guild_only()
+async def garmin_autojoin(ctx: commands.Context):
+    embed = discord.Embed(
+        title="🤖 Garmin Auto-Join Configuration",
+        color=discord.Color.blue(),
+        timestamp=discord.utils.utcnow()
+    )
+    
+    # Auto-join status
+    status_emoji = "🟢" if GARMIN_AUTO_JOIN_ENABLED else "🔴"
+    embed.add_field(
+        name="Auto-Join Status",
+        value=f"{status_emoji} {'Enabled' if GARMIN_AUTO_JOIN_ENABLED else 'Disabled'}",
+        inline=True
+    )
+    
+    # Monitored channels
+    if GARMIN_AUTO_JOIN_CHANNELS:
+        guild = bot.get_guild(DISCORD_SERVER_ID)
+        channel_names = []
+        for channel_id in GARMIN_AUTO_JOIN_CHANNELS:
+            channel = guild.get_channel(channel_id) if guild else None
+            if channel:
+                channel_names.append(f"#{channel.name} ({channel_id})")
+            else:
+                channel_names.append(f"Unknown Channel ({channel_id})")
+        
+        embed.add_field(
+            name="Monitored Channels",
+            value="\n".join(channel_names),
+            inline=False
+        )
+    else:
+        embed.add_field(
+            name="Monitored Channels",
+            value="No channels configured",
+            inline=False
+        )
+    
+    # Current connection status
+    if garmin_manager.vc and garmin_manager.vc.is_connected():
+        current_channel = garmin_manager.vc.channel
+        embed.add_field(
+            name="Current Connection",
+            value=f"🟢 Connected to #{current_channel.name} ({current_channel.id})",
+            inline=False
+        )
+    else:
+        embed.add_field(
+            name="Current Connection",
+            value="🔴 Not connected to any voice channel",
+            inline=False
+        )
     
     await ctx.send(embed=embed)
 
