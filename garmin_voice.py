@@ -417,7 +417,15 @@ class GarminVoiceManager:
             
             # Schedule restart of recording
             if self.vc and self.vc.is_connected():
-                asyncio.create_task(self._restart_recording_after_save())
+                try:
+                    # Try to create task if we're in an async context
+                    asyncio.create_task(self._restart_recording_after_save())
+                except RuntimeError:
+                    # If no event loop, schedule it on the bot's event loop
+                    if hasattr(self.bot, 'loop') and self.bot.loop and self.bot.loop.is_running():
+                        asyncio.run_coroutine_threadsafe(self._restart_recording_after_save(), self.bot.loop)
+                    else:
+                        logger.warning("No event loop available to restart recording after save")
                 
         except Exception as e:
             logger.error("Error during save_recording: %s", e)
