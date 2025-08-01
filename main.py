@@ -62,7 +62,7 @@ def view_join_logs_page():
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
-        sql_query = "SELECT id, user_id, username, channel_id, channel_name, timestamp FROM user_joins"
+        sql_query = "SELECT id, user_id, username, channel_id, channel_name, event_type, timestamp FROM user_voice_events"
         params = []
 
         if current_filter_username:
@@ -275,15 +275,20 @@ def init_user_log_db():
     try:
         cursor = conn.cursor()
         cursor.execute("""
-            CREATE TABLE IF NOT EXISTS user_joins (
+            CREATE TABLE IF NOT EXISTS user_voice_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER,
                 username TEXT,
                 channel_id INTEGER,
                 channel_name TEXT,
+                event_type TEXT, -- 'join' or 'leave'
                 timestamp TEXT
             )
         """)
+        conn.commit()
+
+        # Drop the old user_joins table if it exists
+        cursor.execute("DROP TABLE IF EXISTS user_joins")
         conn.commit()
 
         cursor.execute("""
@@ -317,6 +322,28 @@ def init_user_log_db():
         if conn and not is_test_db:
             conn.close()
             logger.info(f"Database connection to {DATABASE_PATH} closed after init.")
+
+# --------- Helper Functions for User Voice Events ---------
+def log_voice_event(user_id: int, username: str, channel_id: int, channel_name: str, event_type: str):
+    """Logs a user join or leave event to the database."""
+    conn = None
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+        timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        cursor.execute("""
+            INSERT INTO user_voice_events (user_id, username, channel_id, channel_name, event_type, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (user_id, username, channel_id, channel_name, event_type, timestamp))
+        conn.commit()
+        logger.info(f"Logged voice event: User {username} ({user_id}) {event_type} channel {channel_name} ({channel_id})")
+    except sqlite3.Error as e:
+        logger.error(f"SQLite error in log_voice_event: {e}", exc_info=True)
+    except Exception as e:
+        logger.error(f"General error in log_voice_event: {e}", exc_info=True)
+    finally:
+        if conn:
+            conn.close()
 
 # --------- Helper Functions for inactive_threads Table ---------
 def add_or_update_thread_activity(thread_id: int, guild_id: int, last_activity_timestamp_iso: str, op_user_id: int, last_message_user_id: int):
@@ -1279,57 +1306,51 @@ async def on_message(message: discord.Message):
 
 @bot.event
 async def on_voice_state_update(member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
-    """Handle voice state updates for automatic Garmin joining."""
-    if not GARMIN_AUTO_JOIN_ENABLED:
-        return
-    
+    """Handle voice state updates for logging and automatic Garmin joining."""
     # Skip bot's own voice state changes
     if member.bot:
         return
-    
-    # Check if user joined a monitored channel
-    if before.channel != after.channel and after.channel and after.channel.id in GARMIN_AUTO_JOIN_CHANNELS:
-        logger.info(f"User {member.name} joined monitored channel {after.channel.name} (ID: {after.channel.id})")
-        
-        # Check if bot is already in a voice channel
-        if garmin_manager.is_connected():
-            logger.info("Bot is already connected to a voice channel, skipping auto-join")
-            return
-        
-        # Join the channel with retry logic
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                await garmin_manager.join_channel(after.channel)
-                logger.info(f"Auto-joined channel {after.channel.name} due to user {member.name} joining")
-                break
-            except Exception as e:
-                logger.error(f"Failed to auto-join channel {after.channel.name} (attempt {attempt + 1}/{max_retries}): {e}")
-                if attempt < max_retries - 1:
-                    # Wait before retry
-                    await asyncio.sleep(1.0)
-                else:
-                    logger.error(f"Failed to auto-join channel {after.channel.name} after {max_retries} attempts")
-    
-    # Check if user left a monitored channel and no other users remain
-    elif before.channel and before.channel.id in GARMIN_AUTO_JOIN_CHANNELS and (not after.channel or after.channel.id not in GARMIN_AUTO_JOIN_CHANNELS):
-        # Check if any non-bot users remain in the channel
-        remaining_users = [m for m in before.channel.members if not m.bot]
-        
-        # Only leave if the bot is actually in this specific channel and no users remain
-        if (not remaining_users and 
-            garmin_manager.is_connected() and 
-            garmin_manager.vc and 
-            garmin_manager.vc.channel and 
-            garmin_manager.vc.channel.id == before.channel.id):
-            
-            logger.info(f"All users left channel {before.channel.name}, leaving voice channel")
-            try:
-                await garmin_manager.leave_channel()
-            except Exception as e:
-                logger.error(f"Failed to leave channel {before.channel.name}: {e}")
-        elif not remaining_users:
-            logger.debug(f"Users left channel {before.channel.name}, but bot is not in this channel - staying put")
+
+    # User joined a new channel
+    if before.channel != after.channel and after.channel is not None:
+        log_voice_event(member.id, member.name, after.channel.id, after.channel.name, 'join')
+        # Garmin auto-join logic
+        if GARMIN_AUTO_JOIN_ENABLED and after.channel.id in GARMIN_AUTO_JOIN_CHANNELS:
+            logger.info(f"User {member.name} joined monitored channel {after.channel.name} (ID: {after.channel.id})")
+            if not garmin_manager.is_connected():
+                max_retries = 3
+                for attempt in range(max_retries):
+                    try:
+                        await garmin_manager.join_channel(after.channel)
+                        logger.info(f"Auto-joined channel {after.channel.name} due to user {member.name} joining")
+                        break
+                    except Exception as e:
+                        logger.error(f"Failed to auto-join channel {after.channel.name} (attempt {attempt + 1}/{max_retries}): {e}")
+                        if attempt < max_retries - 1:
+                            await asyncio.sleep(1.0)
+                        else:
+                            logger.error(f"Failed to auto-join channel {after.channel.name} after {max_retries} attempts")
+            else:
+                logger.info("Bot is already connected to a voice channel, skipping auto-join")
+
+    # User left a channel
+    elif before.channel is not None and before.channel != after.channel:
+        log_voice_event(member.id, member.name, before.channel.id, before.channel.name, 'leave')
+        # Garmin auto-leave logic
+        if GARMIN_AUTO_JOIN_ENABLED and before.channel.id in GARMIN_AUTO_JOIN_CHANNELS:
+            remaining_users = [m for m in before.channel.members if not m.bot]
+            if (not remaining_users and 
+                garmin_manager.is_connected() and 
+                garmin_manager.vc and 
+                garmin_manager.vc.channel and 
+                garmin_manager.vc.channel.id == before.channel.id):
+                logger.info(f"All users left channel {before.channel.name}, leaving voice channel")
+                try:
+                    await garmin_manager.leave_channel()
+                except Exception as e:
+                    logger.error(f"Failed to leave channel {before.channel.name}: {e}")
+            elif not remaining_users:
+                logger.debug(f"Users left channel {before.channel.name}, but bot is not in this channel - staying put")
 
 @bot.hybrid_command(name="viewlogs", description="Zeigt die letzten 10 Benutzer-Join-Events an (nur für Admins).")
 @commands.has_permissions(administrator=True)
@@ -1340,7 +1361,7 @@ async def viewlogs(ctx: commands.Context):
         conn = sqlite3.connect(DATABASE_PATH)
         cursor = conn.cursor()
         # Fetch last 10 records, ordering by id descending to get the latest entries
-        cursor.execute("SELECT user_id, username, channel_id, channel_name, timestamp FROM user_joins ORDER BY id DESC LIMIT 10")
+        cursor.execute("SELECT user_id, username, channel_id, channel_name, event_type, timestamp FROM user_voice_events ORDER BY id DESC LIMIT 10")
         records = cursor.fetchall()
 
         if not records:
@@ -1349,7 +1370,7 @@ async def viewlogs(ctx: commands.Context):
 
         response_lines = ["**Letzte 10 Benutzer-Join-Events:**"]
         for record in records:
-            user_id, username, channel_id, channel_name, timestamp_str = record
+            user_id, username, channel_id, channel_name, event_type, timestamp_str = record
             # Parse ISO timestamp string back to datetime object for formatting (optional, but nice)
             try:
                 dt_obj = datetime.datetime.fromisoformat(timestamp_str)
@@ -1357,8 +1378,9 @@ async def viewlogs(ctx: commands.Context):
             except ValueError:
                 formatted_timestamp = timestamp_str # Fallback if parsing fails
 
+            action = "verlassen" if event_type == "leave" else "beitreten"
             response_lines.append(
-                f"Benutzer: {username} (ID: {user_id}) trat Kanal bei: {channel_name} (ID: {channel_id}) um {formatted_timestamp}"
+                f"Benutzer: {username} ({user_id}) ist dem Kanal {channel_name} ({channel_id}) {action} um {formatted_timestamp}"
             )
         
         response_message = "\n".join(response_lines)
