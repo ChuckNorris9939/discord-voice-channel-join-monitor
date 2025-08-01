@@ -48,21 +48,17 @@ def _init_logging():
 
 _init_logging()
 
+import config_loader as cfg
 # ==================================================
 # Configurable Speech‑to‑Text backend
 # ==================================================
-STT_ENABLED: Final[bool] = os.getenv("STT_ENABLED", "true").lower() in ("1", "true", "yes")
-STT_ENGINE: Final[str] = os.getenv("STT_ENGINE", "google").lower()
-VOSK_MODEL_PATH: Final[str] = os.getenv("VOSK_MODEL_PATH", "vosk-model-de")
-
 # --------------------------------------------------
 # Audio / Recording constants (configurable via environment)
 # --------------------------------------------------
-RECORD_SECONDS: Final[int] = int(os.getenv("GARMIN_RECORD_SECONDS", "600"))  # 10 min default
 SAMPLERATE: Final[int] = int(os.getenv("GARMIN_SAMPLERATE", "48000"))  # Discord standard
 CHANNELS: Final[int] = int(os.getenv("GARMIN_CHANNELS", "2"))  # stereo
 BYTES_PER_SAMPLE: Final[int] = int(os.getenv("GARMIN_BYTES_PER_SAMPLE", "2"))  # 16‑bit
-MAX_BUFFER_SIZE: Final[int] = RECORD_SECONDS * SAMPLERATE * CHANNELS * BYTES_PER_SAMPLE
+MAX_BUFFER_SIZE: Final[int] = cfg.GARMIN_RECORD_SECONDS * SAMPLERATE * CHANNELS * BYTES_PER_SAMPLE
 
 FRAMES_PER_BUFFER: Final[int] = int(os.getenv("GARMIN_FRAMES_PER_BUFFER", "960"))  # 20 ms @48 kHz
 CHUNK_SIZE: Final[int] = FRAMES_PER_BUFFER * CHANNELS * BYTES_PER_SAMPLE
@@ -147,10 +143,10 @@ class GarminVoiceManager:
 
         # Optional Vosk model
         self.vosk_model = None
-        if STT_ENGINE == "vosk":
+        if cfg.STT_ENGINE == "vosk":
             if vosk is None:
                 raise RuntimeError("STT_ENGINE='vosk' but 'vosk' package missing.")
-            model_path = Path(VOSK_MODEL_PATH)
+            model_path = Path(cfg.VOSK_MODEL_PATH)
             if not model_path.exists():
                 raise FileNotFoundError(f"Vosk model not found at '{model_path}'.")
             logger.info("Loading Vosk model from %s …", model_path)
@@ -225,7 +221,7 @@ class GarminVoiceManager:
             return
         
         # Skip STT processing if disabled
-        if not STT_ENABLED:
+        if not cfg.STT_ENABLED:
             return
         
         # Only process if we have enough audio data and enough time has passed
@@ -310,7 +306,7 @@ class GarminVoiceManager:
             logger.debug(f"Processing audio window: {len(window)} bytes ({len(window)/SAMPLERATE/CHANNELS/BYTES_PER_SAMPLE:.2f}s)")
 
             # --- Speech‑to‑Text -------------------------------------------------
-            if STT_ENGINE == "vosk":
+            if cfg.STT_ENGINE == "vosk":
                 import audioop, json
                 mono = audioop.tomono(window, BYTES_PER_SAMPLE, 0.5, 0.5)
                 pcm16k, _ = audioop.ratecv(mono, BYTES_PER_SAMPLE, 1, SAMPLERATE, 16_000, None)
@@ -345,8 +341,10 @@ class GarminVoiceManager:
                 return
             self._last_stt_text = text
             if text:
-                logger.debug("STT[%s]: '%s'", STT_ENGINE, text)
+                logger.info("STT[%s]: '%s'", cfg.STT_ENGINE, text)
             else:
+                # Log empty results at DEBUG level to avoid spam
+                logger.debug("STT[%s]: (no text detected)", cfg.STT_ENGINE)
                 return
 
             now = time.time()
@@ -452,9 +450,9 @@ class GarminVoiceManager:
             self.vc.listen(voice_recv.BasicSink(self.callback))
             
             # Only start STT worker if STT is enabled
-            if STT_ENABLED:
+            if cfg.STT_ENABLED:
                 self._start_stt_worker()
-                logger.info("🔊 Joined voice channel '%s' (STT engine: %s)", channel.name, STT_ENGINE)
+                logger.info("🔊 Joined voice channel '%s' (STT engine: %s)", channel.name, cfg.STT_ENGINE)
             else:
                 logger.info("🔊 Joined voice channel '%s' (STT disabled)", channel.name)
             
@@ -656,8 +654,8 @@ class GarminVoiceManager:
             "recording_errors": self.recording_errors,
             "max_errors": self.max_errors,
             "is_processing": self.is_processing,
-            "stt_enabled": STT_ENABLED,
-            "stt_engine": STT_ENGINE if STT_ENABLED else "disabled",
+            "stt_enabled": cfg.STT_ENABLED,
+            "stt_engine": cfg.STT_ENGINE if cfg.STT_ENABLED else "disabled",
             "last_process_time": self.last_process_time,
             "audio_pipeline_healthy": self.audio_pipeline_healthy,
             "audio_callback_count": self.audio_callback_count,

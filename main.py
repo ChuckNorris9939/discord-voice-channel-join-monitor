@@ -87,9 +87,6 @@ def view_join_logs_page():
 
 @app.route('/settings', methods=['GET', 'POST'])
 def settings_route():
-    # These globals are modified by load_all_settings_to_globals() and the subsequent re-evaluation block.
-    global TESTING, HIDDEN_CHANNELS, LOG_CHANNEL_ID, BOT_AUDIT_ID, TECHSUPPORT_CHANNEL_ID, AFK_CHANNEL_ID, PURGE_OLDER_THAN_DAYS, JOIN_MESSAGE_TIMER_ENABLED, JOIN_MESSAGE_TIMER_MINUTES
-
     message = None 
     error = None   
 
@@ -147,15 +144,27 @@ def settings_route():
             save_setting(DB_KEY_AFK_TIMER_MINUTES, afk_timer_minutes_str)
             logger.info(f"Saved {DB_KEY_AFK_TIMER_MINUTES}: {afk_timer_minutes_str}")
 
+            # Handle Garmin Recorder Settings
+            save_setting(DB_KEY_STT_ENABLED, request.form.get('stt_enabled', 'true'))
+            save_setting(DB_KEY_STT_ENGINE, request.form.get('stt_engine', 'google'))
+            save_setting(DB_KEY_VOSK_MODEL_PATH, request.form.get('vosk_model_path', 'vosk-model-de/vosk-model-de-0.21/'))
+            save_setting(DB_KEY_GARMIN_AUTO_JOIN_ENABLED, request.form.get('garmin_auto_join_enabled', 'true'))
+            save_setting(DB_KEY_GARMIN_AUTO_JOIN_CHANNELS, request.form.get('garmin_auto_join_channels', '1080202313211326584,571755941725208616,492036470681632778'))
+            save_setting(DB_KEY_GARMIN_RECORD_SECONDS, request.form.get('garmin_record_seconds', '600'))
+            save_setting(DB_KEY_GARMIN_MAX_RECORDING_DURATION, request.form.get('garmin_max_recording_duration', '3600'))
+
+            # Handle General Settings
+            save_setting(DB_KEY_LOG_LEVEL, request.form.get('log_level', 'INFO'))
+
             # Reload settings into global scope
-            load_all_settings_to_globals()
+            cfg.load_all_settings()
             
-            if TESTING:
+            if cfg.TESTING:
                 logger.info(f"Settings Route - TESTING MODE ACTIVE: Overriding LOG_CHANNEL_ID and BOT_AUDIT_ID to {TESTING_CHANNEL_ID}.")
-                LOG_CHANNEL_ID = TESTING_CHANNEL_ID
-                BOT_AUDIT_ID = TESTING_CHANNEL_ID
+                cfg.LOG_CHANNEL_ID = TESTING_CHANNEL_ID
+                cfg.BOT_AUDIT_ID = TESTING_CHANNEL_ID
             else:
-                logger.info(f"Settings Route - TESTING MODE INACTIVE. LOG_CHANNEL_ID: {LOG_CHANNEL_ID}, BOT_AUDIT_ID: {BOT_AUDIT_ID}.")
+                logger.info(f"Settings Route - TESTING MODE INACTIVE. LOG_CHANNEL_ID: {cfg.LOG_CHANNEL_ID}, BOT_AUDIT_ID: {cfg.BOT_AUDIT_ID}.")
 
             message = "Settings saved successfully. Note: Some changes may require a bot restart to take full effect."
 
@@ -171,16 +180,28 @@ def settings_route():
     else:
         current_settings_display['DISCORD_TOKEN_DISPLAY'] = "Token not set in environment"
 
-    current_settings_display['APP_TESTING_MODE'] = str(TESTING).lower()
-    current_settings_display['HIDDEN_CHANNELS'] = ','.join(map(str, HIDDEN_CHANNELS)) if HIDDEN_CHANNELS else ''
-    current_settings_display['LOG_CHANNEL_ID'] = str(LOG_CHANNEL_ID) if LOG_CHANNEL_ID is not None else ''
-    current_settings_display['BOT_AUDIT_ID'] = str(BOT_AUDIT_ID) if BOT_AUDIT_ID is not None else ''
-    current_settings_display['TECHSUPPORT_CHANNEL_ID'] = str(TECHSUPPORT_CHANNEL_ID) if TECHSUPPORT_CHANNEL_ID is not None else ''
-    current_settings_display['AFK_CHANNEL_ID'] = str(AFK_CHANNEL_ID) if AFK_CHANNEL_ID is not None else ''
-    current_settings_display['PURGE_OLDER_THAN_DAYS'] = str(PURGE_OLDER_THAN_DAYS)
-    current_settings_display['JOIN_MESSAGE_TIMER_ENABLED'] = str(JOIN_MESSAGE_TIMER_ENABLED).lower()
-    current_settings_display['JOIN_MESSAGE_TIMER_MINUTES'] = str(JOIN_MESSAGE_TIMER_MINUTES)
-    current_settings_display['AFK_TIMER_MINUTES'] = str(AFK_TIMER_MINUTES)
+    current_settings_display['APP_TESTING_MODE'] = str(cfg.TESTING).lower()
+    current_settings_display['HIDDEN_CHANNELS'] = ','.join(map(str, cfg.HIDDEN_CHANNELS)) if cfg.HIDDEN_CHANNELS else ''
+    current_settings_display['LOG_CHANNEL_ID'] = str(cfg.LOG_CHANNEL_ID) if cfg.LOG_CHANNEL_ID is not None else ''
+    current_settings_display['BOT_AUDIT_ID'] = str(cfg.BOT_AUDIT_ID) if cfg.BOT_AUDIT_ID is not None else ''
+    current_settings_display['TECHSUPPORT_CHANNEL_ID'] = str(cfg.TECHSUPPORT_CHANNEL_ID) if cfg.TECHSUPPORT_CHANNEL_ID is not None else ''
+    current_settings_display['AFK_CHANNEL_ID'] = str(cfg.AFK_CHANNEL_ID) if cfg.AFK_CHANNEL_ID is not None else ''
+    current_settings_display['PURGE_OLDER_THAN_DAYS'] = str(cfg.PURGE_OLDER_THAN_DAYS)
+    current_settings_display['JOIN_MESSAGE_TIMER_ENABLED'] = str(cfg.JOIN_MESSAGE_TIMER_ENABLED).lower()
+    current_settings_display['JOIN_MESSAGE_TIMER_MINUTES'] = str(cfg.JOIN_MESSAGE_TIMER_MINUTES)
+    current_settings_display['AFK_TIMER_MINUTES'] = str(cfg.AFK_TIMER_MINUTES)
+    
+    # Garmin Recorder Settings
+    current_settings_display['STT_ENABLED'] = str(cfg.STT_ENABLED).lower()
+    current_settings_display['STT_ENGINE'] = cfg.STT_ENGINE
+    current_settings_display['VOSK_MODEL_PATH'] = cfg.VOSK_MODEL_PATH
+    current_settings_display['GARMIN_AUTO_JOIN_ENABLED'] = str(cfg.GARMIN_AUTO_JOIN_ENABLED).lower()
+    current_settings_display['GARMIN_AUTO_JOIN_CHANNELS'] = ','.join(map(str, cfg.GARMIN_AUTO_JOIN_CHANNELS)) if cfg.GARMIN_AUTO_JOIN_CHANNELS else ''
+    current_settings_display['GARMIN_RECORD_SECONDS'] = str(cfg.GARMIN_RECORD_SECONDS)
+    current_settings_display['GARMIN_MAX_RECORDING_DURATION'] = str(cfg.GARMIN_MAX_RECORDING_DURATION)
+
+    # General Settings
+    current_settings_display['LOG_LEVEL'] = cfg.LOG_LEVEL
 
     return render_template('settings.html', current_settings=current_settings_display, message=message, error=error)
 
@@ -227,25 +248,17 @@ TECHSUPPORT_CHANNEL_ID = 1139952610883928134
 CLOSED_TAG_NAME = "🔒 CLOSED"
 
 # Testing Mode Configuration
-TESTING = os.environ.get('APP_TESTING_MODE', 'False').lower() == 'true'
 TESTING_CHANNEL_ID = 1376227809474908253 # User-provided ID for testing channel
 
-if TESTING:
-    logger.info(f"TESTING MODE ENABLED: Overriding LOG_CHANNEL_ID and BOT_AUDIT_ID to {TESTING_CHANNEL_ID}.")
-    LOG_CHANNEL_ID = TESTING_CHANNEL_ID
-    BOT_AUDIT_ID = TESTING_CHANNEL_ID
-else:
-    LOG_CHANNEL_ID = 1266773678306230374 # Original value
-    BOT_AUDIT_ID = 1373288909542264852   # Original value
-
-HIDDEN_CHANNELS = [1255930025463644232, 1233872680680296499, 374159356717039620]
+# Global variables to be populated by config_loader
+TESTING = False
+LOG_CHANNEL_ID = 0
+BOT_AUDIT_ID = 0
+HIDDEN_CHANNELS = []
 USERS: List[str] = []
 IMAGES_FOLDER = "images"
-
-# Garmin Auto-Join Configuration
-GARMIN_AUTO_JOIN_ENABLED = os.environ.get('GARMIN_AUTO_JOIN_ENABLED', 'false').lower() == 'true'
-GARMIN_AUTO_JOIN_CHANNELS_STR = os.environ.get('GARMIN_AUTO_JOIN_CHANNELS', '1080202313211326584,571755941725208616,492036470681632778')
-GARMIN_AUTO_JOIN_CHANNELS = [int(channel_id.strip()) for channel_id in GARMIN_AUTO_JOIN_CHANNELS_STR.split(',') if channel_id.strip().isdigit()]
+GARMIN_AUTO_JOIN_ENABLED = False
+GARMIN_AUTO_JOIN_CHANNELS = []
 
 shutdown_initiated = False
 
@@ -588,158 +601,15 @@ def update_thread_reminder_sent(thread_id: int, timestamp_iso: str):
             conn.close()
 
 # --------- Helper Functions for bot_settings Table ---------
-def get_setting(setting_name: str, default_value: Optional[str] = None) -> Optional[str]:
-    conn = None
-    try:
-        conn = sqlite3.connect(DATABASE_PATH)
-        # No need for conn.row_factory = sqlite3.Row if we access by index (row[0])
-        # If accessing by column name (row['setting_value']), then it's needed.
-        # For consistency with other helpers, let's add it.
-        conn.row_factory = sqlite3.Row 
-        cursor = conn.cursor()
-        cursor.execute("SELECT setting_value FROM bot_settings WHERE setting_name = ?", (setting_name,))
-        row = cursor.fetchone()
-        if row:
-            logger.debug(f"Setting '{setting_name}' retrieved with value: {row['setting_value']}")
-            return row['setting_value']
-        else:
-            logger.debug(f"Setting '{setting_name}' not found, returning default value: {default_value}")
-            return default_value
-    except sqlite3.Error as e:
-        logger.error(f"SQLite error in get_setting for '{setting_name}': {e}", exc_info=True)
-        return default_value # Return default_value on error as well
-    except Exception as e:
-        logger.error(f"General error in get_setting for '{setting_name}': {e}", exc_info=True)
-        return default_value
-    finally:
-        if conn:
-            conn.close()
+import config_loader as cfg
+from config_loader import save_setting, DB_KEY_APP_TESTING_MODE, DB_KEY_HIDDEN_CHANNELS, DB_KEY_LOG_CHANNEL_ID, DB_KEY_BOT_AUDIT_ID, DB_KEY_TECHSUPPORT_CHANNEL_ID, DB_KEY_AFK_CHANNEL_ID, DB_KEY_PURGE_OLDER_THAN_DAYS, DB_KEY_JOIN_MESSAGE_TIMER_ENABLED, DB_KEY_JOIN_MESSAGE_TIMER_MINUTES, DB_KEY_AFK_TIMER_MINUTES, DB_KEY_STT_ENABLED, DB_KEY_STT_ENGINE, DB_KEY_VOSK_MODEL_PATH, DB_KEY_GARMIN_AUTO_JOIN_ENABLED, DB_KEY_GARMIN_AUTO_JOIN_CHANNELS, DB_KEY_GARMIN_RECORD_SECONDS, DB_KEY_GARMIN_MAX_RECORDING_DURATION, DB_KEY_LOG_LEVEL
 
-def save_setting(setting_name: str, setting_value: str):
-    conn = None
-    try:
-        conn = sqlite3.connect(DATABASE_PATH)
-        cursor = conn.cursor()
-        cursor.execute("INSERT OR REPLACE INTO bot_settings (setting_name, setting_value) VALUES (?, ?)", (setting_name, setting_value))
-        conn.commit()
-        logger.info(f"Setting '{setting_name}' saved to database with value: {setting_value}")
-    except sqlite3.Error as e:
-        logger.error(f"SQLite error in save_setting for '{setting_name}': {e}", exc_info=True)
-    except Exception as e:
-        logger.error(f"General error in save_setting for '{setting_name}': {e}", exc_info=True)
-    finally:
-        if conn:
-            conn.close()
-
-# --------- Settings Loading Function ---------
-DB_KEY_APP_TESTING_MODE = "APP_TESTING_MODE"
-DB_KEY_HIDDEN_CHANNELS = "HIDDEN_CHANNELS"
-DB_KEY_LOG_CHANNEL_ID = "LOG_CHANNEL_ID"
-DB_KEY_BOT_AUDIT_ID = "BOT_AUDIT_ID"
-DB_KEY_TECHSUPPORT_CHANNEL_ID = "TECHSUPPORT_CHANNEL_ID"
-DB_KEY_AFK_CHANNEL_ID = "AFK_CHANNEL_ID"
-DB_KEY_PURGE_OLDER_THAN_DAYS = "PURGE_OLDER_THAN_DAYS"
-DB_KEY_JOIN_MESSAGE_TIMER_ENABLED = "JOIN_MESSAGE_TIMER_ENABLED"
-DB_KEY_JOIN_MESSAGE_TIMER_MINUTES = "JOIN_MESSAGE_TIMER_MINUTES"
-DB_KEY_AFK_TIMER_MINUTES = "AFK_TIMER_MINUTES"
-
-
-# Original hardcoded default values (pre-database settings)
-DEFAULT_LOG_CHANNEL_ID = 1266773678306230374
-DEFAULT_BOT_AUDIT_ID = 1373288909542264852
-DEFAULT_TECHSUPPORT_CHANNEL_ID = 1139952610883928134
-DEFAULT_HIDDEN_CHANNELS_LIST = [1255930025463644232, 1233872680680296499, 374159356717039620]
-
-def load_all_settings_to_globals():
-    global TESTING, HIDDEN_CHANNELS, LOG_CHANNEL_ID, BOT_AUDIT_ID, TECHSUPPORT_CHANNEL_ID, AFK_CHANNEL_ID, PURGE_OLDER_THAN_DAYS, JOIN_MESSAGE_TIMER_ENABLED, JOIN_MESSAGE_TIMER_MINUTES, AFK_TIMER_MINUTES
-    
-    logger.info("Loading dynamic settings from database...")
-
-    # --- APP_TESTING_MODE ---
-    default_app_testing_mode_str = str(os.environ.get('APP_TESTING_MODE', 'False').lower() == 'true')
-    app_testing_mode_db_val = get_setting(DB_KEY_APP_TESTING_MODE, default_value=default_app_testing_mode_str)
-    save_setting(DB_KEY_APP_TESTING_MODE, app_testing_mode_db_val)
-    TESTING = app_testing_mode_db_val.lower() == 'true'
-    logger.info(f"Loaded setting {DB_KEY_APP_TESTING_MODE}: {TESTING}")
-
-    # --- HIDDEN_CHANNELS ---
-    default_hidden_channels_str = ','.join(map(str, DEFAULT_HIDDEN_CHANNELS_LIST))
-    hc_str_db_val = get_setting(DB_KEY_HIDDEN_CHANNELS, default_value=default_hidden_channels_str)
-    save_setting(DB_KEY_HIDDEN_CHANNELS, hc_str_db_val)
-    if hc_str_db_val and hc_str_db_val.strip():
-        try:
-            HIDDEN_CHANNELS = [int(x.strip()) for x in hc_str_db_val.split(',') if x.strip()]
-        except ValueError:
-            logger.warning(f"Could not parse HIDDEN_CHANNELS string '{hc_str_db_val}'. Using default.")
-            HIDDEN_CHANNELS = list(DEFAULT_HIDDEN_CHANNELS_LIST)
-    else:
-        HIDDEN_CHANNELS = list(DEFAULT_HIDDEN_CHANNELS_LIST)
-    logger.info(f"Loaded setting {DB_KEY_HIDDEN_CHANNELS}: {HIDDEN_CHANNELS}")
-
-    # --- Channel IDs ---
-    def load_channel_id(key: str, default_id: int):
-        id_str_db_val = get_setting(key, default_value=str(default_id))
-        save_setting(key, id_str_db_val)
-        if id_str_db_val and id_str_db_val.lower() != 'none':
-            try:
-                return int(id_str_db_val)
-            except (ValueError, TypeError):
-                logger.warning(f"Could not parse {key} '{id_str_db_val}'. Using default: {default_id}.")
-                return default_id
-        return None
-
-    LOG_CHANNEL_ID = load_channel_id(DB_KEY_LOG_CHANNEL_ID, DEFAULT_LOG_CHANNEL_ID)
-    BOT_AUDIT_ID = load_channel_id(DB_KEY_BOT_AUDIT_ID, DEFAULT_BOT_AUDIT_ID)
-    TECHSUPPORT_CHANNEL_ID = load_channel_id(DB_KEY_TECHSUPPORT_CHANNEL_ID, DEFAULT_TECHSUPPORT_CHANNEL_ID)
-    AFK_CHANNEL_ID = load_channel_id(DB_KEY_AFK_CHANNEL_ID, 0) # Default 0, effectively None
-    logger.info(f"Loaded LOG_CHANNEL_ID: {LOG_CHANNEL_ID}")
-    logger.info(f"Loaded BOT_AUDIT_ID: {BOT_AUDIT_ID}")
-    logger.info(f"Loaded TECHSUPPORT_CHANNEL_ID: {TECHSUPPORT_CHANNEL_ID}")
-    logger.info(f"Loaded AFK_CHANNEL_ID: {AFK_CHANNEL_ID}")
-
-    # --- PURGE_OLDER_THAN_DAYS ---
-    purge_days_str = get_setting(DB_KEY_PURGE_OLDER_THAN_DAYS, default_value='7')
-    save_setting(DB_KEY_PURGE_OLDER_THAN_DAYS, purge_days_str)
-    try:
-        PURGE_OLDER_THAN_DAYS = int(purge_days_str)
-    except (ValueError, TypeError):
-        logger.warning(f"Could not parse PURGE_OLDER_THAN_DAYS '{purge_days_str}'. Using default 7.")
-        PURGE_OLDER_THAN_DAYS = 7
-    logger.info(f"Loaded PURGE_OLDER_THAN_DAYS: {PURGE_OLDER_THAN_DAYS}")
-
-    # --- JOIN_MESSAGE_TIMER_ENABLED ---
-    join_timer_enabled_str = get_setting(DB_KEY_JOIN_MESSAGE_TIMER_ENABLED, default_value='true')
-    save_setting(DB_KEY_JOIN_MESSAGE_TIMER_ENABLED, join_timer_enabled_str)
-    JOIN_MESSAGE_TIMER_ENABLED = join_timer_enabled_str.lower() == 'true'
-    logger.info(f"Loaded JOIN_MESSAGE_TIMER_ENABLED: {JOIN_MESSAGE_TIMER_ENABLED}")
-
-    # --- JOIN_MESSAGE_TIMER_MINUTES ---
-    join_timer_minutes_str = get_setting(DB_KEY_JOIN_MESSAGE_TIMER_MINUTES, default_value='7')
-    save_setting(DB_KEY_JOIN_MESSAGE_TIMER_MINUTES, join_timer_minutes_str)
-    try:
-        JOIN_MESSAGE_TIMER_MINUTES = int(join_timer_minutes_str)
-    except (ValueError, TypeError):
-        logger.warning(f"Could not parse JOIN_MESSAGE_TIMER_MINUTES '{join_timer_minutes_str}'. Using default 7.")
-        JOIN_MESSAGE_TIMER_MINUTES = 7
-    logger.info(f"Loaded JOIN_MESSAGE_TIMER_MINUTES: {JOIN_MESSAGE_TIMER_MINUTES}")
-
-    # --- AFK_TIMER_MINUTES ---
-    afk_timer_minutes_str = get_setting(DB_KEY_AFK_TIMER_MINUTES, default_value='10')
-    save_setting(DB_KEY_AFK_TIMER_MINUTES, afk_timer_minutes_str)
-    try:
-        AFK_TIMER_MINUTES = int(afk_timer_minutes_str)
-    except (ValueError, TypeError):
-        logger.warning(f"Could not parse AFK_TIMER_MINUTES '{afk_timer_minutes_str}'. Using default 10.")
-        AFK_TIMER_MINUTES = 10
-    logger.info(f"Loaded AFK_TIMER_MINUTES: {AFK_TIMER_MINUTES}")
-
-    logger.info("Finished loading dynamic settings.")
 
 
 async def send_log_message(msg: str, embed: Optional[Embed] = None, target_channel_ids: Optional[List[int]] = None):
     if target_channel_ids is None:
-        if BOT_AUDIT_ID:
-            target_channel_ids = [BOT_AUDIT_ID]
+        if cfg.BOT_AUDIT_ID:
+            target_channel_ids = [cfg.BOT_AUDIT_ID]
         else:
             logger.error(f"send_log_message: BOT_AUDIT_ID ist nicht konfiguriert. Nachricht kann nicht gesendet werden: {msg}")
             return
@@ -850,20 +720,19 @@ async def close_support_thread(thread: Thread, trigger_source: str, set_tag: boo
 
 @bot.event
 async def on_ready():
-    global LOG_CHANNEL_ID, BOT_AUDIT_ID, TESTING, HIDDEN_CHANNELS, TECHSUPPORT_CHANNEL_ID, DEFAULT_LOG_CHANNEL_ID, DEFAULT_BOT_AUDIT_ID, DEFAULT_TECHSUPPORT_CHANNEL_ID, DEFAULT_HIDDEN_CHANNELS_LIST, TESTING_CHANNEL_ID
     logger.info(f"Eingeloggt als {bot.user} (ID: {bot.user.id})")
     logger.info(f"Bot version: {BOT_VERSION} starting up...")
     if not os.path.exists(IMAGES_FOLDER):
         os.makedirs(IMAGES_FOLDER)
         logger.info(f"Ordner '{IMAGES_FOLDER}' wurde erstellt. Bitte füge Bilder hinzu.")
-        await send_log_message(f"⚠️ Ordner '{IMAGES_FOLDER}' wurde erstellt. Bitte Bilder für den `delete`-Befehl hinzufügen.", target_channel_ids=[BOT_AUDIT_ID])
+        await send_log_message(f"⚠️ Ordner '{IMAGES_FOLDER}' wurde erstellt. Bitte Bilder für den `delete`-Befehl hinzufügen.", target_channel_ids=[cfg.BOT_AUDIT_ID])
 
     threading.Thread(target=run_flask, daemon=True).start()
     logger.info("Flask-Server-Thread gestartet für Health Checks.")
 
     log_channel_names_to_check = {}
-    if LOG_CHANNEL_ID: log_channel_names_to_check[LOG_CHANNEL_ID] = "Primär-Log"
-    if BOT_AUDIT_ID: log_channel_names_to_check[BOT_AUDIT_ID] = "Audit-Log"
+    if cfg.LOG_CHANNEL_ID: log_channel_names_to_check[cfg.LOG_CHANNEL_ID] = "Primär-Log"
+    if cfg.BOT_AUDIT_ID: log_channel_names_to_check[cfg.BOT_AUDIT_ID] = "Audit-Log"
 
     for cid, cname in log_channel_names_to_check.items():
         try:
@@ -883,7 +752,7 @@ async def on_ready():
         # logger.info(f"Aktuelle App‑Commands im Tree:", [c.name for c in bot.tree.get_commands()])
 
 
-        if TESTING:
+        if cfg.TESTING:
             await send_log_message(
                 f"✅ Bot version {BOT_VERSION} gestartet und einsatzbereit.",
                 target_channel_ids=[TESTING_CHANNEL_ID]
@@ -891,19 +760,19 @@ async def on_ready():
         else:
             await send_log_message(
                 f"✅ Bot version {BOT_VERSION} gestartet und einsatzbereit.",
-                target_channel_ids=[LOG_CHANNEL_ID, BOT_AUDIT_ID]
+                target_channel_ids=[cfg.LOG_CHANNEL_ID, cfg.BOT_AUDIT_ID]
             )
         sync_info_msg = f"{num_synced} Befehle für Guild {DISCORD_SERVER_ID} synchronisiert: {command_names}"
         await send_log_message(
             f"ℹ️ {sync_info_msg}",
-            target_channel_ids=[BOT_AUDIT_ID]
+            target_channel_ids=[cfg.BOT_AUDIT_ID]
         )
 
     except Exception as e:
         logger.error(f"Fehler beim Synchronisieren der Befehle: {e}", exc_info=True)
         await send_log_message(
             f"⚠️ Bot gestartet, aber Fehler beim Synchronisieren der Befehle: {e}",
-            target_channel_ids=[LOG_CHANNEL_ID, BOT_AUDIT_ID]
+            target_channel_ids=[cfg.LOG_CHANNEL_ID, cfg.BOT_AUDIT_ID]
         )
 
     if not msg_purge_task.is_running():
@@ -931,15 +800,17 @@ async def on_ready():
     # ---- End of database file verification ----
 
     # Load all settings from DB, potentially overriding ENV VARs or hardcoded defaults
-    load_all_settings_to_globals()
+    cfg.load_all_settings()
 
     # Re-evaluate TESTING-dependent channel IDs after loading from DB
-    if TESTING:
+    if cfg.TESTING:
         logger.info(f"TESTING MODE ACTIVE (from DB or ENV): Overriding LOG_CHANNEL_ID and BOT_AUDIT_ID to {TESTING_CHANNEL_ID}.")
-        LOG_CHANNEL_ID = TESTING_CHANNEL_ID
-        BOT_AUDIT_ID = TESTING_CHANNEL_ID
+        cfg.LOG_CHANNEL_ID = TESTING_CHANNEL_ID
+        cfg.BOT_AUDIT_ID = TESTING_CHANNEL_ID
     else:
-        logger.info(f"TESTING MODE INACTIVE (from DB or ENV). LOG_CHANNEL_ID: {LOG_CHANNEL_ID}, BOT_AUDIT_ID: {BOT_AUDIT_ID}.")
+        # If not testing, ensure the original values are loaded from the config
+        cfg.load_all_settings()
+        logger.info(f"TESTING MODE INACTIVE (from DB or ENV). LOG_CHANNEL_ID: {cfg.LOG_CHANNEL_ID}, BOT_AUDIT_ID: {cfg.BOT_AUDIT_ID}.")
     
     # Scan existing threads for activity before fully starting other tasks
     await scan_existing_threads() 
@@ -950,15 +821,15 @@ async def on_ready():
     USERS = await get_user_list()
     formatted_users = [f"***{u}***" for u in USERS]
     user_list_msg = f"👥 {len(USERS)} Nutzer online (beim Start): {', '.join(formatted_users) if USERS else 'keine'}"
-    await send_log_message(user_list_msg, target_channel_ids=[LOG_CHANNEL_ID])
+    await send_log_message(user_list_msg, target_channel_ids=[cfg.LOG_CHANNEL_ID])
     logger.info(f"Sent initial user list to log channel: {user_list_msg}")
 
     # Check for existing users in monitored channels and auto-join if enabled
-    if GARMIN_AUTO_JOIN_ENABLED:
-        logger.info(f"Auto-join enabled. Checking monitored channels: {GARMIN_AUTO_JOIN_CHANNELS}")
+    if cfg.GARMIN_AUTO_JOIN_ENABLED:
+        logger.info(f"Auto-join enabled. Checking monitored channels: {cfg.GARMIN_AUTO_JOIN_CHANNELS}")
         guild = bot.get_guild(DISCORD_SERVER_ID)
         if guild:
-            for channel_id in GARMIN_AUTO_JOIN_CHANNELS:
+            for channel_id in cfg.GARMIN_AUTO_JOIN_CHANNELS:
                 channel = guild.get_channel(channel_id)
                 if channel and isinstance(channel, discord.VoiceChannel):
                     # Check if there are non-bot users in the channel
@@ -979,18 +850,18 @@ async def on_ready():
         logger.info("Auto-join disabled, skipping startup channel check")
 
     try:
-        tech_support_forum = bot.get_channel(TECHSUPPORT_CHANNEL_ID) or await bot.fetch_channel(TECHSUPPORT_CHANNEL_ID)
+        tech_support_forum = bot.get_channel(cfg.TECHSUPPORT_CHANNEL_ID) or await bot.fetch_channel(cfg.TECHSUPPORT_CHANNEL_ID)
         if isinstance(tech_support_forum, discord.ForumChannel):
             closed_tag_obj_on_ready = await get_forum_tag_by_name(tech_support_forum, CLOSED_TAG_NAME)
             if not closed_tag_obj_on_ready:
-                await send_log_message(f"⚠️ WICHTIG: Der Tag '{CLOSED_TAG_NAME}' konnte im Forum '{tech_support_forum.name}' (ID: {tech_support_forum.id}) nicht gefunden werden. Die automatische Schließung per Tag funktioniert nicht korrekt.", target_channel_ids=[BOT_AUDIT_ID])
+                await send_log_message(f"⚠️ WICHTIG: Der Tag '{CLOSED_TAG_NAME}' konnte im Forum '{tech_support_forum.name}' (ID: {tech_support_forum.id}) nicht gefunden werden. Die automatische Schließung per Tag funktioniert nicht korrekt.", target_channel_ids=[cfg.BOT_AUDIT_ID])
         elif tech_support_forum:
-            await send_log_message(f"⚠️ Tech-Support-Kanal {TECHSUPPORT_CHANNEL_ID} ('{tech_support_forum.name}') ist kein Forum-Kanal.", target_channel_ids=[BOT_AUDIT_ID])
+            await send_log_message(f"⚠️ Tech-Support-Kanal {cfg.TECHSUPPORT_CHANNEL_ID} ('{tech_support_forum.name}') ist kein Forum-Kanal.", target_channel_ids=[cfg.BOT_AUDIT_ID])
         else:
-            await send_log_message(f"⚠️ Tech-Support-Kanal {TECHSUPPORT_CHANNEL_ID} konnte nicht gefunden werden.", target_channel_ids=[BOT_AUDIT_ID])
+            await send_log_message(f"⚠️ Tech-Support-Kanal {cfg.TECHSUPPORT_CHANNEL_ID} konnte nicht gefunden werden.", target_channel_ids=[cfg.BOT_AUDIT_ID])
     except Exception as e:
         logger.error(f"Fehler bei der initialen Prüfung des Tech-Support-Forums (on_ready): {e}", exc_info=True)
-        await send_log_message(f"⚠️ Fehler bei der initialen Prüfung des Tech-Support-Forums (on_ready): {e}", target_channel_ids=[BOT_AUDIT_ID])
+        await send_log_message(f"⚠️ Fehler bei der initialen Prüfung des Tech-Support-Forums (on_ready): {e}", target_channel_ids=[cfg.BOT_AUDIT_ID])
 
 
 async def get_user_list():
@@ -1000,7 +871,7 @@ async def get_user_list():
         logger.info(f"Successfully fetched guild: {guild.name} (ID: {guild.id})")
         USERS.clear()
         for vc in guild.voice_channels:
-            if vc.id not in HIDDEN_CHANNELS:
+            if vc.id not in cfg.HIDDEN_CHANNELS:
                 # Log the voice channel being processed
                 logger.info(f"Processing voice channel: {vc.name} (ID: {vc.id}), Member count: {len(vc.members)}")
                 for member in vc.members:
@@ -1025,7 +896,7 @@ async def get_user_list():
 
 @bot.hybrid_command(name="close", description="Schließt den aktuellen Support-Thread.")
 async def close(ctx: commands.Context):
-    if not (isinstance(ctx.channel, discord.Thread) and ctx.channel.parent_id == TECHSUPPORT_CHANNEL_ID):
+    if not (isinstance(ctx.channel, discord.Thread) and ctx.channel.parent_id == cfg.TECHSUPPORT_CHANNEL_ID):
         await ctx.send("Dieser Befehl kann nur in einem Support-Thread des Tech-Support-Forums verwendet werden.", ephemeral=True)
         return
     thread = ctx.channel
@@ -1249,7 +1120,7 @@ async def on_message(message: discord.Message):
     # --- New Thread Activity Tracking Logic ---
     if message.guild and message.guild.id == DISCORD_SERVER_ID and \
        isinstance(message.channel, discord.Thread) and \
-       message.channel.parent_id == TECHSUPPORT_CHANNEL_ID:
+       message.channel.parent_id == cfg.TECHSUPPORT_CHANNEL_ID:
         
         thread: discord.Thread = message.channel
         logger.debug(f"Message received in relevant support thread: {thread.name} (ID: {thread.id}) by {message.author.name}")
@@ -1315,7 +1186,7 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
     if before.channel != after.channel and after.channel is not None:
         log_voice_event(member.id, member.name, after.channel.id, after.channel.name, 'join')
         # Garmin auto-join logic
-        if GARMIN_AUTO_JOIN_ENABLED and after.channel.id in GARMIN_AUTO_JOIN_CHANNELS:
+        if cfg.GARMIN_AUTO_JOIN_ENABLED and after.channel.id in cfg.GARMIN_AUTO_JOIN_CHANNELS:
             logger.info(f"User {member.name} joined monitored channel {after.channel.name} (ID: {after.channel.id})")
             if not garmin_manager.is_connected():
                 max_retries = 3
@@ -1337,7 +1208,7 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
     elif before.channel is not None and before.channel != after.channel:
         log_voice_event(member.id, member.name, before.channel.id, before.channel.name, 'leave')
         # Garmin auto-leave logic
-        if GARMIN_AUTO_JOIN_ENABLED and before.channel.id in GARMIN_AUTO_JOIN_CHANNELS:
+        if cfg.GARMIN_AUTO_JOIN_ENABLED and before.channel.id in cfg.GARMIN_AUTO_JOIN_CHANNELS:
             remaining_users = [m for m in before.channel.members if not m.bot]
             if (not remaining_users and 
                 garmin_manager.is_connected() and 
@@ -1816,15 +1687,14 @@ PURGE_OLDER_THAN_DAYS = 7 # Default value, will be configurable
 
 @tasks.loop(hours=24)
 async def msg_purge_task():
-    global PURGE_OLDER_THAN_DAYS
-    target_ids_task_log = [BOT_AUDIT_ID] if BOT_AUDIT_ID else []
+    target_ids_task_log = [cfg.BOT_AUDIT_ID] if cfg.BOT_AUDIT_ID else []
 
-    purge_cutoff_date = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=PURGE_OLDER_THAN_DAYS)
+    purge_cutoff_date = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=cfg.PURGE_OLDER_THAN_DAYS)
 
     def is_older_than_cutoff(message):
         return message.created_at < purge_cutoff_date
 
-    channels_to_purge_ids = [LOG_CHANNEL_ID, BOT_AUDIT_ID]
+    channels_to_purge_ids = [cfg.LOG_CHANNEL_ID, cfg.BOT_AUDIT_ID]
 
     for channel_id in channels_to_purge_ids:
         if not channel_id:
@@ -1844,20 +1714,20 @@ async def msg_purge_task():
              continue
 
 
-        await send_log_message(f"🔄 Starting daily purge in channel {channel_to_purge_obj.mention} (ID: {channel_id}) for messages older than {PURGE_OLDER_THAN_DAYS} days (before {purge_cutoff_date.strftime('%Y-%m-%d %H:%M:%S UTC')}).", target_channel_ids=target_ids_task_log)
+        await send_log_message(f"🔄 Starting daily purge in channel {channel_to_purge_obj.mention} (ID: {channel_id}) for messages older than {cfg.PURGE_OLDER_THAN_DAYS} days (before {purge_cutoff_date.strftime('%Y-%m-%d %H:%M:%S UTC')}).", target_channel_ids=target_ids_task_log)
         try:
             # Note: purge() can only bulk-delete messages up to 14 days old.
             # This logic will work for PURGE_OLDER_THAN_DAYS <= 14.
             # For messages older than 14 days, they need to be deleted individually, which is much slower.
             # The current implementation relies on the bulk purge behavior.
-            if PURGE_OLDER_THAN_DAYS > 14:
-                 await send_log_message(f"⚠️ Daily Purge: Configured purge duration ({PURGE_OLDER_THAN_DAYS} days) is > 14 days. The bot can only bulk-delete messages up to 14 days old. Purging will be ineffective for older messages.", target_channel_ids=target_ids_task_log)
+            if cfg.PURGE_OLDER_THAN_DAYS > 14:
+                 await send_log_message(f"⚠️ Daily Purge: Configured purge duration ({cfg.PURGE_OLDER_THAN_DAYS} days) is > 14 days. The bot can only bulk-delete messages up to 14 days old. Purging will be ineffective for older messages.", target_channel_ids=target_ids_task_log)
 
             deleted_messages = await channel_to_purge_obj.purge(limit=None, check=is_older_than_cutoff, bulk=True)
             if deleted_messages:
                 await send_log_message(f"🗑️ Daily Purge: {len(deleted_messages)} messages deleted in {channel_to_purge_obj.mention}.", target_channel_ids=target_ids_task_log)
             else:
-                await send_log_message(f"ℹ️ Daily Purge: No messages found in {channel_to_purge_obj.mention} that matched the criteria (older than {PURGE_OLDER_THAN_DAYS} days and within the last 14 days).", target_channel_ids=target_ids_task_log)
+                await send_log_message(f"ℹ️ Daily Purge: No messages found in {channel_to_purge_obj.mention} that matched the criteria (older than {cfg.PURGE_OLDER_THAN_DAYS} days and within the last 14 days).", target_channel_ids=target_ids_task_log)
         except discord.Forbidden:
             await send_log_message(f"⚠️ Daily Purge: No permission to delete messages in {channel_to_purge_obj.mention}.", target_channel_ids=target_ids_task_log)
         except discord.HTTPException as e:

@@ -59,6 +59,63 @@
                 </select>
             </div>
 
+            <div class="form-group">
+                <label for="log_level">Log Level</label>
+                <select name="log_level" id="log_level">
+                    <option value="DEBUG" {% if current_settings.get('LOG_LEVEL') == 'DEBUG' %}selected{% endif %}>DEBUG</option>
+                    <option value="INFO" {% if current_settings.get('LOG_LEVEL') == 'INFO' %}selected{% endif %}>INFO</option>
+                    <option value="WARNING" {% if current_settings.get('LOG_LEVEL') == 'WARNING' %}selected{% endif %}>WARNING</option>
+                    <option value="ERROR" {% if current_settings.get('LOG_LEVEL') == 'ERROR' %}selected{% endif %}>ERROR</option>
+                    <option value="CRITICAL" {% if current_settings.get('LOG_LEVEL') == 'CRITICAL' %}selected{% endif %}>CRITICAL</option>
+                </select>
+            </div>
+
+            <h2>Garmin Recorder Settings</h2>
+            <!-- STT Enabled -->
+            <div class="form-group">
+                <label for="stt_enabled">STT Enabled</label>
+                <select name="stt_enabled" id="stt_enabled">
+                    <option value="true" {% if current_settings.get('STT_ENABLED') == 'true' %}selected{% endif %}>True</option>
+                    <option value="false" {% if current_settings.get('STT_ENABLED') == 'false' %}selected{% endif %}>False</option>
+                </select>
+            </div>
+            <!-- STT Engine -->
+            <div class="form-group">
+                <label for="stt_engine">STT Engine</label>
+                <select name="stt_engine" id="stt_engine">
+                    <option value="google" {% if current_settings.get('STT_ENGINE') == 'google' %}selected{% endif %}>Google</option>
+                    <option value="vosk" {% if current_settings.get('STT_ENGINE') == 'vosk' %}selected{% endif %}>Vosk</option>
+                </select>
+            </div>
+            <!-- Vosk Model Path -->
+            <div class="form-group">
+                <label for="vosk_model_path">Vosk Model Path</label>
+                <input type="text" name="vosk_model_path" id="vosk_model_path" value="{{ current_settings.get('VOSK_MODEL_PATH', '') }}">
+            </div>
+            <!-- Garmin Auto Join Enabled -->
+            <div class="form-group">
+                <label for="garmin_auto_join_enabled">Garmin Auto Join Enabled</label>
+                <select name="garmin_auto_join_enabled" id="garmin_auto_join_enabled">
+                    <option value="true" {% if current_settings.get('GARMIN_AUTO_JOIN_ENABLED') == 'true' %}selected{% endif %}>True</option>
+                    <option value="false" {% if current_settings.get('GARMIN_AUTO_JOIN_ENABLED') == 'false' %}selected{% endif %}>False</option>
+                </select>
+            </div>
+            <!-- Garmin Auto Join Channels -->
+            <div class="form-group">
+                <label for="garmin_auto_join_channels">Garmin Auto Join Channels (comma-separated IDs)</label>
+                <input type="text" name="garmin_auto_join_channels" id="garmin_auto_join_channels" value="{{ current_settings.get('GARMIN_AUTO_JOIN_CHANNELS', '') }}">
+            </div>
+            <!-- Garmin Record Seconds -->
+            <div class="form-group">
+                <label for="garmin_record_seconds">Garmin Record Seconds</label>
+                <input type="number" name="garmin_record_seconds" id="garmin_record_seconds" value="{{ current_settings.get('GARMIN_RECORD_SECONDS', '600') }}" min="1" style="width: 100px;">
+            </div>
+            <!-- Garmin Max Recording Duration -->
+            <div class="form-group">
+                <label for="garmin_max_recording_duration">Garmin Max Recording Duration</label>
+                <input type="number" name="garmin_max_recording_duration" id="garmin_max_recording_duration" value="{{ current_settings.get('GARMIN_MAX_RECORDING_DURATION', '3600') }}" min="1" style="width: 100px;">
+            </div>
+
             <h2>Timer settings</h2>
             <!-- Purge Older Than Days -->
             <div class="form-group">
