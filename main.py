@@ -1292,28 +1292,44 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
         logger.info(f"User {member.name} joined monitored channel {after.channel.name} (ID: {after.channel.id})")
         
         # Check if bot is already in a voice channel
-        if garmin_manager.vc and garmin_manager.vc.is_connected():
+        if garmin_manager.is_connected():
             logger.info("Bot is already connected to a voice channel, skipping auto-join")
             return
         
-        # Join the channel
-        try:
-            await garmin_manager.join_channel(after.channel)
-            logger.info(f"Auto-joined channel {after.channel.name} due to user {member.name} joining")
-        except Exception as e:
-            logger.error(f"Failed to auto-join channel {after.channel.name}: {e}")
+        # Join the channel with retry logic
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                await garmin_manager.join_channel(after.channel)
+                logger.info(f"Auto-joined channel {after.channel.name} due to user {member.name} joining")
+                break
+            except Exception as e:
+                logger.error(f"Failed to auto-join channel {after.channel.name} (attempt {attempt + 1}/{max_retries}): {e}")
+                if attempt < max_retries - 1:
+                    # Wait before retry
+                    await asyncio.sleep(1.0)
+                else:
+                    logger.error(f"Failed to auto-join channel {after.channel.name} after {max_retries} attempts")
     
     # Check if user left a monitored channel and no other users remain
     elif before.channel and before.channel.id in GARMIN_AUTO_JOIN_CHANNELS and (not after.channel or after.channel.id not in GARMIN_AUTO_JOIN_CHANNELS):
         # Check if any non-bot users remain in the channel
         remaining_users = [m for m in before.channel.members if not m.bot]
         
-        if not remaining_users and garmin_manager.vc and garmin_manager.vc.is_connected():
+        # Only leave if the bot is actually in this specific channel and no users remain
+        if (not remaining_users and 
+            garmin_manager.is_connected() and 
+            garmin_manager.vc and 
+            garmin_manager.vc.channel and 
+            garmin_manager.vc.channel.id == before.channel.id):
+            
             logger.info(f"All users left channel {before.channel.name}, leaving voice channel")
             try:
                 await garmin_manager.leave_channel()
             except Exception as e:
                 logger.error(f"Failed to leave channel {before.channel.name}: {e}")
+        elif not remaining_users:
+            logger.debug(f"Users left channel {before.channel.name}, but bot is not in this channel - staying put")
 
 @bot.hybrid_command(name="viewlogs", description="Zeigt die letzten 10 Benutzer-Join-Events an (nur für Admins).")
 @commands.has_permissions(administrator=True)
@@ -1572,7 +1588,7 @@ async def garmin_autojoin(ctx: commands.Context):
         )
     
     # Current connection status
-    if garmin_manager.vc and garmin_manager.vc.is_connected():
+    if garmin_manager.is_connected():
         current_channel = garmin_manager.vc.channel
         embed.add_field(
             name="Current Connection",
