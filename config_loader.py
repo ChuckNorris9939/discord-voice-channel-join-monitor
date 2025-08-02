@@ -7,7 +7,8 @@ from typing import Optional, List
 logger = logging.getLogger("discord_bot.config")
 
 # --- Database Path ---
-CONFIG_DIR = "config"
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_DIR = os.path.join(SCRIPT_DIR, "config")
 DATABASE_NAME = "user_log.db"
 DATABASE_PATH = os.path.join(CONFIG_DIR, DATABASE_NAME)
 

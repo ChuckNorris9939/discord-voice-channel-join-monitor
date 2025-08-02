@@ -69,10 +69,16 @@ BUFFER_MONITOR_INTERVAL: Final[float] = float(os.getenv("GARMIN_BUFFER_MONITOR_I
 MAX_RECORDING_ERRORS: Final[int] = int(os.getenv("GARMIN_MAX_RECORDING_ERRORS", "5"))
 
 # --------------------------------------------------
+# Path configuration
+# --------------------------------------------------
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+SOUNDS_DIR = os.path.join(SCRIPT_DIR, "sounds")
+
+# --------------------------------------------------
 # Trigger phrase detection
 # --------------------------------------------------
-SOUND_DING      = "sounds/garmin_ding.wav"
-SOUND_DINGDING  = "sounds/garmin_dingding.wav"
+SOUND_DING       = os.path.join(SOUNDS_DIR, "garmin_ding.wav")
+SOUND_DINGDING  = os.path.join(SOUNDS_DIR, "garmin_dingding.wav")
 
 TRIGGERS = [
     {  # wake word
@@ -105,7 +111,7 @@ WINDOW_BYTES_MAX: Final[int] = int(RECOGNITION_WINDOW_S * SAMPLERATE * CHANNELS 
 WINDOW_BYTES_MIN: Final[int] = int(MIN_WINDOW_S * SAMPLERATE * CHANNELS * BYTES_PER_SAMPLE)
 
 PROCESS_INTERVAL_S: Final[float] = 1.0
-OUTPUT_DIR: Final[str] = "garmin-output"
+OUTPUT_DIR: Final[str] = os.path.join(SCRIPT_DIR, "garmin-output")
 
 
 class GarminVoiceManager:
