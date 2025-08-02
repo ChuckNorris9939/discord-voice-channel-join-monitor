@@ -271,7 +271,7 @@ def settings_route():
         current_dir = os.getcwd()
         logger.debug(f"Flask server working directory: {current_dir}")
         
-        vosk_model_dir = Path("vosk-model")
+        vosk_model_dir = Path(os.path.join(SCRIPT_DIR, "vosk-model"))
         logger.debug(f"Looking for vosk-model directory: {vosk_model_dir.absolute()}")
         logger.debug(f"Directory exists: {vosk_model_dir.exists()}")
         logger.debug(f"Is directory: {vosk_model_dir.is_dir()}")
@@ -627,7 +627,7 @@ LOG_CHANNEL_ID = 0
 BOT_AUDIT_ID = 0
 HIDDEN_CHANNELS = []
 USERS: List[str] = []
-IMAGES_FOLDER = "images"
+IMAGES_FOLDER = os.path.join(SCRIPT_DIR, "images")
 GARMIN_AUTO_JOIN_ENABLED = False
 GARMIN_AUTO_JOIN_CHANNELS = []
 
@@ -973,7 +973,7 @@ def update_thread_reminder_sent(thread_id: int, timestamp_iso: str):
 
 # --------- Helper Functions for bot_settings Table ---------
 import config_loader as cfg
-from config_loader import save_setting, DB_KEY_APP_TESTING_MODE, DB_KEY_HIDDEN_CHANNELS, DB_KEY_LOG_CHANNEL_ID, DB_KEY_BOT_AUDIT_ID, DB_KEY_TECHSUPPORT_CHANNEL_ID, DB_KEY_AFK_CHANNEL_ID, DB_KEY_PURGE_OLDER_THAN_DAYS, DB_KEY_JOIN_MESSAGE_TIMER_ENABLED, DB_KEY_JOIN_MESSAGE_TIMER_MINUTES, DB_KEY_AFK_TIMER_MINUTES, DB_KEY_STT_ENABLED, DB_KEY_STT_ENGINE, DB_KEY_VOSK_MODEL_PATH, DB_KEY_GARMIN_AUTO_JOIN_ENABLED, DB_KEY_GARMIN_AUTO_JOIN_CHANNELS, DB_KEY_GARMIN_RECORD_SECONDS, DB_KEY_GARMIN_MAX_RECORDING_DURATION, DB_KEY_LOG_LEVEL, DB_KEY_DISCORD_LOG_LEVEL
+from config_loader import save_setting, DB_KEY_APP_TESTING_MODE, DB_KEY_HIDDEN_CHANNELS, DB_KEY_LOG_CHANNEL_ID, DB_KEY_BOT_AUDIT_ID, DB_KEY_TECHSUPPORT_CHANNEL_ID, DB_KEY_AFK_CHANNEL_ID, DB_KEY_PURGE_OLDER_THAN_DAYS, DB_KEY_JOIN_MESSAGE_TIMER_ENABLED, DB_KEY_JOIN_MESSAGE_TIMER_MINUTES, DB_KEY_AFK_TIMER_MINUTES, DB_KEY_STT_ENABLED, DB_KEY_STT_ENGINE, DB_KEY_VOSK_MODEL_PATH, DB_KEY_GARMIN_AUTO_JOIN_ENABLED, DB_KEY_GARMIN_AUTO_JOIN_CHANNELS, DB_KEY_GARMIN_RECORD_SECONDS, DB_KEY_GARMIN_MAX_RECORDING_DURATION, DB_KEY_GARMIN_STT_OUTPUT_ENABLED, DB_KEY_LOG_LEVEL, DB_KEY_DISCORD_LOG_LEVEL
 
 
 
