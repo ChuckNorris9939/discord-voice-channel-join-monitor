@@ -1115,12 +1115,12 @@ async def on_ready():
             logger.error(f"WICHTIG: Fehler beim Überprüfen des {cname}-Kanals (ID: {cid}): {e_ch_check}", exc_info=True)
 
     try:
-        guild_obj = discord.Object(id=DISCORD_SERVER_ID)
-        synced_commands = await bot.tree.sync(guild=guild_obj)
+        # Sync commands globally instead of to a specific guild
+        synced_commands = await bot.tree.sync()
         num_synced = len(synced_commands) if synced_commands else 0
         command_names = [cmd.name for cmd in synced_commands] if synced_commands else []
         
-        logger.info(f"{num_synced} Befehle für Guild {DISCORD_SERVER_ID} synchronisiert: {command_names}")
+        logger.info(f"{num_synced} Befehle global synchronisiert: {command_names}")
         # logger.info(f"Aktuelle App‑Commands im Tree:", [c.name for c in bot.tree.get_commands()])
 
 
@@ -1134,7 +1134,7 @@ async def on_ready():
                 f"✅ Bot version {BOT_VERSION} gestartet und einsatzbereit.",
                 target_channel_ids=[cfg.LOG_CHANNEL_ID, cfg.BOT_AUDIT_ID]
             )
-        sync_info_msg = f"{num_synced} Befehle für Guild {DISCORD_SERVER_ID} synchronisiert: {command_names}"
+        sync_info_msg = f"{num_synced} Befehle global synchronisiert: {command_names}"
         await send_log_message(
             f"ℹ️ {sync_info_msg}",
             target_channel_ids=[cfg.BOT_AUDIT_ID]
@@ -1146,6 +1146,15 @@ async def on_ready():
             f"⚠️ Bot gestartet, aber Fehler beim Synchronisieren der Befehle: {e}",
             target_channel_ids=[cfg.LOG_CHANNEL_ID, cfg.BOT_AUDIT_ID]
         )
+
+    # Initialize garmin_manager after bot is ready
+    global garmin_manager
+    try:
+        garmin_manager = GarminVoiceManager(bot)
+        logger.info("GarminVoiceManager initialized successfully")
+    except Exception as e:
+        logger.error(f"Failed to initialize GarminVoiceManager: {e}", exc_info=True)
+        garmin_manager = None
 
     if not msg_purge_task.is_running():
         msg_purge_task.start()
@@ -1209,9 +1218,12 @@ async def on_ready():
                     if non_bot_users:
                         logger.info(f"Found {len(non_bot_users)} users in monitored channel {channel.name} (ID: {channel_id}), auto-joining")
                         try:
-                            await garmin_manager.join_channel(channel)
-                            logger.info(f"Successfully auto-joined channel {channel.name} on startup")
-                            break  # Only join the first channel with users
+                            if garmin_manager is not None:
+                                await garmin_manager.join_channel(channel)
+                                logger.info(f"Successfully auto-joined channel {channel.name} on startup")
+                                break  # Only join the first channel with users
+                            else:
+                                logger.warning("Garmin manager not available for auto-join")
                         except Exception as e:
                             logger.error(f"Failed to auto-join channel {channel.name} on startup: {e}")
                     else:
@@ -1558,7 +1570,7 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
     if before.channel != after.channel and after.channel is not None:
         log_voice_event(member.id, member.name, after.channel.id, after.channel.name, 'join')
         # Garmin auto-join logic
-        if cfg.GARMIN_AUTO_JOIN_ENABLED and after.channel.id in cfg.GARMIN_AUTO_JOIN_CHANNELS:
+        if cfg.GARMIN_AUTO_JOIN_ENABLED and after.channel.id in cfg.GARMIN_AUTO_JOIN_CHANNELS and garmin_manager is not None:
             logger.info(f"User {member.name} joined monitored channel {after.channel.name} (ID: {after.channel.id})")
             if not garmin_manager.is_connected():
                 max_retries = 3
@@ -1580,7 +1592,7 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
     elif before.channel is not None and before.channel != after.channel:
         log_voice_event(member.id, member.name, before.channel.id, before.channel.name, 'leave')
         # Garmin auto-leave logic
-        if cfg.GARMIN_AUTO_JOIN_ENABLED and before.channel.id in cfg.GARMIN_AUTO_JOIN_CHANNELS:
+        if cfg.GARMIN_AUTO_JOIN_ENABLED and before.channel.id in cfg.GARMIN_AUTO_JOIN_CHANNELS and garmin_manager is not None:
             remaining_users = [m for m in before.channel.members if not m.bot]
             if (not remaining_users and 
                 garmin_manager.is_connected() and 
@@ -1752,11 +1764,16 @@ async def send_summarized_join_message(channel_id: int):
 
 from garmin_voice import GarminVoiceManager
 
-garmin_manager = GarminVoiceManager(bot)
+# Global variable for garmin_manager - will be initialized in on_ready
+garmin_manager = None
 
 @bot.hybrid_command(name="garmin_start", description="Starts the Garmin voice recording.")
 @commands.guild_only()
 async def start_garmin(ctx: commands.Context):
+    if garmin_manager is None:
+        await ctx.send("❌ Garmin voice system is not available. Please contact an administrator.")
+        return
+    
     if ctx.author.voice:
         await garmin_manager.join_channel(ctx.author.voice.channel)
         await ctx.send("Garmin voice recording started.")
@@ -1766,12 +1783,20 @@ async def start_garmin(ctx: commands.Context):
 @bot.hybrid_command(name="garmin_stop", description="Stops the Garmin voice recording.")
 @commands.guild_only()
 async def stop_garmin(ctx: commands.Context):
+    if garmin_manager is None:
+        await ctx.send("❌ Garmin voice system is not available. Please contact an administrator.")
+        return
+    
     await garmin_manager.leave_channel()
     await ctx.send("Garmin voice recording stopped.")
 
 @bot.hybrid_command(name="garmin_save", description="Saves the Garmin voice recording.")
 @commands.guild_only()
 async def save_garmin(ctx: commands.Context):
+    if garmin_manager is None:
+        await ctx.send("❌ Garmin voice system is not available. Please contact an administrator.")
+        return
+    
     try:
         health_data = garmin_manager.get_recording_health()
         
@@ -1790,6 +1815,10 @@ async def save_garmin(ctx: commands.Context):
 @bot.hybrid_command(name="garmin_health", description="Shows the health status of the Garmin voice recording system.")
 @commands.guild_only()
 async def garmin_health(ctx: commands.Context):
+    if garmin_manager is None:
+        await ctx.send("❌ Garmin voice system is not available. Please contact an administrator.")
+        return
+    
     health_data = garmin_manager.get_recording_health()
     
     embed = discord.Embed(
@@ -1971,7 +2000,7 @@ async def garmin_autojoin(ctx: commands.Context, action: str = "status"):
         )
     
     # Current connection status
-    if garmin_manager.is_connected():
+    if garmin_manager is not None and garmin_manager.is_connected():
         current_channel = garmin_manager.vc.channel
         embed.add_field(
             name="Current Connection",
