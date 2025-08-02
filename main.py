@@ -32,7 +32,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_DIR = os.path.join(SCRIPT_DIR, "config")
 DATABASE_NAME = "user_log.db"
 DATABASE_PATH = os.path.join(CONFIG_DIR, DATABASE_NAME)
-GARMIN_OUTPUT_DIR = os.path.join(SCRIPT_DIR, "garmin-output")
+GARMIN_OUTPUT_DIR = os.path.join(SCRIPT_DIR, "data", "garmin-output")
 
 # --------- Logging ---------
 import logging
@@ -233,7 +233,7 @@ def settings_route():
             # Handle Garmin Recorder Settings
             save_setting(DB_KEY_STT_ENABLED, request.form.get('stt_enabled', 'true'))
             save_setting(DB_KEY_STT_ENGINE, request.form.get('stt_engine', 'google'))
-            save_setting(DB_KEY_VOSK_MODEL_PATH, request.form.get('vosk_model_path', 'vosk-model/vosk-model-de-0.21/'))
+            save_setting(DB_KEY_VOSK_MODEL_PATH, request.form.get('vosk_model_path', 'assets/models/vosk-model-de-0.21/'))
             save_setting(DB_KEY_GARMIN_AUTO_JOIN_ENABLED, request.form.get('garmin_auto_join_enabled', 'true'))
             save_setting(DB_KEY_GARMIN_AUTO_JOIN_CHANNELS, request.form.get('garmin_auto_join_channels', '1080202313211326584,571755941725208616,492036470681632778'))
             save_setting(DB_KEY_GARMIN_RECORD_SECONDS, request.form.get('garmin_record_seconds', '600'))
@@ -271,13 +271,13 @@ def settings_route():
         current_dir = os.getcwd()
         logger.debug(f"Flask server working directory: {current_dir}")
         
-        vosk_model_dir = Path(os.path.join(SCRIPT_DIR, "vosk-model"))
+        vosk_model_dir = Path(os.path.join(SCRIPT_DIR, "assets", "models"))
         logger.debug(f"Looking for vosk-model directory: {vosk_model_dir.absolute()}")
         logger.debug(f"Directory exists: {vosk_model_dir.exists()}")
         logger.debug(f"Is directory: {vosk_model_dir.is_dir()}")
         
         if vosk_model_dir.exists() and vosk_model_dir.is_dir():
-            # Check if there are subdirectories (like vosk-model-de, vosk-model-en, etc.)
+            # Check if there are subdirectories (like vosk-model-de-0.21, vosk-model-en, etc.)
             subdirs = [item for item in vosk_model_dir.iterdir() if item.is_dir()]
             logger.debug(f"Found subdirectories: {[str(item) for item in subdirs]}")
             
@@ -302,9 +302,9 @@ def settings_route():
             logger.debug(f"Final sorted list: {vosk_models}")
             logger.info(f"Found {len(vosk_models)} Vosk models: {vosk_models}")
         else:
-            logger.warning("vosk-model directory not found")
+            logger.warning("assets/models directory not found")
     except Exception as e:
-        logger.error(f"Error scanning vosk-model directory: {e}", exc_info=True)
+        logger.error(f"Error scanning assets/models directory: {e}", exc_info=True)
 
     current_settings_display = {}
     
@@ -627,7 +627,7 @@ LOG_CHANNEL_ID = 0
 BOT_AUDIT_ID = 0
 HIDDEN_CHANNELS = []
 USERS: List[str] = []
-IMAGES_FOLDER = os.path.join(SCRIPT_DIR, "images")
+IMAGES_FOLDER = os.path.join(SCRIPT_DIR, "assets", "images")
 GARMIN_AUTO_JOIN_ENABLED = False
 GARMIN_AUTO_JOIN_CHANNELS = []
 

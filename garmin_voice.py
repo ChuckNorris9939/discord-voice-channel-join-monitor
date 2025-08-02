@@ -72,7 +72,8 @@ MAX_RECORDING_ERRORS: Final[int] = int(os.getenv("GARMIN_MAX_RECORDING_ERRORS", 
 # Path configuration
 # --------------------------------------------------
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-SOUNDS_DIR = os.path.join(SCRIPT_DIR, "sounds")
+SOUNDS_DIR = os.path.join(SCRIPT_DIR, "assets", "sounds")
+TEMP_DIR = os.path.join(SCRIPT_DIR, "data", "temp")
 
 # --------------------------------------------------
 # Trigger phrase detection
@@ -111,7 +112,7 @@ WINDOW_BYTES_MAX: Final[int] = int(RECOGNITION_WINDOW_S * SAMPLERATE * CHANNELS 
 WINDOW_BYTES_MIN: Final[int] = int(MIN_WINDOW_S * SAMPLERATE * CHANNELS * BYTES_PER_SAMPLE)
 
 PROCESS_INTERVAL_S: Final[float] = 1.0
-OUTPUT_DIR: Final[str] = os.path.join(SCRIPT_DIR, "garmin-output")
+OUTPUT_DIR: Final[str] = os.path.join(SCRIPT_DIR, "data", "garmin-output")
 
 
 class GarminVoiceManager:
@@ -163,6 +164,7 @@ class GarminVoiceManager:
         self.audio_pipeline_healthy: bool = True
 
         os.makedirs(OUTPUT_DIR, exist_ok=True)
+        os.makedirs(TEMP_DIR, exist_ok=True)
         self.vc: voice_recv.VoiceRecvClient | None = None
 
     # ------------------------- Discord voice callbacks -------------------------
@@ -305,7 +307,7 @@ class GarminVoiceManager:
             else:  # Google
                 import concurrent.futures, socket
                 socket.setdefaulttimeout(8)
-                tmp_path = os.path.join(OUTPUT_DIR, f"temp_{int(time.time()*1000)}.wav")
+                tmp_path = os.path.join(TEMP_DIR, f"temp_{int(time.time()*1000)}.wav")
                 with wave.open(tmp_path, "wb") as wf:
                     wf.setnchannels(CHANNELS)
                     wf.setsampwidth(BYTES_PER_SAMPLE)
