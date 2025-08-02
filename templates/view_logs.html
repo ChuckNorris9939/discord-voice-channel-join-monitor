@@ -3,145 +3,255 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>User Join Logs</title>
+    <title>📊 User Join Logs</title>
     <style>
-        body { 
-            font-family: Arial, sans-serif; 
-            margin: 20px; 
-            background-color: #1a1a1a; 
-            color: #e0e0e0; 
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
         }
-        h1 { 
-            color: #ffffff; 
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            color: #e0e0e0;
+            min-height: 100vh;
+            padding: 20px;
         }
-        table { 
-            width: 100%; 
-            border-collapse: collapse; 
-            margin-top: 20px; 
-            background-color: #2d2d2d; 
-            box-shadow: 0 4px 8px rgba(0,0,0,0.3); 
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: rgba(45, 45, 45, 0.95);
+            border-radius: 12px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
             border: 1px solid #404040;
+            overflow: hidden;
         }
-        th, td { 
-            border: 1px solid #555; 
-            padding: 10px 12px; 
-            text-align: left; 
+
+        .header {
+            background: linear-gradient(90deg, #2c3e50, #34495e);
+            padding: 20px;
+            text-align: center;
+            border-bottom: 2px solid #3498db;
         }
-        th { 
-            background-color: #404040; 
-            color: #ffffff; 
-            font-weight: bold;
-        }
-        tr:nth-child(even) { 
-            background-color: #363636; 
-        }
-        tr:nth-child(odd) { 
-            background-color: #2d2d2d; 
-        }
-        tr:hover { 
-            background-color: #404040; 
-        }
-        .container { 
-            max-width: 1200px; 
-            margin: auto; 
-            padding: 20px; 
-            background-color: #2d2d2d; 
-            border-radius: 8px; 
-            box-shadow: 0 4px 8px rgba(0,0,0,0.3); 
-            border: 1px solid #404040;
-        }
-        form {
-            margin-bottom: 20px;
-        }
-        label {
+
+        .header h1 {
             color: #ffffff;
-            margin-right: 10px;
+            font-size: 3em;
+            margin-bottom: 15px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
         }
-        input[type="text"] {
-            padding: 5px 10px;
+
+        .content {
+            padding: 25px;
+        }
+
+        .back-button {
+            background: linear-gradient(135deg, #3498db, #2980b9);
+            color: white;
+            padding: 12px 24px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 16px;
+            transition: all 0.3s ease;
+            display: inline-block;
+            margin-bottom: 25px;
+        }
+
+        .back-button:hover {
+            background: linear-gradient(135deg, #2980b9, #1f5f8b);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(52, 152, 219, 0.4);
+        }
+
+        .filter-form {
+            background: rgba(52, 73, 94, 0.2);
+            border-radius: 10px;
+            padding: 20px;
+            border: 1px solid #404040;
+            margin-bottom: 25px;
+        }
+
+        .filter-form label {
+            color: #ffffff;
+            margin-right: 12px;
+            font-weight: 600;
+            font-size: 16px;
+        }
+
+        .filter-form input[type="text"] {
+            padding: 10px 15px;
             border: 1px solid #555;
-            border-radius: 4px;
+            border-radius: 8px;
             background-color: #404040;
             color: #e0e0e0;
+            margin-right: 12px;
+            font-size: 16px;
         }
-        input[type="text"]:focus {
+
+        .filter-form input[type="text"]:focus {
             outline: none;
-            border-color: #007bff;
-            box-shadow: 0 0 5px rgba(0,123,255,0.3);
+            border-color: #3498db;
+            box-shadow: 0 0 5px rgba(52, 152, 219, 0.3);
         }
-        input[type="submit"] {
-            padding: 5px 10px;
-            margin-left: 10px;
-            background-color: #007bff;
+
+        .filter-button {
+            background: linear-gradient(135deg, #27ae60, #229954);
             color: white;
             border: none;
-            border-radius: 4px;
+            padding: 10px 20px;
+            border-radius: 8px;
             cursor: pointer;
-            transition: background-color 0.3s;
+            font-weight: 600;
+            font-size: 16px;
+            transition: all 0.3s ease;
         }
-        input[type="submit"]:hover {
-            background-color: #0056b3;
+
+        .filter-button:hover {
+            background: linear-gradient(135deg, #229954, #1e8449);
+            transform: translateY(-1px);
         }
-        a {
-            margin-left: 10px;
+
+        .clear-filter {
+            color: #3498db;
             text-decoration: none;
-            color: #007bff;
+            margin-left: 10px;
+            font-weight: 500;
         }
-        a:hover {
-            color: #0056b3;
+
+        .clear-filter:hover {
+            color: #2980b9;
         }
-        p {
-            color: #cccccc;
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background-color: rgba(52, 73, 94, 0.2);
+            border-radius: 10px;
+            overflow: hidden;
+            border: 1px solid #404040;
         }
-        strong {
+
+        th, td {
+            border: 1px solid #404040;
+            padding: 15px 18px;
+            text-align: left;
+            font-size: 16px;
+        }
+
+        th {
+            background: linear-gradient(135deg, #34495e, #2c3e50);
             color: #ffffff;
+            font-weight: 600;
+            font-size: 1.1em;
+        }
+
+        tr:nth-child(even) {
+            background-color: rgba(52, 73, 94, 0.1);
+        }
+
+        tr:nth-child(odd) {
+            background-color: rgba(52, 73, 94, 0.05);
+        }
+
+        tr:hover {
+            background-color: rgba(52, 152, 219, 0.1);
+        }
+
+        .no-logs {
+            text-align: center;
+            color: #aaaaaa;
+            font-style: italic;
+            margin-top: 50px;
+            padding: 40px;
+        }
+
+        .filter-info {
+            background: rgba(52, 152, 219, 0.1);
+            border: 1px solid #3498db;
+            border-radius: 6px;
+            padding: 10px 15px;
+            margin-bottom: 20px;
+            color: #3498db;
+        }
+
+        .filter-info strong {
+            color: #ffffff;
+        }
+
+        @media (max-width: 768px) {
+            .header h1 {
+                font-size: 2em;
+            }
+            
+            table {
+                font-size: 0.9em;
+            }
+            
+            th, td {
+                padding: 8px 10px;
+            }
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>User Join Logs</h1>
+        <div class="header">
+            <h1>📊 User Join Logs</h1>
+        </div>
 
-        <form method="GET" action="{{ url_for('view_join_logs_page') }}" style="margin-bottom: 20px;">
-            <label for="username_filter" style="margin-right: 10px;">Filter by Username:</label>
-            <input type="text" id="username_filter" name="username_filter" value="{{ current_filter_username or '' }}" placeholder="Enter username">
-            <input type="submit" value="Filter" style="padding: 5px 10px; margin-left: 10px;">
-            {% if current_filter_username %}
-                <a href="{{ url_for('view_join_logs_page') }}" style="margin-left: 10px; text-decoration: none; color: #007bff;">Clear Filter</a>
-            {% endif %}
-        </form>
+        <div class="content">
+            <a href="{{ url_for('home') }}" class="back-button">🔙 Back to Home</a>
 
-        {% if logs %}
+            <form method="GET" action="{{ url_for('view_join_logs_page') }}" class="filter-form">
+                <label for="username_filter">Filter by Username:</label>
+                <input type="text" id="username_filter" name="username_filter" value="{{ current_filter_username or '' }}" placeholder="Enter username">
+                <button type="submit" class="filter-button">🔍 Filter</button>
+                {% if current_filter_username %}
+                    <a href="{{ url_for('view_join_logs_page') }}" class="clear-filter">❌ Clear Filter</a>
+                {% endif %}
+            </form>
+
             {% if current_filter_username %}
-                <p>Showing logs filtered by username: <strong>{{ current_filter_username }}</strong></p>
+                <div class="filter-info">
+                    Showing logs filtered by username: <strong>{{ current_filter_username }}</strong>
+                </div>
             {% endif %}
-            <table>
-                <thead>
-                    <tr>
-                        <th>ID</th>
-                        <th>User ID</th>
-                        <th>Username</th>
-                        <th>Channel ID</th>
-                        <th>Channel Name</th>
-                        <th>Timestamp (UTC)</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for log_entry in logs %}
-                    <tr>
-                        <td>{{ log_entry.id }}</td>
-                        <td>{{ log_entry.user_id }}</td>
-                        <td>{{ log_entry.username }}</td>
-                        <td>{{ log_entry.channel_id }}</td>
-                        <td>{{ log_entry.channel_name }}</td>
-                        <td>{{ log_entry.timestamp }}</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        {% else %}
-            <p>No log entries found.</p>
-        {% endif %}
+
+            {% if logs %}
+                <table>
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>User ID</th>
+                            <th>Username</th>
+                            <th>Channel ID</th>
+                            <th>Channel Name</th>
+                            <th>Timestamp (UTC)</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for log_entry in logs %}
+                        <tr>
+                            <td>{{ log_entry.id }}</td>
+                            <td>{{ log_entry.user_id }}</td>
+                            <td>{{ log_entry.username }}</td>
+                            <td>{{ log_entry.channel_id }}</td>
+                            <td>{{ log_entry.channel_name }}</td>
+                            <td>{{ log_entry.timestamp }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            {% else %}
+                <div class="no-logs">
+                    <h3>No log entries found</h3>
+                    <p>The database is empty or no entries match your filter criteria.</p>
+                </div>
+            {% endif %}
+        </div>
     </div>
 </body>
 </html>
