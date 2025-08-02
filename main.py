@@ -27,9 +27,12 @@ except Exception as e:
     print("   Environment variables will only be loaded from system environment")
 
 BOT_VERSION = "1.15"
-CONFIG_DIR = "config"
+# Get the directory where this script is located
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_DIR = os.path.join(SCRIPT_DIR, "config")
 DATABASE_NAME = "user_log.db"
 DATABASE_PATH = os.path.join(CONFIG_DIR, DATABASE_NAME)
+GARMIN_OUTPUT_DIR = os.path.join(SCRIPT_DIR, "garmin-output")
 
 # --------- Logging ---------
 import logging
@@ -60,6 +63,8 @@ def view_join_logs_page():
     logs = []
     current_filter_username = request.args.get('username_filter', '').strip()
     try:
+        # Use absolute path to ensure database is found regardless of working directory
+        logger.info(f"Connecting to database at: {DATABASE_PATH}")
         conn = sqlite3.connect(DATABASE_PATH)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
@@ -93,7 +98,9 @@ def garmin_recordings_page():
     from pathlib import Path
     
     recordings = []
-    output_dir = Path("garmin-output")
+    # Use absolute path to ensure directory is found regardless of working directory
+    output_dir = Path(GARMIN_OUTPUT_DIR)
+    logger.info(f"Looking for recordings in: {output_dir}")
     
     if output_dir.exists():
         for file_path in output_dir.glob("*.wav"):
@@ -107,11 +114,16 @@ def garmin_recordings_page():
                     'filename': file_path.name,
                     'size_mb': round(file_size / (1024 * 1024), 2),
                     'modified': time.strftime('%d.%m.%Y %H:%M', time.localtime(modified_time)),
+                    'modified_timestamp': modified_time,  # Add timestamp for proper sorting
                     'path': str(file_path)
                 })
+        
+        logger.info(f"Found {len(recordings)} recording files")
+    else:
+        logger.warning(f"Garmin output directory does not exist: {output_dir}")
     
-    # Sort by modification time (newest first)
-    recordings.sort(key=lambda x: x['modified'], reverse=True)
+    # Sort by modification timestamp (newest first)
+    recordings.sort(key=lambda x: x['modified_timestamp'], reverse=True)
     
     return render_template('garmin_recordings.html', recordings=recordings)
 
@@ -121,12 +133,14 @@ def download_recording(filename):
     import os
     from pathlib import Path
     
-    output_dir = Path("garmin-output")
+    # Use absolute path to ensure directory is found regardless of working directory
+    output_dir = Path(GARMIN_OUTPUT_DIR)
     file_path = output_dir / filename
     
     if file_path.exists() and file_path.is_file():
         return send_from_directory(output_dir, filename, as_attachment=True)
     else:
+        logger.warning(f"Recording file not found: {file_path}")
         return "File not found", 404
 
 @app.route('/settings', methods=['GET', 'POST'])
@@ -199,6 +213,7 @@ def settings_route():
 
             # Handle General Settings
             save_setting(DB_KEY_LOG_LEVEL, request.form.get('log_level', 'INFO'))
+            save_setting(DB_KEY_DISCORD_LOG_LEVEL, request.form.get('discord_log_level', 'INFO'))
 
             # Reload settings into global scope
             cfg.load_all_settings()
@@ -688,7 +703,7 @@ def update_thread_reminder_sent(thread_id: int, timestamp_iso: str):
 
 # --------- Helper Functions for bot_settings Table ---------
 import config_loader as cfg
-from config_loader import save_setting, DB_KEY_APP_TESTING_MODE, DB_KEY_HIDDEN_CHANNELS, DB_KEY_LOG_CHANNEL_ID, DB_KEY_BOT_AUDIT_ID, DB_KEY_TECHSUPPORT_CHANNEL_ID, DB_KEY_AFK_CHANNEL_ID, DB_KEY_PURGE_OLDER_THAN_DAYS, DB_KEY_JOIN_MESSAGE_TIMER_ENABLED, DB_KEY_JOIN_MESSAGE_TIMER_MINUTES, DB_KEY_AFK_TIMER_MINUTES, DB_KEY_STT_ENABLED, DB_KEY_STT_ENGINE, DB_KEY_VOSK_MODEL_PATH, DB_KEY_GARMIN_AUTO_JOIN_ENABLED, DB_KEY_GARMIN_AUTO_JOIN_CHANNELS, DB_KEY_GARMIN_RECORD_SECONDS, DB_KEY_GARMIN_MAX_RECORDING_DURATION, DB_KEY_LOG_LEVEL
+from config_loader import save_setting, DB_KEY_APP_TESTING_MODE, DB_KEY_HIDDEN_CHANNELS, DB_KEY_LOG_CHANNEL_ID, DB_KEY_BOT_AUDIT_ID, DB_KEY_TECHSUPPORT_CHANNEL_ID, DB_KEY_AFK_CHANNEL_ID, DB_KEY_PURGE_OLDER_THAN_DAYS, DB_KEY_JOIN_MESSAGE_TIMER_ENABLED, DB_KEY_JOIN_MESSAGE_TIMER_MINUTES, DB_KEY_AFK_TIMER_MINUTES, DB_KEY_STT_ENABLED, DB_KEY_STT_ENGINE, DB_KEY_VOSK_MODEL_PATH, DB_KEY_GARMIN_AUTO_JOIN_ENABLED, DB_KEY_GARMIN_AUTO_JOIN_CHANNELS, DB_KEY_GARMIN_RECORD_SECONDS, DB_KEY_GARMIN_MAX_RECORDING_DURATION, DB_KEY_LOG_LEVEL, DB_KEY_DISCORD_LOG_LEVEL
 
 
 
@@ -1459,11 +1474,20 @@ async def stop_garmin(ctx: commands.Context):
 @bot.hybrid_command(name="garmin_save", description="Saves the Garmin voice recording.")
 @commands.guild_only()
 async def save_garmin(ctx: commands.Context):
-    if ctx.author.voice:
-        garmin_manager.save_recording()
-        await ctx.send("Garmin voice recording saved.")
-    else:
-        await ctx.send("Error saving recording")
+    try:
+        health_data = garmin_manager.get_recording_health()
+        
+        if health_data["connected"] and health_data["buffer_size"] > 0:
+            garmin_manager.save_recording()
+            await ctx.send("✅ Garmin voice recording saved successfully.")
+        else:
+            if not health_data["connected"]:
+                await ctx.send("❌ Not connected to any voice channel. Join a channel first with `!!garmin_start`")
+            else:
+                await ctx.send("❌ No audio data to save. Start recording first with `!!garmin_start`")
+    except Exception as e:
+        logger.error(f"Error in garmin_save command: {e}", exc_info=True)
+        await ctx.send("❌ Error saving recording. Check logs for details.")
 
 @bot.hybrid_command(name="garmin_health", description="Shows the health status of the Garmin voice recording system.")
 @commands.guild_only()

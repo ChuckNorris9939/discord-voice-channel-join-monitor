@@ -71,6 +71,7 @@ DB_KEY_GARMIN_AUTO_JOIN_CHANNELS = "GARMIN_AUTO_JOIN_CHANNELS"
 DB_KEY_GARMIN_RECORD_SECONDS = "GARMIN_RECORD_SECONDS"
 DB_KEY_GARMIN_MAX_RECORDING_DURATION = "GARMIN_MAX_RECORDING_DURATION"
 DB_KEY_LOG_LEVEL = "LOG_LEVEL"
+DB_KEY_DISCORD_LOG_LEVEL = "DISCORD_LOG_LEVEL"
 
 # Original hardcoded default values (pre-database settings)
 DEFAULT_LOG_CHANNEL_ID = 1266773678306230374
@@ -97,9 +98,10 @@ GARMIN_AUTO_JOIN_CHANNELS = []
 GARMIN_RECORD_SECONDS = 600
 GARMIN_MAX_RECORDING_DURATION = 3600
 LOG_LEVEL = 'INFO'
+DISCORD_LOG_LEVEL = 'INFO'
 
 def load_all_settings():
-    global AFK_TIMER_MINUTES, TESTING, BOT_AUDIT_ID, GARMIN_AUTO_JOIN_CHANNELS, GARMIN_AUTO_JOIN_ENABLED, GARMIN_MAX_RECORDING_DURATION, GARMIN_RECORD_SECONDS, HIDDEN_CHANNELS, JOIN_MESSAGE_TIMER_ENABLED, JOIN_MESSAGE_TIMER_MINUTES, LOG_CHANNEL_ID, LOG_LEVEL, PURGE_OLDER_THAN_DAYS, STT_ENABLED, STT_ENGINE, TECHSUPPORT_CHANNEL_ID, VOSK_MODEL_PATH, AFK_CHANNEL_ID
+    global AFK_TIMER_MINUTES, TESTING, BOT_AUDIT_ID, GARMIN_AUTO_JOIN_CHANNELS, GARMIN_AUTO_JOIN_ENABLED, GARMIN_MAX_RECORDING_DURATION, GARMIN_RECORD_SECONDS, HIDDEN_CHANNELS, JOIN_MESSAGE_TIMER_ENABLED, JOIN_MESSAGE_TIMER_MINUTES, LOG_CHANNEL_ID, LOG_LEVEL, DISCORD_LOG_LEVEL, PURGE_OLDER_THAN_DAYS, STT_ENABLED, STT_ENGINE, TECHSUPPORT_CHANNEL_ID, VOSK_MODEL_PATH, AFK_CHANNEL_ID
     
     logger.info("Loading dynamic settings...")
 
@@ -180,10 +182,13 @@ def load_all_settings():
     LOG_LEVEL = get_setting(DB_KEY_LOG_LEVEL, os.environ.get('LOG_LEVEL', 'INFO'))
     logging.getLogger().setLevel(LOG_LEVEL.upper())
 
-    # If the main log level is DEBUG, reduce verbosity from discord.http
-    if LOG_LEVEL.upper() == 'DEBUG':
-        logging.getLogger('discord.http').setLevel(logging.INFO)
-        logger.info("Set discord.http logger to INFO to reduce verbosity.")
+    # --- Discord Log Level Settings ---
+    DISCORD_LOG_LEVEL = get_setting(DB_KEY_DISCORD_LOG_LEVEL, os.environ.get('DISCORD_LOG_LEVEL', 'INFO'))
+    
+    # Set separate log level for all discord.* packages
+    discord_logger = logging.getLogger('discord')
+    discord_logger.setLevel(DISCORD_LOG_LEVEL.upper())
+    logger.info(f"Set discord.* loggers to {DISCORD_LOG_LEVEL.upper()}")
     
     logger.info("Finished loading dynamic settings.")
 
