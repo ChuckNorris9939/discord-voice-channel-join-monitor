@@ -324,10 +324,13 @@ class GarminVoiceManager:
                 return
             self._last_stt_text = text
             if text:
-                logger.info("STT[%s]: '%s'", cfg.STT_ENGINE, text)
+                # Only log STT output if enabled in settings
+                if cfg.GARMIN_STT_OUTPUT_ENABLED:
+                    logger.info("STT[%s]: '%s'", cfg.STT_ENGINE, text)
             else:
-                # Log empty results at DEBUG level to avoid spam
-                logger.debug("STT[%s]: (no text detected)", cfg.STT_ENGINE)
+                # Log empty results at DEBUG level to avoid spam (only if STT output is enabled)
+                if cfg.GARMIN_STT_OUTPUT_ENABLED:
+                    logger.debug("STT[%s]: (no text detected)", cfg.STT_ENGINE)
                 return
 
             now = time.time()

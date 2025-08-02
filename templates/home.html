@@ -3,52 +3,561 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bot Status</title>
+    <title>🤖 Discord Bot Dashboard</title>
     <style>
-        body { 
-            font-family: Arial, sans-serif; 
-            margin: 40px; 
-            display: flex; 
-            flex-direction: column; 
-            align-items: center; 
-            justify-content: center; 
-            height: calc(100vh - 80px); 
-            background-color: #1a1a1a; 
-            color: #e0e0e0; 
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
         }
-        .container { 
-            text-align: center; 
-            padding: 20px; 
-            background-color: #2d2d2d; 
-            border-radius: 8px; 
-            box-shadow: 0 4px 8px rgba(0,0,0,0.3); 
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            color: #e0e0e0;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: rgba(45, 45, 45, 0.95);
+            border-radius: 12px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            border: 1px solid #404040;
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(90deg, #2c3e50, #34495e);
+            padding: 20px;
+            text-align: center;
+            border-bottom: 2px solid #3498db;
+        }
+
+        .header h1 {
+            color: #ffffff;
+            font-size: 3em;
+            margin-bottom: 15px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+        }
+
+        .status-badge {
+            display: inline-block;
+            background: linear-gradient(135deg, #27ae60, #229954);
+            color: white;
+            padding: 15px 30px;
+            border-radius: 30px;
+            font-weight: 600;
+            font-size: 1.3em;
+            box-shadow: 0 4px 12px rgba(39, 174, 96, 0.3);
+            margin-top: 15px;
+        }
+
+        .content {
+            padding: 25px;
+        }
+
+        /* Navigation Section - Top */
+        .navigation-section {
+            margin-bottom: 25px;
+        }
+
+        .nav-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px;
+        }
+
+        .nav-button {
+            background: linear-gradient(135deg, #3498db, #2980b9);
+            color: white;
+            border: none;
+            padding: 15px 20px;
+            border-radius: 10px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 55px;
+            box-shadow: 0 4px 15px rgba(52, 152, 219, 0.2);
+            border: 1px solid rgba(52, 152, 219, 0.3);
+        }
+
+        .nav-button:hover {
+            background: linear-gradient(135deg, #2980b9, #1f5f8b);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(52, 152, 219, 0.4);
+        }
+
+        .nav-button.logs {
+            background: linear-gradient(135deg, #9b59b6, #8e44ad);
+        }
+
+        .nav-button.logs:hover {
+            background: linear-gradient(135deg, #8e44ad, #7d3c98);
+        }
+
+        .nav-button.recordings {
+            background: linear-gradient(135deg, #e67e22, #d35400);
+        }
+
+        .nav-button.recordings:hover {
+            background: linear-gradient(135deg, #d35400, #ba4a00);
+        }
+
+        .nav-button.settings {
+            background: linear-gradient(135deg, #34495e, #2c3e50);
+        }
+
+        .nav-button.settings:hover {
+            background: linear-gradient(135deg, #2c3e50, #1a252f);
+        }
+
+        /* Main Content - Two Columns */
+        .main-content {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        .section-title {
+            color: #3498db;
+            font-size: 1.6em;
+            margin-bottom: 20px;
+            text-align: center;
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 12px;
+        }
+
+        /* Garmin Control Section - Left Column */
+        .garmin-control-section {
+            background: rgba(52, 73, 94, 0.2);
+            border-radius: 10px;
+            padding: 20px;
             border: 1px solid #404040;
         }
-        h1 { color: #ffffff; }
-        p { color: #cccccc; margin-bottom: 20px; }
-        .button { 
-            display: block; 
-            width: 200px; 
-            padding: 10px 20px; 
-            font-size: 16px; 
-            color: #fff; 
-            background-color: #007bff; 
-            text-decoration: none; 
-            border-radius: 5px; 
-            transition: background-color 0.3s; 
-            margin: 5px auto; 
+
+        .garmin-control-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
         }
-        .button:hover { background-color: #0056b3; }
+
+        .garmin-button {
+            background: linear-gradient(135deg, #e67e22, #d35400);
+            color: white;
+            border: none;
+            padding: 12px 15px;
+            border-radius: 10px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 50px;
+            box-shadow: 0 4px 15px rgba(230, 126, 34, 0.2);
+        }
+
+        .garmin-button:hover {
+            background: linear-gradient(135deg, #d35400, #ba4a00);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(230, 126, 34, 0.3);
+        }
+
+        .garmin-button.stop {
+            background: linear-gradient(135deg, #e74c3c, #c0392b);
+        }
+
+        .garmin-button.stop:hover {
+            background: linear-gradient(135deg, #c0392b, #a93226);
+        }
+
+        .garmin-button.save {
+            background: linear-gradient(135deg, #27ae60, #229954);
+        }
+
+        .garmin-button.save:hover {
+            background: linear-gradient(135deg, #229954, #1e8449);
+        }
+
+        .garmin-button.autojoin {
+            background: linear-gradient(135deg, #9b59b6, #8e44ad);
+        }
+
+        .garmin-button.autojoin:hover {
+            background: linear-gradient(135deg, #8e44ad, #7d3c98);
+        }
+
+        /* Status Section - Right Column */
+        .status-section {
+            background: rgba(52, 73, 94, 0.2);
+            border-radius: 10px;
+            padding: 20px;
+            border: 1px solid #404040;
+        }
+
+        .status-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+        }
+
+        .status-card {
+            background: rgba(52, 73, 94, 0.3);
+            padding: 15px 20px;
+            border-radius: 10px;
+            text-align: left;
+            border: 1px solid #404040;
+            height: 50px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .status-left {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .status-icon {
+            font-size: 1.4em;
+        }
+
+        .status-label {
+            color: #bdc3c7;
+            font-size: 1.1em;
+            font-weight: 500;
+        }
+
+        .status-number {
+            font-size: 1.4em;
+            font-weight: bold;
+            color: #3498db;
+        }
+
+        .button-icon {
+            font-size: 16px;
+            margin-right: 8px;
+        }
+
+        @media (max-width: 768px) {
+            .main-content {
+                grid-template-columns: 1fr;
+            }
+            
+            .nav-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+            
+            .garmin-control-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+            
+            .status-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Bot Status</h1>
-        <p>Bot ist online!</p>
-        <p>Version: {{ bot_version }}</p>
-        <a href="{{ url_for('view_join_logs_page') }}" class="button">View Join Logs</a>
-        <a href="{{ url_for('garmin_recordings_page') }}" class="button">Garmin Recordings</a>
-        <a href="{{ url_for('settings_route') }}" class="button">Bot Settings</a>
+        <div class="header">
+            <h1>🤖 Discord Bot Dashboard</h1>
+            <div class="status-badge">✅ Bot Status: Online and Running</div>
+        </div>
+
+        <div class="content">
+            <!-- Navigation Section - Top -->
+            <div class="navigation-section">
+                <div class="nav-grid">
+                    <a href="{{ url_for('view_join_logs_page') }}" class="nav-button logs">
+                        <span class="button-icon">📊</span>
+                        View Join Logs
+                    </a>
+                    <a href="{{ url_for('garmin_recordings_page') }}" class="nav-button recordings">
+                        <span class="button-icon">🎙️</span>
+                        Garmin Recordings
+                    </a>
+                    <a href="{{ url_for('settings_route') }}" class="nav-button settings">
+                        <span class="button-icon">⚙️</span>
+                        Bot Settings
+                    </a>
+                </div>
+            </div>
+
+            <!-- Main Content - Two Columns -->
+            <div class="main-content">
+                                 <!-- Garmin Control Section - Left -->
+                 <div class="garmin-control-section">
+                     <h2 class="section-title">🎛️ Garmin Recording Control</h2>
+                    <div class="garmin-control-grid">
+                        <button class="garmin-button" onclick="sendGarminCommand('start')">
+                            <span class="button-icon">▶️</span>
+                            Start
+                        </button>
+                        <button class="garmin-button stop" onclick="sendGarminCommand('stop')">
+                            <span class="button-icon">⏹️</span>
+                            Stop
+                        </button>
+                        <button class="garmin-button save" onclick="sendGarminCommand('save')">
+                            <span class="button-icon">💾</span>
+                            Save
+                        </button>
+                        <button class="garmin-button autojoin" onclick="sendGarminCommand('autojoin')">
+                            <span class="button-icon">🤖</span>
+                            Auto Join
+                        </button>
+                        <button class="garmin-button stt-output" onclick="sendGarminCommand('stt_output')">
+                            <span class="button-icon">🗣️</span>
+                            Show STT
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Status Section - Right -->
+                <div class="status-section">
+                    <h2 class="section-title">📊 Live Status</h2>
+                                         <div class="status-grid">
+                         <div class="status-card">
+                             <div class="status-left">
+                                 <div class="status-icon">📈</div>
+                                 <div class="status-label">Voice Events</div>
+                             </div>
+                             <div class="status-number" id="voice-events-count">{{ status_data.voice_events }}</div>
+                         </div>
+                         <div class="status-card">
+                             <div class="status-left">
+                                 <div class="status-icon">🎙️</div>
+                                 <div class="status-label">Recordings</div>
+                             </div>
+                             <div class="status-number" id="recordings-count">{{ status_data.recordings }}</div>
+                         </div>
+                         <div class="status-card">
+                             <div class="status-left">
+                                 <div class="status-icon">👥</div>
+                                 <div class="status-label">Online Users</div>
+                             </div>
+                             <div class="status-number" id="online-users-count">{{ status_data.online_users }}</div>
+                         </div>
+                         <div class="status-card">
+                             <div class="status-left">
+                                 <div class="status-icon">⏱️</div>
+                                 <div class="status-label">Uptime</div>
+                             </div>
+                             <div class="status-number" id="uptime">{{ uptime }}</div>
+                         </div>
+                         <div class="status-card">
+                             <div class="status-left">
+                                 <div class="status-icon">🤖</div>
+                                 <div class="status-label">Autojoin</div>
+                             </div>
+                             <div class="status-number" id="autojoin-status">{{ "True" if status_data.garmin_health.autojoin else "False" }}</div>
+                         </div>
+                         <div class="status-card">
+                             <div class="status-left">
+                                 <div class="status-icon">🔴</div>
+                                 <div class="status-label">Recording</div>
+                             </div>
+                             <div class="status-number" id="recording-status">{{ "True" if status_data.garmin_health.recording else "False" }}</div>
+                         </div>
+                         <div class="status-card">
+                             <div class="status-left">
+                                 <div class="status-icon">🎙️</div>
+                                 <div class="status-label">Duration</div>
+                             </div>
+                             <div class="status-number" id="duration-status">{{ status_data.garmin_health.duration }}</div>
+                         </div>
+                         <div class="status-card">
+                             <div class="status-left">
+                                 <div class="status-icon">💾</div>
+                                 <div class="status-label">Buffer</div>
+                             </div>
+                             <div class="status-number" id="buffer-status">{{ status_data.garmin_health.buffer }}</div>
+                         </div>
+                         <div class="status-card">
+                             <div class="status-left">
+                                 <div class="status-icon">⚠️</div>
+                                 <div class="status-label">Errors</div>
+                             </div>
+                             <div class="status-number" id="errors-status">{{ status_data.garmin_health.errors }}</div>
+                         </div>
+                         <div class="status-card">
+                             <div class="status-left">
+                                 <div class="status-icon">🔄</div>
+                                 <div class="status-label">Processing</div>
+                             </div>
+                             <div class="status-number" id="processing-status">{{ status_data.garmin_health.processing }}</div>
+                         </div>
+                         <div class="status-card">
+                             <div class="status-left">
+                                 <div class="status-icon">🗣️</div>
+                                 <div class="status-label">STT Output</div>
+                             </div>
+                             <div class="status-number" id="stt-output-status">{{ "True" if status_data.garmin_health.stt_output else "False" }}</div>
+                         </div>
+                     </div>
+                </div>
+            </div>
+        </div>
     </div>
+
+    <script>
+        function sendGarminCommand(command) {
+            // Call the appropriate garmin function
+            switch(command) {
+                case 'start':
+                    garmin.start();
+                    break;
+                case 'stop':
+                    garmin.stop();
+                    break;
+                case 'save':
+                    garmin.save();
+                    break;
+                case 'autojoin':
+                    garmin.autojoin();
+                    break;
+                case 'stt_output':
+                    garmin.stt_output();
+                    break;
+                default:
+                    console.log('Unknown command:', command);
+            }
+        }
+
+        // Auto-refresh status data every 5 seconds
+        function refreshStatusData() {
+            fetch('/status')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        document.getElementById('voice-events-count').textContent = data.status.voice_events;
+                        document.getElementById('recordings-count').textContent = data.status.recordings;
+                        document.getElementById('online-users-count').textContent = data.status.online_users;
+                        document.getElementById('autojoin-status').textContent = data.status.garmin_health.autojoin ? 'True' : 'False';
+                        document.getElementById('recording-status').textContent = data.status.garmin_health.recording ? 'True' : 'False';
+                        document.getElementById('duration-status').textContent = data.status.garmin_health.duration;
+                        document.getElementById('buffer-status').textContent = data.status.garmin_health.buffer;
+                        document.getElementById('errors-status').textContent = data.status.garmin_health.errors;
+                        document.getElementById('processing-status').textContent = data.status.garmin_health.processing;
+                        document.getElementById('stt-output-status').textContent = data.status.garmin_health.stt_output ? 'True' : 'False';
+                    }
+                })
+                .catch(error => {
+                    console.error('Error refreshing status:', error);
+                });
+        }
+
+        // Start auto-refresh
+        setInterval(refreshStatusData, 5000);
+
+        // Garmin control functions
+        const garmin = {
+            start: function() {
+                console.log('Starting Garmin recording...');
+                fetch('/garmin/start', { method: 'POST' })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            alert('✅ Garmin recording started successfully!');
+                            // Refresh status immediately after successful action
+                            setTimeout(refreshStatusData, 1000);
+                        } else {
+                            alert('❌ Failed to start recording: ' + data.error);
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error:', error);
+                        alert('❌ Error starting recording. Check console for details.');
+                    });
+            },
+            
+            stop: function() {
+                console.log('Stopping Garmin recording...');
+                fetch('/garmin/stop', { method: 'POST' })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            alert('✅ Garmin recording stopped successfully!');
+                            // Refresh status immediately after successful action
+                            setTimeout(refreshStatusData, 1000);
+                        } else {
+                            alert('❌ Failed to stop recording: ' + data.error);
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error:', error);
+                        alert('❌ Error stopping recording. Check console for details.');
+                    });
+            },
+            
+            save: function() {
+                console.log('Saving Garmin recording...');
+                fetch('/garmin/save', { method: 'POST' })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            alert('✅ Garmin recording saved successfully!');
+                            // Refresh status immediately after successful action
+                            setTimeout(refreshStatusData, 1000);
+                        } else {
+                            alert('❌ Failed to save recording: ' + data.error);
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error:', error);
+                        alert('❌ Error saving recording. Check console for details.');
+                    });
+            },
+            
+            autojoin: function() {
+                console.log('Toggling Garmin auto-join...');
+                fetch('/garmin/autojoin', { method: 'POST' })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            alert('✅ Garmin auto-join toggled successfully!');
+                            // Refresh status immediately after successful action
+                            setTimeout(refreshStatusData, 1000);
+                        } else {
+                            alert('❌ Failed to toggle auto-join: ' + data.error);
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error:', error);
+                        alert('❌ Error toggling auto-join. Check console for details.');
+                    });
+            },
+            
+            stt_output: function() {
+                console.log('Toggling STT output...');
+                fetch('/garmin/stt_output', { method: 'POST' })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            alert('✅ STT output toggled successfully!');
+                            // Refresh status immediately after successful action
+                            setTimeout(refreshStatusData, 1000);
+                        } else {
+                            alert('❌ Failed to toggle STT output: ' + data.error);
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error:', error);
+                        alert('❌ Error toggling STT output. Check console for details.');
+                    });
+            }
+        };
+    </script>
 </body>
 </html>

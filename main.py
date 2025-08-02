@@ -38,6 +38,7 @@ GARMIN_OUTPUT_DIR = os.path.join(SCRIPT_DIR, "garmin-output")
 import logging
 import sys
 
+# Set up basic logging configuration
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -51,11 +52,38 @@ logger = logging.getLogger("discord_bot") # Spezifischer Name für den Bot-Logge
 # --------- Flask-Server für Health Checks ---------
 from waitress import serve
 from flask import Flask, render_template, url_for, request, send_from_directory, redirect # Ensure request is imported
+import time
 app = Flask(__name__, template_folder='templates')
+
+# Track bot startup time for uptime calculation
+BOT_START_TIME = time.time()
 
 @app.route("/")
 def home():
-    return render_template('home.html', app_testing_mode=TESTING, bot_version=BOT_VERSION)
+    # Calculate uptime
+    uptime_seconds = int(time.time() - BOT_START_TIME)
+    
+    # Convert to human readable format
+    if uptime_seconds < 60:
+        uptime_str = f"{uptime_seconds}s"
+    elif uptime_seconds < 3600:
+        minutes = uptime_seconds // 60
+        uptime_str = f"{minutes}m"
+    elif uptime_seconds < 86400:
+        hours = uptime_seconds // 3600
+        uptime_str = f"{hours}h"
+    else:
+        days = uptime_seconds // 86400
+        uptime_str = f"{days}d"
+    
+    # Get dynamic status data
+    status_data = get_status_data()
+    
+    return render_template('home.html', 
+                         app_testing_mode=TESTING, 
+                         bot_version=BOT_VERSION, 
+                         uptime=uptime_str,
+                         status_data=status_data)
 
 @app.route('/view_join_logs')
 def view_join_logs_page():
@@ -210,13 +238,18 @@ def settings_route():
             save_setting(DB_KEY_GARMIN_AUTO_JOIN_CHANNELS, request.form.get('garmin_auto_join_channels', '1080202313211326584,571755941725208616,492036470681632778'))
             save_setting(DB_KEY_GARMIN_RECORD_SECONDS, request.form.get('garmin_record_seconds', '600'))
             save_setting(DB_KEY_GARMIN_MAX_RECORDING_DURATION, request.form.get('garmin_max_recording_duration', '3600'))
+            save_setting(DB_KEY_GARMIN_STT_OUTPUT_ENABLED, request.form.get('garmin_stt_output_enabled', 'true'))
 
             # Handle General Settings
             save_setting(DB_KEY_LOG_LEVEL, request.form.get('log_level', 'INFO'))
             save_setting(DB_KEY_DISCORD_LOG_LEVEL, request.form.get('discord_log_level', 'INFO'))
+            logger.info(f"Saved DISCORD_LOG_LEVEL: {request.form.get('discord_log_level', 'INFO')}")
 
             # Reload settings into global scope
             cfg.load_all_settings()
+            
+            # Apply Discord log level immediately after reloading settings
+            cfg.apply_discord_log_level()
             
             if cfg.TESTING:
                 logger.info(f"Settings Route - TESTING MODE ACTIVE: Overriding LOG_CHANNEL_ID and BOT_AUDIT_ID to {TESTING_CHANNEL_ID}.")
@@ -236,37 +269,37 @@ def settings_route():
     try:
         import os
         current_dir = os.getcwd()
-        logger.info(f"Flask server working directory: {current_dir}")
+        logger.debug(f"Flask server working directory: {current_dir}")
         
         vosk_model_dir = Path("vosk-model")
-        logger.info(f"Looking for vosk-model directory: {vosk_model_dir.absolute()}")
-        logger.info(f"Directory exists: {vosk_model_dir.exists()}")
-        logger.info(f"Is directory: {vosk_model_dir.is_dir()}")
+        logger.debug(f"Looking for vosk-model directory: {vosk_model_dir.absolute()}")
+        logger.debug(f"Directory exists: {vosk_model_dir.exists()}")
+        logger.debug(f"Is directory: {vosk_model_dir.is_dir()}")
         
         if vosk_model_dir.exists() and vosk_model_dir.is_dir():
             # Check if there are subdirectories (like vosk-model-de, vosk-model-en, etc.)
             subdirs = [item for item in vosk_model_dir.iterdir() if item.is_dir()]
-            logger.info(f"Found subdirectories: {[str(item) for item in subdirs]}")
+            logger.debug(f"Found subdirectories: {[str(item) for item in subdirs]}")
             
             if subdirs:
                 # If there are subdirectories, use them
                 for item in subdirs:
                     model_path = str(item) + "/"
                     vosk_models.append(model_path)
-                    logger.info(f"Added model path: {model_path}")
+                    logger.debug(f"Added model path: {model_path}")
             else:
                 # If no subdirectories, check if this is a direct model directory
                 # Look for typical Vosk model files
                 model_files = list(vosk_model_dir.glob("*.conf")) + list(vosk_model_dir.glob("am"))
-                logger.info(f"Found model files: {[str(f) for f in model_files]}")
+                logger.debug(f"Found model files: {[str(f) for f in model_files]}")
                 if model_files:
                     # This appears to be a direct model directory
                     model_path = str(vosk_model_dir) + "/"
                     vosk_models.append(model_path)
-                    logger.info(f"Added direct model path: {model_path}")
+                    logger.debug(f"Added direct model path: {model_path}")
             
             vosk_models.sort()  # Sort alphabetically
-            logger.info(f"Final sorted list: {vosk_models}")
+            logger.debug(f"Final sorted list: {vosk_models}")
             logger.info(f"Found {len(vosk_models)} Vosk models: {vosk_models}")
         else:
             logger.warning("vosk-model directory not found")
@@ -300,9 +333,11 @@ def settings_route():
     current_settings_display['GARMIN_AUTO_JOIN_CHANNELS'] = ','.join(map(str, cfg.GARMIN_AUTO_JOIN_CHANNELS)) if cfg.GARMIN_AUTO_JOIN_CHANNELS else ''
     current_settings_display['GARMIN_RECORD_SECONDS'] = str(cfg.GARMIN_RECORD_SECONDS)
     current_settings_display['GARMIN_MAX_RECORDING_DURATION'] = str(cfg.GARMIN_MAX_RECORDING_DURATION)
+    current_settings_display['GARMIN_STT_OUTPUT_ENABLED'] = str(cfg.GARMIN_STT_OUTPUT_ENABLED).lower()
 
     # General Settings
     current_settings_display['LOG_LEVEL'] = cfg.LOG_LEVEL
+    current_settings_display['DISCORD_LOG_LEVEL'] = cfg.DISCORD_LOG_LEVEL
 
     return render_template('settings.html', current_settings=current_settings_display, message=message, error=error, vosk_models=vosk_models)
 
@@ -324,6 +359,241 @@ async def restart_bot_route():
         # Redirect back to the settings page (or home)
         # The actual shutdown happens in the background.
         return redirect(url_for('settings_route'))
+
+# Garmin Control API Routes
+def get_status_data():
+    """Get dynamic status data for the home page"""
+    try:
+        # Get voice events count
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM user_voice_events")
+        voice_events_count = cursor.fetchone()[0]
+        conn.close()
+        
+        # Get recordings count
+        import os
+        from pathlib import Path
+        output_dir = Path(GARMIN_OUTPUT_DIR)
+        recordings_count = 0
+        if output_dir.exists():
+            recordings_count = len(list(output_dir.glob("*.wav")))
+        
+        # Get online users count (approximate - users in voice channels)
+        online_users_count = 0
+        try:
+            if bot.is_ready():
+                for guild in bot.guilds:
+                    for channel in guild.voice_channels:
+                        online_users_count += len(channel.members)
+        except:
+            online_users_count = 0
+        
+        # Get Garmin health data
+        garmin_health = get_garmin_health_data()
+        
+        return {
+            'voice_events': voice_events_count,
+            'recordings': recordings_count,
+            'online_users': online_users_count,
+            'garmin_health': garmin_health
+        }
+    except Exception as e:
+        logger.error(f"Error getting status data: {e}")
+        return {
+            'voice_events': 0,
+            'recordings': 0,
+            'online_users': 0,
+            'garmin_health': {
+                'autojoin': False,
+                'recording': False,
+                'duration': '0.0s',
+                'buffer': '0.00 MB',
+                'errors': '0/5',
+                'processing': 'Idle'
+            }
+        }
+
+def get_garmin_health_data():
+    """Get Garmin health data for status display"""
+    try:
+        if garmin_manager:
+            health = garmin_manager.get_recording_health()
+            is_connected = health.get('connected', False)
+            
+            # Only show duration if actually connected and recording
+            if is_connected:
+                duration = f"{health.get('recording_duration', 0):.1f}s"
+            else:
+                duration = '0.0s'
+            
+            return {
+                'autojoin': cfg.GARMIN_AUTO_JOIN_ENABLED,  # Get from config
+                'recording': is_connected,
+                'duration': duration,
+                'buffer': f"{health.get('buffer_size', 0) / (1024*1024):.2f} MB",
+                'errors': f"{health.get('recording_errors', 0)}/{health.get('max_errors', 5)}",
+                'processing': 'Processing' if health.get('is_processing', False) else 'Idle',
+                'stt_output': cfg.GARMIN_STT_OUTPUT_ENABLED  # Get from config
+            }
+        else:
+            return {
+                'autojoin': cfg.GARMIN_AUTO_JOIN_ENABLED,  # Get from config
+                'recording': False,
+                'duration': '0.0s',
+                'buffer': '0.00 MB',
+                'errors': '0/5',
+                'processing': 'Idle',
+                'stt_output': cfg.GARMIN_STT_OUTPUT_ENABLED  # Get from config
+            }
+    except Exception as e:
+        logger.error(f"Error getting Garmin health data: {e}")
+        return {
+            'autojoin': cfg.GARMIN_AUTO_JOIN_ENABLED,  # Get from config
+            'recording': False,
+            'duration': '0.0s',
+            'buffer': '0.00 MB',
+            'errors': '0/5',
+            'processing': 'Idle',
+            'stt_output': cfg.GARMIN_STT_OUTPUT_ENABLED  # Get from config
+        }
+
+@app.route('/garmin/start', methods=['POST'])
+def garmin_start_route():
+    try:
+        # Use the global garmin_manager
+        if garmin_manager:
+            # Check if already connected
+            if garmin_manager.is_connected():
+                return {"success": True, "message": "Already connected to a voice channel"}
+            
+            # Try to find a voice channel to join
+            try:
+                if bot.is_ready() and bot.loop and bot.loop.is_running():
+                    for guild in bot.guilds:
+                        for channel in guild.voice_channels:
+                            if len(channel.members) > 0:  # Join a channel with users
+                                # Schedule the coroutine in the bot's event loop
+                                future = asyncio.run_coroutine_threadsafe(garmin_manager.join_channel(channel), bot.loop)
+                                try:
+                                    future.result(timeout=10)  # Wait up to 10 seconds
+                                    return {"success": True, "message": f"Garmin recording started in {channel.name}"}
+                                except Exception as e:
+                                    return {"success": False, "error": f"Failed to join channel {channel.name}: {str(e)}"}
+                    
+                    # If no channels with users, try the first available channel
+                    for guild in bot.guilds:
+                        for channel in guild.voice_channels:
+                            # Schedule the coroutine in the bot's event loop
+                            future = asyncio.run_coroutine_threadsafe(garmin_manager.join_channel(channel), bot.loop)
+                            try:
+                                future.result(timeout=10)  # Wait up to 10 seconds
+                                return {"success": True, "message": f"Garmin recording started in {channel.name}"}
+                            except Exception as e:
+                                return {"success": False, "error": f"Failed to join channel {channel.name}: {str(e)}"}
+                
+                return {"success": False, "error": "No voice channels available to join"}
+            except Exception as e:
+                return {"success": False, "error": f"Failed to join voice channel: {str(e)}"}
+        else:
+            return {"success": False, "error": "Garmin manager not available"}
+    except Exception as e:
+        logger.error(f"Error in garmin_start_route: {e}")
+        return {"success": False, "error": str(e)}
+
+@app.route('/garmin/stop', methods=['POST'])
+def garmin_stop_route():
+    try:
+        # Use the global garmin_manager
+        if garmin_manager:
+            # Use the bot's event loop instead of creating a new one
+            if bot.loop and bot.loop.is_running():
+                # Schedule the coroutine in the bot's event loop
+                future = asyncio.run_coroutine_threadsafe(garmin_manager.leave_channel(), bot.loop)
+                try:
+                    future.result(timeout=10)  # Wait up to 10 seconds
+                    return {"success": True, "message": "Garmin recording stopped successfully"}
+                except Exception as e:
+                    return {"success": False, "error": f"Failed to stop recording: {str(e)}"}
+            else:
+                return {"success": False, "error": "Bot event loop not available"}
+        else:
+            return {"success": False, "error": "Garmin manager not available"}
+    except Exception as e:
+        logger.error(f"Error in garmin_stop_route: {e}")
+        return {"success": False, "error": str(e)}
+
+@app.route('/garmin/save', methods=['POST'])
+def garmin_save_route():
+    try:
+        # Use the global garmin_manager
+        if garmin_manager:
+            # Call the garmin manager directly
+            health_data = garmin_manager.get_recording_health()
+            
+            if health_data["connected"] and health_data["buffer_size"] > 0:
+                garmin_manager.save_recording()
+                return {"success": True, "message": "Garmin recording saved successfully"}
+            else:
+                if not health_data["connected"]:
+                    return {"success": False, "error": "Not connected to any voice channel"}
+                else:
+                    return {"success": False, "error": "No audio data to save"}
+        else:
+            return {"success": False, "error": "Garmin manager not available"}
+    except Exception as e:
+        logger.error(f"Error in garmin_save_route: {e}")
+        return {"success": False, "error": str(e)}
+
+@app.route('/garmin/autojoin', methods=['POST'])
+def garmin_autojoin_route():
+    try:
+        # Toggle the autojoin setting
+        current_setting = cfg.GARMIN_AUTO_JOIN_ENABLED
+        new_setting = not current_setting
+        
+        # Save the new setting to the database
+        from config_loader import save_setting, DB_KEY_GARMIN_AUTO_JOIN_ENABLED
+        save_setting(DB_KEY_GARMIN_AUTO_JOIN_ENABLED, str(new_setting).lower())
+        
+        # Reload settings
+        cfg.load_all_settings()
+        
+        status = "enabled" if new_setting else "disabled"
+        return {"success": True, "message": f"Auto-join {status} successfully"}
+    except Exception as e:
+        logger.error(f"Error in garmin_autojoin_route: {e}")
+        return {"success": False, "error": str(e)}
+
+@app.route('/garmin/stt_output', methods=['POST'])
+def garmin_stt_output_route():
+    try:
+        # Toggle the STT output setting
+        current_setting = cfg.GARMIN_STT_OUTPUT_ENABLED
+        new_setting = not current_setting
+        
+        # Save the new setting to the database
+        from config_loader import save_setting, DB_KEY_GARMIN_STT_OUTPUT_ENABLED
+        save_setting(DB_KEY_GARMIN_STT_OUTPUT_ENABLED, str(new_setting).lower())
+        
+        # Reload settings
+        cfg.load_all_settings()
+        
+        status = "enabled" if new_setting else "disabled"
+        return {"success": True, "message": f"STT output {status} successfully"}
+    except Exception as e:
+        logger.error(f"Error in garmin_stt_output_route: {e}")
+        return {"success": False, "error": str(e)}
+
+@app.route('/status')
+def status_route():
+    """API endpoint to get current status data for auto-refresh"""
+    try:
+        status_data = get_status_data()
+        return {"success": True, "status": status_data}
+    except Exception as e:
+        logger.error(f"Error in status_route: {e}")
+        return {"success": False, "error": str(e)}
 
 def run_flask():
     host = "0.0.0.0"
@@ -823,6 +1093,7 @@ async def close_support_thread(thread: Thread, trigger_source: str, set_tag: boo
 async def on_ready():
     logger.info(f"Eingeloggt als {bot.user} (ID: {bot.user.id})")
     logger.info(f"Bot version: {BOT_VERSION} starting up...")
+    
     if not os.path.exists(IMAGES_FOLDER):
         os.makedirs(IMAGES_FOLDER)
         logger.info(f"Ordner '{IMAGES_FOLDER}' wurde erstellt. Bitte füge Bilder hinzu.")
@@ -1323,6 +1594,33 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
                     logger.error(f"Failed to leave channel {before.channel.name}: {e}")
             elif not remaining_users:
                 logger.debug(f"Users left channel {before.channel.name}, but bot is not in this channel - staying put")
+        
+        # Cancel AFK timer if user left voice channel
+        if member.id in fully_deafened_users:
+            fully_deafened_users[member.id].cancel()
+            del fully_deafened_users[member.id]
+            logger.info(f"AFK Mover: Cancelled timer for {member.name} (left voice channel)")
+
+    # Handle AFK timer for deafened users
+    # Check if user became deafened
+    if (after.channel and 
+        after.self_deaf and 
+        not before.self_deaf and 
+        member.id not in fully_deafened_users):
+        # Start AFK timer for newly deafened user
+        task = asyncio.create_task(move_to_afk(member))
+        fully_deafened_users[member.id] = task
+        logger.info(f"AFK Mover: Started timer for {member.name} (became deafened)")
+    
+    # Check if user became undeafened
+    elif (after.channel and 
+          not after.self_deaf and 
+          before.self_deaf and 
+          member.id in fully_deafened_users):
+        # Cancel AFK timer for newly undeafened user
+        fully_deafened_users[member.id].cancel()
+        del fully_deafened_users[member.id]
+        logger.info(f"AFK Mover: Cancelled timer for {member.name} (became undeafened)")
 
 @bot.hybrid_command(name="viewlogs", description="Zeigt die letzten 10 Benutzer-Join-Events an (nur für Admins).")
 @commands.has_permissions(administrator=True)
@@ -1404,7 +1702,7 @@ join_timers: Dict[int, asyncio.Task] = {} # Key: channel_id, Value: asyncio.Task
 # Global Vars for AFK Mover
 AFK_CHANNEL_ID = 482233624234557451 # Set this to the ID of your AFK voice channel
 AFK_TIMER_MINUTES = 10
-fully_muted_users: Dict[int, asyncio.Task] = {} # Key: user_id, Value: asyncio.Task
+fully_deafened_users: Dict[int, asyncio.Task] = {} # Key: user_id, Value: asyncio.Task
 
 async def move_to_afk(member: discord.Member):
     """Coroutine to move a member to the AFK channel after a delay."""
@@ -1425,23 +1723,23 @@ async def move_to_afk(member: discord.Member):
         logger.info(f"AFK Mover: {member.name} left the server. No action needed.")
         return # User left, no need to move
 
-    if member.voice and member.voice.channel and (member.voice.self_mute or member.voice.mute):
+    if member.voice and member.voice.channel and member.voice.self_deaf:
         afk_channel = guild.get_channel(AFK_CHANNEL_ID)
         if afk_channel and isinstance(afk_channel, discord.VoiceChannel):
             try:
-                await member.move_to(afk_channel, reason="Benutzer war für 10 Minuten stummgeschaltet.")
+                await member.move_to(afk_channel, reason="Benutzer war für 10 Minuten taubgeschaltet.")
                 logger.info(f"AFK Mover: Moved {member.name} to AFK channel.")
-                await send_log_message(f"😴 {member.mention} wurde in den AFK-Kanal verschoben, da er/sie für 10 Minuten stummgeschaltet war.", target_channel_ids=[BOT_AUDIT_ID])
+                await send_log_message(f"😴 {member.mention} wurde in den AFK-Kanal verschoben, da er/sie für 10 Minuten taubgeschaltet war.", target_channel_ids=[BOT_AUDIT_ID])
             except discord.Forbidden:
                 logger.error(f"AFK Mover: No permission to move {member.name} to AFK channel.")
             except Exception as e:
                 logger.error(f"AFK Mover: Error moving {member.name}: {e}", exc_info=True)
     else:
-        logger.info(f"AFK Mover: {member.name} is no longer muted or in a voice channel. No action needed.")
+        logger.info(f"AFK Mover: {member.name} is no longer deafened or in a voice channel. No action needed.")
 
     # Clean up the task from the tracking dictionary
-    if member.id in fully_muted_users:
-        del fully_muted_users[member.id]
+    if member.id in fully_deafened_users:
+        del fully_deafened_users[member.id]
 
 async def send_summarized_join_message(channel_id: int):
     """Coroutine to send a summarized message of who joined a channel."""
@@ -1550,28 +1848,110 @@ async def garmin_health(ctx: commands.Context):
     
     await ctx.send(embed=embed)
 
-@bot.hybrid_command(name="garmin_autojoin", description="Shows the current auto-join configuration and status.")
+@bot.hybrid_command(name="garmin_autojoin", description="Manage Garmin auto-join feature: status, enable, disable")
 @commands.guild_only()
-async def garmin_autojoin(ctx: commands.Context):
+async def garmin_autojoin(ctx: commands.Context, action: str = "status"):
+    """
+    Manage Garmin auto-join feature.
+    
+    **Usage:**
+    `!!garmin_autojoin [action]`
+    
+    **Actions:**
+    • `status` - Show current auto-join configuration and status
+    • `enable` - Enable auto-join feature (bot will automatically join monitored channels)
+    • `disable` - Disable auto-join feature (bot will not automatically join channels)
+    
+    **Examples:**
+    • `!!garmin_autojoin status` - Check current status
+    • `!!garmin_autojoin enable` - Enable auto-join
+    • `!!garmin_autojoin disable` - Disable auto-join
+    • `!!garmin_autojoin` - Same as status (default)
+    
+    **Note:** Changes are saved to the database and persist across bot restarts.
+    """
+    action = action.lower()
+    
+    if action not in ["status", "enable", "disable"]:
+        embed = discord.Embed(
+            title="❌ Invalid Action",
+            description="Please use one of the following actions:",
+            color=discord.Color.red(),
+            timestamp=discord.utils.utcnow()
+        )
+        embed.add_field(name="Available Actions", value="• `status` - Show current configuration\n• `enable` - Enable auto-join\n• `disable` - Disable auto-join", inline=False)
+        embed.add_field(name="Examples", value="• `!!garmin_autojoin status`\n• `!!garmin_autojoin enable`\n• `!!garmin_autojoin disable`", inline=False)
+        await ctx.send(embed=embed)
+        return
+    
+    current_setting = cfg.GARMIN_AUTO_JOIN_ENABLED
+    new_setting = current_setting
+    action_taken = False
+    
+    # Handle the action
+    if action == "enable" and not current_setting:
+        new_setting = True
+        action_taken = True
+    elif action == "disable" and current_setting:
+        new_setting = False
+        action_taken = True
+    elif action == "status":
+        # No change needed, just show status
+        pass
+    else:
+        # Action would not change the current state
+        if action == "enable":
+            await ctx.send("ℹ️ Auto-join is already enabled.")
+        else:  # disable
+            await ctx.send("ℹ️ Auto-join is already disabled.")
+        return
+    
+    # Save the setting if it changed
+    if action_taken:
+        from config_loader import save_setting, DB_KEY_GARMIN_AUTO_JOIN_ENABLED
+        save_setting(DB_KEY_GARMIN_AUTO_JOIN_ENABLED, str(new_setting).lower())
+        
+        # Log the change
+        logger.info(f"Garmin auto-join setting changed by {ctx.author.name} ({ctx.author.id}): {current_setting} -> {new_setting}")
+        
+        # Reload settings to update the global variable
+        cfg.load_all_settings()
+    
+    # Create embed to show the result
     embed = discord.Embed(
         title="🤖 Garmin Auto-Join Configuration",
-        color=discord.Color.blue(),
+        color=discord.Color.green() if new_setting else discord.Color.red(),
         timestamp=discord.utils.utcnow()
     )
     
     # Auto-join status
-    status_emoji = "🟢" if GARMIN_AUTO_JOIN_ENABLED else "🔴"
+    status_emoji = "🟢" if new_setting else "🔴"
+    status_text = "Enabled" if new_setting else "Disabled"
     embed.add_field(
         name="Auto-Join Status",
-        value=f"{status_emoji} {'Enabled' if GARMIN_AUTO_JOIN_ENABLED else 'Disabled'}",
+        value=f"{status_emoji} {status_text}",
         inline=True
     )
     
+    # Add action message if something was done
+    if action_taken:
+        embed.add_field(
+            name="Action",
+            value=f"✅ Auto-join has been **{status_text.lower()}**",
+            inline=False
+        )
+    else:
+        embed.add_field(
+            name="Action",
+            value="📊 Showing current status",
+            inline=False
+        )
+    
     # Monitored channels
-    if GARMIN_AUTO_JOIN_CHANNELS:
+    if cfg.GARMIN_AUTO_JOIN_CHANNELS:
         guild = bot.get_guild(DISCORD_SERVER_ID)
         channel_names = []
-        for channel_id in GARMIN_AUTO_JOIN_CHANNELS:
+        for channel_id in cfg.GARMIN_AUTO_JOIN_CHANNELS:
             channel = guild.get_channel(channel_id) if guild else None
             if channel:
                 channel_names.append(f"#{channel.name} ({channel_id})")

@@ -70,6 +70,7 @@ DB_KEY_GARMIN_AUTO_JOIN_ENABLED = "GARMIN_AUTO_JOIN_ENABLED"
 DB_KEY_GARMIN_AUTO_JOIN_CHANNELS = "GARMIN_AUTO_JOIN_CHANNELS"
 DB_KEY_GARMIN_RECORD_SECONDS = "GARMIN_RECORD_SECONDS"
 DB_KEY_GARMIN_MAX_RECORDING_DURATION = "GARMIN_MAX_RECORDING_DURATION"
+DB_KEY_GARMIN_STT_OUTPUT_ENABLED = "GARMIN_STT_OUTPUT_ENABLED"
 DB_KEY_LOG_LEVEL = "LOG_LEVEL"
 DB_KEY_DISCORD_LOG_LEVEL = "DISCORD_LOG_LEVEL"
 
@@ -97,11 +98,12 @@ GARMIN_AUTO_JOIN_ENABLED = False
 GARMIN_AUTO_JOIN_CHANNELS = []
 GARMIN_RECORD_SECONDS = 600
 GARMIN_MAX_RECORDING_DURATION = 3600
+GARMIN_STT_OUTPUT_ENABLED = True
 LOG_LEVEL = 'INFO'
 DISCORD_LOG_LEVEL = 'INFO'
 
 def load_all_settings():
-    global AFK_TIMER_MINUTES, TESTING, BOT_AUDIT_ID, GARMIN_AUTO_JOIN_CHANNELS, GARMIN_AUTO_JOIN_ENABLED, GARMIN_MAX_RECORDING_DURATION, GARMIN_RECORD_SECONDS, HIDDEN_CHANNELS, JOIN_MESSAGE_TIMER_ENABLED, JOIN_MESSAGE_TIMER_MINUTES, LOG_CHANNEL_ID, LOG_LEVEL, DISCORD_LOG_LEVEL, PURGE_OLDER_THAN_DAYS, STT_ENABLED, STT_ENGINE, TECHSUPPORT_CHANNEL_ID, VOSK_MODEL_PATH, AFK_CHANNEL_ID
+    global AFK_TIMER_MINUTES, TESTING, BOT_AUDIT_ID, GARMIN_AUTO_JOIN_CHANNELS, GARMIN_AUTO_JOIN_ENABLED, GARMIN_MAX_RECORDING_DURATION, GARMIN_RECORD_SECONDS, GARMIN_STT_OUTPUT_ENABLED, HIDDEN_CHANNELS, JOIN_MESSAGE_TIMER_ENABLED, JOIN_MESSAGE_TIMER_MINUTES, LOG_CHANNEL_ID, LOG_LEVEL, DISCORD_LOG_LEVEL, PURGE_OLDER_THAN_DAYS, STT_ENABLED, STT_ENGINE, TECHSUPPORT_CHANNEL_ID, VOSK_MODEL_PATH, AFK_CHANNEL_ID
     
     logger.info("Loading dynamic settings...")
 
@@ -178,6 +180,10 @@ def load_all_settings():
     GARMIN_RECORD_SECONDS = int(get_setting(DB_KEY_GARMIN_RECORD_SECONDS, os.environ.get('GARMIN_RECORD_SECONDS', '600')))
     GARMIN_MAX_RECORDING_DURATION = int(get_setting(DB_KEY_GARMIN_MAX_RECORDING_DURATION, os.environ.get('GARMIN_MAX_RECORDING_DURATION', '3600')))
     
+    # --- Garmin STT Output Settings ---
+    garmin_stt_output_enabled_str = get_setting(DB_KEY_GARMIN_STT_OUTPUT_ENABLED, os.environ.get('GARMIN_STT_OUTPUT_ENABLED', 'true'))
+    GARMIN_STT_OUTPUT_ENABLED = garmin_stt_output_enabled_str.lower() == 'true'
+    
     # --- General Settings ---
     LOG_LEVEL = get_setting(DB_KEY_LOG_LEVEL, os.environ.get('LOG_LEVEL', 'INFO'))
     logging.getLogger().setLevel(LOG_LEVEL.upper())
@@ -188,9 +194,40 @@ def load_all_settings():
     # Set separate log level for all discord.* packages
     discord_logger = logging.getLogger('discord')
     discord_logger.setLevel(DISCORD_LOG_LEVEL.upper())
+    
+    # Also set specific loggers for discord submodules to ensure they respect the setting
+    discord_http_logger = logging.getLogger('discord.http')
+    discord_http_logger.setLevel(DISCORD_LOG_LEVEL.upper())
+    
+    discord_gateway_logger = logging.getLogger('discord.gateway')
+    discord_gateway_logger.setLevel(DISCORD_LOG_LEVEL.upper())
+    
+    discord_voice_logger = logging.getLogger('discord.voice_client')
+    discord_voice_logger.setLevel(DISCORD_LOG_LEVEL.upper())
+    
     logger.info(f"Set discord.* loggers to {DISCORD_LOG_LEVEL.upper()}")
     
     logger.info("Finished loading dynamic settings.")
+
+def apply_discord_log_level():
+    """Apply the current Discord log level setting to all discord loggers."""
+    global DISCORD_LOG_LEVEL
+    
+    # Set separate log level for all discord.* packages
+    discord_logger = logging.getLogger('discord')
+    discord_logger.setLevel(DISCORD_LOG_LEVEL.upper())
+    
+    # Also set specific loggers for discord submodules to ensure they respect the setting
+    discord_http_logger = logging.getLogger('discord.http')
+    discord_http_logger.setLevel(DISCORD_LOG_LEVEL.upper())
+    
+    discord_gateway_logger = logging.getLogger('discord.gateway')
+    discord_gateway_logger.setLevel(DISCORD_LOG_LEVEL.upper())
+    
+    discord_voice_logger = logging.getLogger('discord.voice_client')
+    discord_voice_logger.setLevel(DISCORD_LOG_LEVEL.upper())
+    
+    logger.info(f"Applied discord.* loggers to {DISCORD_LOG_LEVEL.upper()}")
 
 # --- Initial load ---
 load_all_settings()
