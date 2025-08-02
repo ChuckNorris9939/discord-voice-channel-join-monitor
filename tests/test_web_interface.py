@@ -72,9 +72,9 @@ def create_test_data():
         print(f"⚠️ Warning: Could not create test data: {e}")
 
 def create_test_recordings():
-    """Create test recording files if garmin-output directory is empty."""
+            """Create test recording files if data/garmin-output directory is empty."""
     try:
-        # Create garmin-output directory if it doesn't exist
+        # Create data/garmin-output directory if it doesn't exist
         os.makedirs(GARMIN_OUTPUT_DIR, exist_ok=True)
         
         # Check if directory is empty

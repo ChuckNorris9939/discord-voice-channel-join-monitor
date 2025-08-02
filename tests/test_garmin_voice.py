@@ -21,7 +21,7 @@ class TestGarminVoice(unittest.IsolatedAsyncioTestCase):
         # Check that the file was created
         import os
         script_dir = os.path.dirname(os.path.abspath(__file__))
-        filepath = os.path.join(script_dir, "garmin-output", f"garmin_recording_{int(time.time())}.wav")
+        filepath = os.path.join(script_dir, "..", "data", "garmin-output", f"garmin_recording_{int(time.time())}.wav")
         self.assertTrue(os.path.exists(filepath))
 
         # Check the file content

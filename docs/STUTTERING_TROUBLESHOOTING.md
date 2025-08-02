@@ -163,7 +163,7 @@ STT_ENGINE=google
 
 # For Vosk STT (offline, may be more stable)
 STT_ENGINE=vosk
-VOSK_MODEL_PATH=vosk-model
+VOSK_MODEL_PATH=assets/models
 ```
 
 ### 4. Disable STT to Test Audio Recording

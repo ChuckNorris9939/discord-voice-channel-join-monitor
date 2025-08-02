@@ -167,7 +167,7 @@ def load_all_settings():
     STT_ENABLED = stt_enabled_str.lower() == 'true'
 
     STT_ENGINE = get_setting(DB_KEY_STT_ENGINE, os.environ.get('STT_ENGINE', 'google'))
-    VOSK_MODEL_PATH = get_setting(DB_KEY_VOSK_MODEL_PATH, os.environ.get('VOSK_MODEL_PATH', 'vosk-model'))
+    VOSK_MODEL_PATH = get_setting(DB_KEY_VOSK_MODEL_PATH, os.environ.get('VOSK_MODEL_PATH', 'assets/models'))
 
     garmin_auto_join_enabled_str = get_setting(DB_KEY_GARMIN_AUTO_JOIN_ENABLED, os.environ.get('GARMIN_AUTO_JOIN_ENABLED', 'false'))
     GARMIN_AUTO_JOIN_ENABLED = garmin_auto_join_enabled_str.lower() == 'true'
