@@ -192,6 +192,18 @@
                         <option value="CRITICAL" {% if current_settings.get('LOG_LEVEL') == 'CRITICAL' %}selected{% endif %}>CRITICAL</option>
                     </select>
                 </div>
+
+                <div class="form-group">
+                    <label for="discord_log_level">Discord Log Level</label>
+                    <select name="discord_log_level" id="discord_log_level">
+                        <option value="DEBUG" {% if current_settings.get('DISCORD_LOG_LEVEL') == 'DEBUG' %}selected{% endif %}>DEBUG</option>
+                        <option value="INFO" {% if current_settings.get('DISCORD_LOG_LEVEL') == 'INFO' %}selected{% endif %}>INFO</option>
+                        <option value="WARNING" {% if current_settings.get('DISCORD_LOG_LEVEL') == 'WARNING' %}selected{% endif %}>WARNING</option>
+                        <option value="ERROR" {% if current_settings.get('DISCORD_LOG_LEVEL') == 'ERROR' %}selected{% endif %}>ERROR</option>
+                        <option value="CRITICAL" {% if current_settings.get('DISCORD_LOG_LEVEL') == 'CRITICAL' %}selected{% endif %}>CRITICAL</option>
+                    </select>
+                    <p class="note">Controls logging level for discord.* packages (gateway, http, etc.)</p>
+                </div>
             </div>
 
             <div class="category-header" onclick="toggleCategory('garmin-category')">
