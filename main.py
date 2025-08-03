@@ -632,6 +632,7 @@ GARMIN_AUTO_JOIN_ENABLED = False
 GARMIN_AUTO_JOIN_CHANNELS = []
 
 shutdown_initiated = False
+garmin_manager = None
 
 # --------- User Log Database Initialization Function ---------
 def init_user_log_db():
