@@ -43,6 +43,15 @@
             text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
         }
 
+        .status-container {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            align-items: center;
+            margin-top: 15px;
+            flex-wrap: wrap;
+        }
+
         .status-badge {
             display: inline-block;
             background: linear-gradient(135deg, #27ae60, #229954);
@@ -52,7 +61,17 @@
             font-weight: 600;
             font-size: 1.3em;
             box-shadow: 0 4px 12px rgba(39, 174, 96, 0.3);
-            margin-top: 15px;
+        }
+
+        .version-badge {
+            display: inline-block;
+            background: linear-gradient(135deg, #3498db, #2980b9);
+            color: white;
+            padding: 15px 30px;
+            border-radius: 30px;
+            font-weight: 600;
+            font-size: 1.3em;
+            box-shadow: 0 4px 12px rgba(52, 152, 219, 0.3);
         }
 
         .content {
@@ -250,6 +269,82 @@
             margin-right: 8px;
         }
 
+        /* Toast Notifications */
+        .toast-container {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 1000;
+            pointer-events: none;
+        }
+
+        .toast {
+            background: rgba(45, 45, 45, 0.95);
+            color: #e0e0e0;
+            padding: 15px 20px;
+            border-radius: 10px;
+            margin-bottom: 10px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+            border: 1px solid #404040;
+            min-width: 300px;
+            max-width: 400px;
+            transform: translateX(100%);
+            transition: transform 0.3s ease;
+            pointer-events: auto;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .toast.show {
+            transform: translateX(0);
+        }
+
+        .toast.success {
+            border-left: 4px solid #27ae60;
+        }
+
+        .toast.error {
+            border-left: 4px solid #e74c3c;
+        }
+
+        .toast.info {
+            border-left: 4px solid #3498db;
+        }
+
+        .toast-icon {
+            font-size: 1.2em;
+            flex-shrink: 0;
+        }
+
+        .toast-message {
+            flex-grow: 1;
+            font-size: 14px;
+            line-height: 1.4;
+        }
+
+        .toast-close {
+            background: none;
+            border: none;
+            color: #bdc3c7;
+            cursor: pointer;
+            font-size: 18px;
+            padding: 0;
+            width: 20px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            transition: background-color 0.2s ease;
+        }
+
+        .toast-close:hover {
+            background-color: rgba(255, 255, 255, 0.1);
+            color: #ffffff;
+        }
+
         @media (max-width: 768px) {
             .main-content {
                 grid-template-columns: 1fr;
@@ -266,14 +361,43 @@
             .status-grid {
                 grid-template-columns: repeat(2, 1fr);
             }
+
+            .status-container {
+                flex-direction: column;
+                gap: 10px;
+            }
+
+            .status-badge,
+            .version-badge {
+                font-size: 1.1em;
+                padding: 12px 25px;
+            }
+
+            .toast-container {
+                top: 10px;
+                left: 10px;
+                right: 10px;
+                transform: none;
+            }
+
+            .toast {
+                min-width: auto;
+                max-width: none;
+            }
         }
     </style>
 </head>
 <body>
+    <!-- Toast Container -->
+    <div class="toast-container" id="toast-container"></div>
+
     <div class="container">
         <div class="header">
             <h1>🤖 Discord Bot Dashboard</h1>
-            <div class="status-badge">✅ Bot Status: Online and Running</div>
+            <div class="status-container">
+                <div class="status-badge">✅ Bot Status: Online and Running</div>
+                <div class="version-badge">📦 Version: {{ bot_version }}</div>
+            </div>
         </div>
 
         <div class="content">
@@ -412,6 +536,40 @@
     </div>
 
     <script>
+        // Toast notification system
+        function showToast(message, type = 'info', duration = 5000) {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            
+            const icon = type === 'success' ? '✅' : type === 'error' ? '❌' : 'ℹ️';
+            
+            toast.innerHTML = `
+                <div class="toast-icon">${icon}</div>
+                <div class="toast-message">${message}</div>
+                <button class="toast-close" onclick="this.parentElement.remove()">×</button>
+            `;
+            
+            container.appendChild(toast);
+            
+            // Trigger animation
+            setTimeout(() => {
+                toast.classList.add('show');
+            }, 10);
+            
+            // Auto remove after duration
+            setTimeout(() => {
+                if (toast.parentElement) {
+                    toast.classList.remove('show');
+                    setTimeout(() => {
+                        if (toast.parentElement) {
+                            toast.remove();
+                        }
+                    }, 300);
+                }
+            }, duration);
+        }
+
         function sendGarminCommand(command) {
             // Call the appropriate garmin function
             switch(command) {
@@ -469,16 +627,16 @@
                     .then(response => response.json())
                     .then(data => {
                         if (data.success) {
-                            alert('✅ Garmin recording started successfully!');
+                            showToast('✅ Garmin recording started successfully!', 'success');
                             // Refresh status immediately after successful action
                             setTimeout(refreshStatusData, 1000);
                         } else {
-                            alert('❌ Failed to start recording: ' + data.error);
+                            showToast('❌ Failed to start recording: ' + data.error, 'error');
                         }
                     })
                     .catch(error => {
                         console.error('Error:', error);
-                        alert('❌ Error starting recording. Check console for details.');
+                        showToast('❌ Error starting recording. Check console for details.', 'error');
                     });
             },
             
@@ -488,16 +646,16 @@
                     .then(response => response.json())
                     .then(data => {
                         if (data.success) {
-                            alert('✅ Garmin recording stopped successfully!');
+                            showToast('✅ Garmin recording stopped successfully!', 'success');
                             // Refresh status immediately after successful action
                             setTimeout(refreshStatusData, 1000);
                         } else {
-                            alert('❌ Failed to stop recording: ' + data.error);
+                            showToast('❌ Failed to stop recording: ' + data.error, 'error');
                         }
                     })
                     .catch(error => {
                         console.error('Error:', error);
-                        alert('❌ Error stopping recording. Check console for details.');
+                        showToast('❌ Error stopping recording. Check console for details.', 'error');
                     });
             },
             
@@ -507,16 +665,16 @@
                     .then(response => response.json())
                     .then(data => {
                         if (data.success) {
-                            alert('✅ Garmin recording saved successfully!');
+                            showToast('✅ Garmin recording saved successfully!', 'success');
                             // Refresh status immediately after successful action
                             setTimeout(refreshStatusData, 1000);
                         } else {
-                            alert('❌ Failed to save recording: ' + data.error);
+                            showToast('❌ Failed to save recording: ' + data.error, 'error');
                         }
                     })
                     .catch(error => {
                         console.error('Error:', error);
-                        alert('❌ Error saving recording. Check console for details.');
+                        showToast('❌ Error saving recording. Check console for details.', 'error');
                     });
             },
             
@@ -526,16 +684,16 @@
                     .then(response => response.json())
                     .then(data => {
                         if (data.success) {
-                            alert('✅ Garmin auto-join toggled successfully!');
+                            showToast('✅ Garmin auto-join toggled successfully!', 'success');
                             // Refresh status immediately after successful action
                             setTimeout(refreshStatusData, 1000);
                         } else {
-                            alert('❌ Failed to toggle auto-join: ' + data.error);
+                            showToast('❌ Failed to toggle auto-join: ' + data.error, 'error');
                         }
                     })
                     .catch(error => {
                         console.error('Error:', error);
-                        alert('❌ Error toggling auto-join. Check console for details.');
+                        showToast('❌ Error toggling auto-join. Check console for details.', 'error');
                     });
             },
             
@@ -545,16 +703,16 @@
                     .then(response => response.json())
                     .then(data => {
                         if (data.success) {
-                            alert('✅ STT output toggled successfully!');
+                            showToast('✅ STT output toggled successfully!', 'success');
                             // Refresh status immediately after successful action
                             setTimeout(refreshStatusData, 1000);
                         } else {
-                            alert('❌ Failed to toggle STT output: ' + data.error);
+                            showToast('❌ Failed to toggle STT output: ' + data.error, 'error');
                         }
                     })
                     .catch(error => {
                         console.error('Error:', error);
-                        alert('❌ Error toggling STT output. Check console for details.');
+                        showToast('❌ Error toggling STT output. Check console for details.', 'error');
                     });
             }
         };

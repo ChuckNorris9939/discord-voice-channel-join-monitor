@@ -1,4 +1,3 @@
-# v1.15 - Fix summarized join + added get_user_list()
 import os
 from pathlib import Path
 import threading
@@ -13,6 +12,7 @@ from typing import Dict, List, Optional
 import signal
 import asyncio
 import time
+import logging.handlers
 
 # Load environment variables from .env file
 try:
@@ -26,27 +26,77 @@ except Exception as e:
     print(f"⚠️ Error loading .env file: {e}")
     print("   Environment variables will only be loaded from system environment")
 
-BOT_VERSION = "1.15"
+BOT_VERSION = "2.0.0"
 # Get the directory where this script is located
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_DIR = os.path.join(SCRIPT_DIR, "config")
 DATABASE_NAME = "user_log.db"
 DATABASE_PATH = os.path.join(CONFIG_DIR, DATABASE_NAME)
 GARMIN_OUTPUT_DIR = os.path.join(SCRIPT_DIR, "data", "garmin-output")
+LOGS_DIR = os.path.join(SCRIPT_DIR, "data", "logs")
 
 # --------- Logging ---------
 import logging
 import sys
 
-# Set up basic logging configuration
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-    handlers=[
-        logging.StreamHandler(sys.stdout)
-    ]
-)
+# Create logs directory if it doesn't exist
+os.makedirs(LOGS_DIR, exist_ok=True)
+
+# Set up logging configuration with both console and file handlers
+def setup_logging():
+    # Create formatter
+    formatter = logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    )
+    
+    # Create console handler
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(formatter)
+    
+    # Create file handler with rotation (7 days retention)
+    log_file = os.path.join(LOGS_DIR, "discord_bot.log")
+    file_handler = logging.handlers.TimedRotatingFileHandler(
+        log_file,
+        when='midnight',
+        interval=1,
+        backupCount=7,  # Keep 7 days of logs
+        encoding='utf-8'
+    )
+    file_handler.setFormatter(formatter)
+    
+    # Set up root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+    root_logger.addHandler(console_handler)
+    root_logger.addHandler(file_handler)
+    
+    # Clean up old log files (older than 7 days)
+    cleanup_old_logs()
+
+def cleanup_old_logs():
+    """Remove log files older than 7 days"""
+    try:
+        current_time = time.time()
+        cutoff_time = current_time - (7 * 24 * 60 * 60)  # 7 days in seconds
+        
+        for filename in os.listdir(LOGS_DIR):
+            if filename.endswith('.log'):
+                file_path = os.path.join(LOGS_DIR, filename)
+                file_time = os.path.getmtime(file_path)
+                
+                if file_time < cutoff_time:
+                    try:
+                        os.remove(file_path)
+                        print(f"Removed old log file: {filename}")
+                    except OSError as e:
+                        print(f"Error removing old log file {filename}: {e}")
+    except Exception as e:
+        print(f"Error during log cleanup: {e}")
+
+# Initialize logging
+setup_logging()
+
 logger = logging.getLogger("discord_bot") # Spezifischer Name für den Bot-Logger
 
 # --------- Flask-Server für Health Checks ---------
@@ -409,7 +459,7 @@ def get_status_data():
                 'recording': False,
                 'duration': '0.0s',
                 'buffer': '0.00 MB',
-                'errors': '0/5',
+                'errors': '0/5',  # Default fallback - will be updated by get_garmin_health_data() if available
                 'processing': 'Idle'
             }
         }
@@ -427,33 +477,43 @@ def get_garmin_health_data():
             else:
                 duration = '0.0s'
             
+            # Get actual error values from the health data
+            recording_errors = health.get('recording_errors', 0)
+            max_errors = health.get('max_errors', 5)
+            
             return {
                 'autojoin': cfg.GARMIN_AUTO_JOIN_ENABLED,  # Get from config
                 'recording': is_connected,
                 'duration': duration,
                 'buffer': f"{health.get('buffer_size', 0) / (1024*1024):.2f} MB",
-                'errors': f"{health.get('recording_errors', 0)}/{health.get('max_errors', 5)}",
+                'errors': f"{recording_errors}/{max_errors}",
                 'processing': 'Processing' if health.get('is_processing', False) else 'Idle',
                 'stt_output': cfg.GARMIN_STT_OUTPUT_ENABLED  # Get from config
             }
         else:
+            # Get max_errors from environment or use default
+            import os
+            max_errors = int(os.getenv("GARMIN_MAX_RECORDING_ERRORS", "5"))
             return {
                 'autojoin': cfg.GARMIN_AUTO_JOIN_ENABLED,  # Get from config
                 'recording': False,
                 'duration': '0.0s',
                 'buffer': '0.00 MB',
-                'errors': '0/5',
+                'errors': f"0/{max_errors}",
                 'processing': 'Idle',
                 'stt_output': cfg.GARMIN_STT_OUTPUT_ENABLED  # Get from config
             }
     except Exception as e:
         logger.error(f"Error getting Garmin health data: {e}")
+        # Get max_errors from environment or use default
+        import os
+        max_errors = int(os.getenv("GARMIN_MAX_RECORDING_ERRORS", "5"))
         return {
             'autojoin': cfg.GARMIN_AUTO_JOIN_ENABLED,  # Get from config
             'recording': False,
             'duration': '0.0s',
             'buffer': '0.00 MB',
-            'errors': '0/5',
+            'errors': f"0/{max_errors}",
             'processing': 'Idle',
             'stt_output': cfg.GARMIN_STT_OUTPUT_ENABLED  # Get from config
         }
@@ -1713,18 +1773,20 @@ recent_joins: Dict[int, List[str]] = {} # Key: channel_id, Value: list of user m
 join_timers: Dict[int, asyncio.Task] = {} # Key: channel_id, Value: asyncio.Task
 
 # Global Vars for AFK Mover
-AFK_CHANNEL_ID = 482233624234557451 # Set this to the ID of your AFK voice channel
-AFK_TIMER_MINUTES = 10
 fully_deafened_users: Dict[int, asyncio.Task] = {} # Key: user_id, Value: asyncio.Task
 
 async def move_to_afk(member: discord.Member):
     """Coroutine to move a member to the AFK channel after a delay."""
-    global AFK_CHANNEL_ID
-    if not AFK_CHANNEL_ID:
+    # Use the configured AFK channel ID and timer from config
+    afk_channel_id = cfg.AFK_CHANNEL_ID
+    afk_timer_minutes = cfg.AFK_TIMER_MINUTES
+    
+    if not afk_channel_id:
         logger.warning(f"AFK Mover: AFK_CHANNEL_ID not set. Cannot move {member.name}.")
         return
 
-    await asyncio.sleep(AFK_TIMER_MINUTES * 60)
+    logger.info(f"AFK Mover: Starting timer for {member.name} - will move after {afk_timer_minutes} minutes")
+    await asyncio.sleep(afk_timer_minutes * 60)
 
     # Re-fetch member object to ensure we have the latest state
     guild = bot.get_guild(DISCORD_SERVER_ID)
@@ -1737,12 +1799,12 @@ async def move_to_afk(member: discord.Member):
         return # User left, no need to move
 
     if member.voice and member.voice.channel and member.voice.self_deaf:
-        afk_channel = guild.get_channel(AFK_CHANNEL_ID)
+        afk_channel = guild.get_channel(afk_channel_id)
         if afk_channel and isinstance(afk_channel, discord.VoiceChannel):
             try:
-                await member.move_to(afk_channel, reason="Benutzer war für 10 Minuten taubgeschaltet.")
-                logger.info(f"AFK Mover: Moved {member.name} to AFK channel.")
-                await send_log_message(f"😴 {member.mention} wurde in den AFK-Kanal verschoben, da er/sie für 10 Minuten taubgeschaltet war.", target_channel_ids=[BOT_AUDIT_ID])
+                await member.move_to(afk_channel, reason=f"Benutzer war für {afk_timer_minutes} Minuten taubgeschaltet.")
+                logger.info(f"AFK Mover: Moved {member.name} to AFK channel after {afk_timer_minutes} minutes.")
+                await send_log_message(f"😴 {member.mention} wurde in den AFK-Kanal verschoben, da er/sie für {afk_timer_minutes} Minuten taubgeschaltet war.", target_channel_ids=[cfg.BOT_AUDIT_ID])
             except discord.Forbidden:
                 logger.error(f"AFK Mover: No permission to move {member.name} to AFK channel.")
             except Exception as e:
