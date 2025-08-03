@@ -7,3 +7,5 @@ assets/models/
 *.zip
 venv/
 assets/models/
+ffmpeg-master-latest-win64-gpl/
+opus/

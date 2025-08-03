@@ -531,7 +531,7 @@ class GarminVoiceManager:
 
     # ------------------------------ Helpers ------------------------------------
     def _save_individual_user_recordings(self, base_filename: str) -> dict[int, str]:
-        """Save individual user recordings before mixing.
+        """Save individual user recordings as OGG files using Craig-style approach.
         
         Args:
             base_filename: Base filename without extension (e.g., "recording_03.08.2025_08-53")
@@ -560,7 +560,7 @@ class GarminVoiceManager:
                     logger.info("No synchronized audio data found for individual user recordings")
                     return saved_files
                 
-                # Save each user's audio separately
+                # Save each user's audio separately as OGG
                 for user_id, frames in user_sync_data.items():
                     if not frames:
                         continue
@@ -579,21 +579,19 @@ class GarminVoiceManager:
                             continue
                         
                         # Create filename for this user
-                        user_filename = f"{base_filename}_user_{user_id}.wav"
+                        user_filename = f"{base_filename}_user_{user_id}.ogg"
                         user_path = os.path.join(OUTPUT_DIR, user_filename)
                         
-                        # Save user's audio as WAV file
-                        with wave.open(user_path, "wb") as wf:
-                            wf.setnchannels(CHANNELS)
-                            wf.setsampwidth(BYTES_PER_SAMPLE)
-                            wf.setframerate(SAMPLERATE)
-                            wf.writeframes(bytes(audio_data))
+                        # Save user's audio as OGG file using opusenc
+                        success = self._convert_audio_to_ogg(audio_data, user_path)
                         
-                        # Calculate duration
-                        duration = len(audio_data) / SAMPLERATE / CHANNELS / BYTES_PER_SAMPLE
-                        saved_files[user_id] = user_path
-                        
-                        logger.info(f"Saved individual recording for user {user_id}: {user_path} (duration: {duration:.1f}s)")
+                        if success:
+                            # Calculate duration (approximate)
+                            duration = len(audio_data) / SAMPLERATE / CHANNELS / BYTES_PER_SAMPLE
+                            saved_files[user_id] = user_path
+                            logger.info(f"Saved individual recording for user {user_id}: {user_path} (duration: {duration:.1f}s)")
+                        else:
+                            logger.error(f"Failed to save OGG recording for user {user_id}")
                         
                     except Exception as e:
                         logger.error(f"Error saving individual recording for user {user_id}: {e}")
@@ -605,6 +603,68 @@ class GarminVoiceManager:
         except Exception as e:
             logger.error(f"Error saving individual user recordings: {e}")
             return saved_files
+
+    def _convert_audio_to_ogg(self, audio_data: bytes, filename: str) -> bool:
+        """Convert PCM audio data to OGG using opusenc tool.
+        
+        Args:
+            audio_data: Raw PCM audio data
+            filename: Output OGG filename
+            
+        Returns:
+            True if conversion successful, False otherwise
+        """
+        try:
+            import tempfile
+            import subprocess
+            import os
+            
+            # Create a temporary WAV file
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_wav:
+                temp_wav_path = temp_wav.name
+            
+            # Write PCM data to temporary WAV file
+            with wave.open(temp_wav_path, "wb") as wf:
+                wf.setnchannels(CHANNELS)
+                wf.setsampwidth(BYTES_PER_SAMPLE)
+                wf.setframerate(SAMPLERATE)
+                wf.writeframes(audio_data)
+            
+            try:
+                # Use opusenc to convert WAV to OGG
+                cmd = [
+                    './opus/opusenc.exe',
+                    '--bitrate', '128',  # 128 kbps bitrate
+                    '--comp', '10',      # Compression level 10 (max quality)
+                    temp_wav_path,
+                    filename
+                ]
+                
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+                
+                if result.returncode == 0:
+                    logger.debug(f"Successfully converted audio to OGG: {filename}")
+                    return True
+                else:
+                    logger.error(f"opusenc failed with return code {result.returncode}")
+                    logger.error(f"opusenc stderr: {result.stderr}")
+                    return False
+                    
+            finally:
+                # Clean up temporary WAV file
+                try:
+                    os.unlink(temp_wav_path)
+                except OSError:
+                    pass
+                    
+        except Exception as e:
+            logger.error(f"Error converting audio to OGG: {e}")
+            return False
 
     def save_recording(self):
         """Save current recording by combining per-user audio streams and restart with a delay."""
@@ -625,7 +685,7 @@ class GarminVoiceManager:
                 logger.info(f"Before combining: {total_users} users, total buffer size: {total_buffer_size} bytes")
             
             base_filename = f"recording_{time.strftime('%d.%m.%Y_%H-%M', time.localtime())}"
-            mixed_filename = f"{base_filename}.wav"
+            mixed_filename = f"{base_filename}.ogg"
             mixed_path = os.path.join(OUTPUT_DIR, mixed_filename)
             
             # Save individual user recordings first
@@ -635,16 +695,16 @@ class GarminVoiceManager:
             combined_audio = self._combine_user_audio_streams()
             
             if combined_audio:
-                with wave.open(mixed_path, "wb") as wf:
-                    wf.setnchannels(CHANNELS)
-                    wf.setsampwidth(BYTES_PER_SAMPLE)
-                    wf.setframerate(SAMPLERATE)
-                    wf.writeframes(combined_audio)
+                # Save mixed recording as OGG file
+                success = self._convert_audio_to_ogg(combined_audio, mixed_path)
                 
-                # Calculate actual saved duration
-                saved_duration = len(combined_audio) / SAMPLERATE / CHANNELS / BYTES_PER_SAMPLE
-                logger.info("Mixed recording saved: %s (requested: %.1fs, actual: %.1fs, users: %d, individual files: %d)", 
-                          mixed_path, recording_duration, saved_duration, len(self.user_buffers), len(individual_files))
+                if success:
+                    # Calculate actual saved duration
+                    saved_duration = len(combined_audio) / SAMPLERATE / CHANNELS / BYTES_PER_SAMPLE
+                    logger.info("Mixed recording saved: %s (requested: %.1fs, actual: %.1fs, users: %d, individual files: %d)", 
+                              mixed_path, recording_duration, saved_duration, len(self.user_buffers), len(individual_files))
+                else:
+                    logger.error("Failed to save mixed OGG recording")
             else:
                 logger.warning("No audio data available for saving mixed recording")
             

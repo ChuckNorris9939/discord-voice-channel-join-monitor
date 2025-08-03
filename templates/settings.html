@@ -371,11 +371,18 @@
                         <label for="garmin_record_seconds">Garmin Record Seconds</label>
                         <input type="number" name="garmin_record_seconds" id="garmin_record_seconds" value="{{ current_settings.get('GARMIN_RECORD_SECONDS', '600') }}" min="1">
                     </div>
-                    <!-- Garmin Max Recording Duration -->
-                    <div class="form-group">
-                        <label for="garmin_max_recording_duration">Garmin Max Recording Duration</label>
-                        <input type="number" name="garmin_max_recording_duration" id="garmin_max_recording_duration" value="{{ current_settings.get('GARMIN_MAX_RECORDING_DURATION', '3600') }}" min="1">
-                    </div>
+                                <!-- Garmin Max Recording Duration -->
+            <div class="form-group">
+                <label for="garmin_max_recording_duration">Garmin Max Recording Duration</label>
+                <input type="number" name="garmin_max_recording_duration" id="garmin_max_recording_duration" value="{{ current_settings.get('GARMIN_MAX_RECORDING_DURATION', '3600') }}" min="1">
+            </div>
+
+            <!-- Garmin Default Save Duration -->
+            <div class="form-group">
+                <label for="garmin_default_save_duration">Garmin Default Save Duration (minutes)</label>
+                <input type="number" name="garmin_default_save_duration" id="garmin_default_save_duration" value="{{ current_settings.get('GARMIN_DEFAULT_SAVE_DURATION', '30') }}" min="1" max="1440">
+                <small>Default duration for saved recordings (1-1440 minutes)</small>
+            </div>
                     <!-- Garmin STT Output Enabled -->
                     <div class="form-group">
                         <label for="garmin_stt_output_enabled">Garmin STT Output Enabled</label>

@@ -221,6 +221,41 @@
             margin-left: 10px;
         }
 
+        .format-badge {
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 0.8em;
+            font-weight: bold;
+            margin-left: 8px;
+        }
+        
+        .format-badge.opus {
+            background-color: #ff6b35;
+            color: white;
+        }
+        
+        .format-badge.ogg {
+            background-color: #ff6b35;
+            color: white;
+        }
+        
+        .format-badge.mp3 {
+            background-color: #4ecdc4;
+            color: white;
+        }
+        
+        .format-badge.wav {
+            background-color: #45b7d1;
+            color: white;
+        }
+        
+        .file-size {
+            color: #666;
+            font-size: 0.9em;
+            margin-left: 8px;
+        }
+
         .audio-controls {
             flex: 1;
             min-width: 300px;
@@ -349,11 +384,12 @@
                                     <div class="recording-details">
                                         <span><strong>Size:</strong> {{ recording.size_mb }} MB</span>
                                         <span><strong>File:</strong> {{ recording.filename }}</span>
+                                        <span class="format-badge {{ recording.format.lower() }}">{{ recording.format }}</span>
                                     </div>
                                 </div>
                                 <div class="audio-controls">
                                     <audio controls>
-                                        <source src="{{ url_for('download_recording', filename=recording.filename) }}" type="audio/wav">
+                                        <source src="{{ url_for('download_recording', filename=recording.filename) }}" type="audio/{{ recording.format.lower() }}">
                                         Your browser does not support the audio element.
                                     </audio>
                                 </div>
@@ -369,7 +405,7 @@
             {% else %}
                 <div class="no-recordings">
                     <h3>No recordings found</h3>
-                    <p>The data/garmin-output directory is empty or doesn't contain any .wav files.</p>
+                    <p>The data/garmin-output directory is empty or doesn't contain any audio files.</p>
                 </div>
             {% endif %}
         </div>

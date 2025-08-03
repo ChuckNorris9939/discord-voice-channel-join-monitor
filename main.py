@@ -184,7 +184,9 @@ def garmin_recordings_page():
         # Group recordings by base filename
         recording_groups = {}
         
-        for file_path in output_dir.glob("*.wav"):
+        for file_path in output_dir.glob("*.*"):
+            if file_path.suffix.lower() not in ['.wav', '.ogg', '.mp3']:
+                continue
             if file_path.is_file():
                 # Get file stats
                 stat = file_path.stat()
@@ -197,15 +199,26 @@ def garmin_recordings_page():
                 if "_user_" in filename:
                     # Individual user recording: "recording_03.08.2025_08-53_user_123456.wav"
                     base_filename = filename.replace("_user_", "_").rsplit("_", 1)[0]
-                    user_id = filename.split("_user_")[1].replace(".wav", "")
+                    user_id = filename.split("_user_")[1].rsplit(".", 1)[0]  # Remove any extension
                     recording_type = "individual"
                     user_info = f"User {user_id}"
                 else:
                     # Mixed recording: "recording_03.08.2025_08-53.wav"
-                    base_filename = filename.replace(".wav", "")
+                    base_filename = filename.rsplit(".", 1)[0]  # Remove any extension
                     user_id = None
                     recording_type = "mixed"
                     user_info = "Mixed (All Users)"
+                
+                # Determine file format
+                file_extension = file_path.suffix.lower()
+                if file_extension == '.wav':
+                    format_type = 'WAV'
+                elif file_extension == '.ogg':
+                    format_type = 'OGG'
+                elif file_extension == '.mp3':
+                    format_type = 'MP3'
+                else:
+                    format_type = file_extension.upper()
                 
                 recording_info = {
                     'filename': filename,
@@ -215,7 +228,8 @@ def garmin_recordings_page():
                     'path': str(file_path),
                     'recording_type': recording_type,
                     'user_info': user_info,
-                    'user_id': user_id
+                    'user_id': user_id,
+                    'format': format_type
                 }
                 
                 if base_filename not in recording_groups:
@@ -328,6 +342,7 @@ def settings_route():
             save_setting(DB_KEY_GARMIN_AUTO_JOIN_CHANNELS, request.form.get('garmin_auto_join_channels', '1080202313211326584,571755941725208616,492036470681632778'))
             save_setting(DB_KEY_GARMIN_RECORD_SECONDS, request.form.get('garmin_record_seconds', '600'))
             save_setting(DB_KEY_GARMIN_MAX_RECORDING_DURATION, request.form.get('garmin_max_recording_duration', '3600'))
+            save_setting(DB_KEY_GARMIN_DEFAULT_SAVE_DURATION, request.form.get('garmin_default_save_duration', '30'))
             save_setting(DB_KEY_GARMIN_STT_OUTPUT_ENABLED, request.form.get('garmin_stt_output_enabled', 'true'))
 
             # Handle General Settings
@@ -423,6 +438,7 @@ def settings_route():
     current_settings_display['GARMIN_AUTO_JOIN_CHANNELS'] = ','.join(map(str, cfg.GARMIN_AUTO_JOIN_CHANNELS)) if cfg.GARMIN_AUTO_JOIN_CHANNELS else ''
     current_settings_display['GARMIN_RECORD_SECONDS'] = str(cfg.GARMIN_RECORD_SECONDS)
     current_settings_display['GARMIN_MAX_RECORDING_DURATION'] = str(cfg.GARMIN_MAX_RECORDING_DURATION)
+    current_settings_display['GARMIN_DEFAULT_SAVE_DURATION'] = str(cfg.GARMIN_DEFAULT_SAVE_DURATION)
     current_settings_display['GARMIN_STT_OUTPUT_ENABLED'] = str(cfg.GARMIN_STT_OUTPUT_ENABLED).lower()
 
     # General Settings
@@ -1074,7 +1090,7 @@ def update_thread_reminder_sent(thread_id: int, timestamp_iso: str):
 
 # --------- Helper Functions for bot_settings Table ---------
 import config_loader as cfg
-from config_loader import save_setting, DB_KEY_APP_TESTING_MODE, DB_KEY_HIDDEN_CHANNELS, DB_KEY_LOG_CHANNEL_ID, DB_KEY_BOT_AUDIT_ID, DB_KEY_TECHSUPPORT_CHANNEL_ID, DB_KEY_AFK_CHANNEL_ID, DB_KEY_PURGE_OLDER_THAN_DAYS, DB_KEY_JOIN_MESSAGE_TIMER_ENABLED, DB_KEY_JOIN_MESSAGE_TIMER_MINUTES, DB_KEY_AFK_TIMER_MINUTES, DB_KEY_STT_ENABLED, DB_KEY_STT_ENGINE, DB_KEY_VOSK_MODEL_PATH, DB_KEY_GARMIN_AUTO_JOIN_ENABLED, DB_KEY_GARMIN_AUTO_JOIN_CHANNELS, DB_KEY_GARMIN_RECORD_SECONDS, DB_KEY_GARMIN_MAX_RECORDING_DURATION, DB_KEY_GARMIN_STT_OUTPUT_ENABLED, DB_KEY_LOG_LEVEL, DB_KEY_DISCORD_LOG_LEVEL
+from config_loader import save_setting, DB_KEY_APP_TESTING_MODE, DB_KEY_HIDDEN_CHANNELS, DB_KEY_LOG_CHANNEL_ID, DB_KEY_BOT_AUDIT_ID, DB_KEY_TECHSUPPORT_CHANNEL_ID, DB_KEY_AFK_CHANNEL_ID, DB_KEY_PURGE_OLDER_THAN_DAYS, DB_KEY_JOIN_MESSAGE_TIMER_ENABLED, DB_KEY_JOIN_MESSAGE_TIMER_MINUTES, DB_KEY_AFK_TIMER_MINUTES, DB_KEY_STT_ENABLED, DB_KEY_STT_ENGINE, DB_KEY_VOSK_MODEL_PATH, DB_KEY_GARMIN_AUTO_JOIN_ENABLED, DB_KEY_GARMIN_AUTO_JOIN_CHANNELS, DB_KEY_GARMIN_RECORD_SECONDS, DB_KEY_GARMIN_MAX_RECORDING_DURATION, DB_KEY_GARMIN_DEFAULT_SAVE_DURATION, DB_KEY_GARMIN_STT_OUTPUT_ENABLED, DB_KEY_LOG_LEVEL, DB_KEY_DISCORD_LOG_LEVEL
 
 
 
