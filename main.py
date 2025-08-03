@@ -181,6 +181,9 @@ def garmin_recordings_page():
     logger.info(f"Looking for recordings in: {output_dir}")
     
     if output_dir.exists():
+        # Group recordings by base filename
+        recording_groups = {}
+        
         for file_path in output_dir.glob("*.wav"):
             if file_path.is_file():
                 # Get file stats
@@ -188,20 +191,57 @@ def garmin_recordings_page():
                 file_size = stat.st_size
                 modified_time = stat.st_mtime
                 
-                recordings.append({
-                    'filename': file_path.name,
+                filename = file_path.name
+                
+                # Check if this is an individual user recording or mixed recording
+                if "_user_" in filename:
+                    # Individual user recording: "recording_03.08.2025_08-53_user_123456.wav"
+                    base_filename = filename.replace("_user_", "_").rsplit("_", 1)[0]
+                    user_id = filename.split("_user_")[1].replace(".wav", "")
+                    recording_type = "individual"
+                    user_info = f"User {user_id}"
+                else:
+                    # Mixed recording: "recording_03.08.2025_08-53.wav"
+                    base_filename = filename.replace(".wav", "")
+                    user_id = None
+                    recording_type = "mixed"
+                    user_info = "Mixed (All Users)"
+                
+                recording_info = {
+                    'filename': filename,
                     'size_mb': round(file_size / (1024 * 1024), 2),
                     'modified': time.strftime('%d.%m.%Y %H:%M', time.localtime(modified_time)),
-                    'modified_timestamp': modified_time,  # Add timestamp for proper sorting
-                    'path': str(file_path)
-                })
+                    'modified_timestamp': modified_time,
+                    'path': str(file_path),
+                    'recording_type': recording_type,
+                    'user_info': user_info,
+                    'user_id': user_id
+                }
+                
+                if base_filename not in recording_groups:
+                    recording_groups[base_filename] = {
+                        'base_filename': base_filename,
+                        'modified_timestamp': modified_time,
+                        'recordings': []
+                    }
+                
+                recording_groups[base_filename]['recordings'].append(recording_info)
+                
+                # Update the group's timestamp to the latest file
+                if modified_time > recording_groups[base_filename]['modified_timestamp']:
+                    recording_groups[base_filename]['modified_timestamp'] = modified_time
         
-        logger.info(f"Found {len(recordings)} recording files")
+        # Convert groups to list and sort by timestamp (newest first)
+        recordings = list(recording_groups.values())
+        recordings.sort(key=lambda x: x['modified_timestamp'], reverse=True)
+        
+        # Sort recordings within each group (mixed first, then individual users)
+        for group in recordings:
+            group['recordings'].sort(key=lambda x: (x['recording_type'] != 'mixed', x['user_id'] or ''))
+        
+        logger.info(f"Found {len(recordings)} recording groups with {sum(len(g['recordings']) for g in recordings)} total files")
     else:
         logger.warning(f"Garmin output directory does not exist: {output_dir}")
-    
-    # Sort by modification timestamp (newest first)
-    recordings.sort(key=lambda x: x['modified_timestamp'], reverse=True)
     
     return render_template('garmin_recordings.html', recordings=recordings)
 
