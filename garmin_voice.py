@@ -82,6 +82,14 @@ USER_BUFFER_MAX_SIZE: Final[int] = int(os.getenv("GARMIN_USER_BUFFER_MAX_SIZE", 
 USER_BUFFER_CLEANUP_INTERVAL: Final[float] = float(os.getenv("GARMIN_USER_BUFFER_CLEANUP_INTERVAL", "600.0"))  # 10 minutes
 
 # --------------------------------------------------
+# Audio synchronization constants
+# --------------------------------------------------
+FRAME_DURATION_MS: Final[float] = 20.0  # Discord voice frames are 20ms
+FRAME_SIZE_BYTES: Final[int] = int(FRAME_DURATION_MS / 1000 * SAMPLERATE * CHANNELS * BYTES_PER_SAMPLE)
+SYNC_BUFFER_SIZE: Final[int] = int(os.getenv("GARMIN_SYNC_BUFFER_SIZE", "5000"))  # Increased to 5000 frames (100 seconds) to prevent audio loss
+SYNC_TOLERANCE_MS: Final[float] = float(os.getenv("GARMIN_SYNC_TOLERANCE_MS", "15.0"))  # Increased to 15ms tolerance for better frame matching
+
+# --------------------------------------------------
 # Path configuration
 # --------------------------------------------------
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -141,6 +149,12 @@ class GarminVoiceManager:
         self.user_buffer_locks: dict[int, threading.Lock] = {}  # user_id -> lock
         self.user_last_activity: dict[int, float] = {}  # user_id -> last activity timestamp
         self._user_buffers_lock = threading.Lock()  # Lock for user_buffers dict operations
+
+        # Synchronized audio buffer for proper timing
+        self.sync_audio_buffer: dict[int, list[tuple[float, bytes]]] = {}  # user_id -> [(timestamp, frame_data), ...]
+        self.sync_buffer_locks: dict[int, threading.Lock] = {}  # user_id -> lock for sync buffer
+        self.frame_counter: int = 0  # Global frame counter for synchronization
+        self._sync_buffer_lock = threading.Lock()  # Lock for sync buffer operations
 
         # STT processing queue to prevent conflicts
         self.stt_queue = queue.Queue(maxsize=2)
@@ -263,7 +277,7 @@ class GarminVoiceManager:
                 logger.debug("STT queue full, skipping processing request")
 
     def _handle_user_audio(self, user_id: int, audio_data: bytes, timestamp: float):
-        """Handle audio data for a specific user with buffer management."""
+        """Handle audio data for a specific user with synchronized buffer management."""
         try:
             with self._user_buffers_lock:
                 # Initialize user buffer if not exists
@@ -275,7 +289,7 @@ class GarminVoiceManager:
                 # Update last activity
                 self.user_last_activity[user_id] = timestamp
             
-            # Append audio data to user's buffer
+            # Append audio data to user's buffer (legacy for STT)
             user_lock = self.user_buffer_locks[user_id]
             with user_lock:
                 user_buffer = self.user_buffers[user_id]
@@ -296,10 +310,41 @@ class GarminVoiceManager:
                     del user_buffer[:excess]
                     user_name = "unknown" if user_id == 0 else str(user_id)
                     logger.info(f"User {user_name} buffer overflow prevented: removed {excess} bytes")
+            
+            # Add to synchronized buffer for proper timing
+            self._add_to_sync_buffer(user_id, audio_data, timestamp)
                     
         except Exception as e:
             logger.error(f"Error handling audio for user {user_id}: {e}")
             # Don't let errors in user audio handling break the entire system
+
+    def _add_to_sync_buffer(self, user_id: int, audio_data: bytes, timestamp: float):
+        """Add audio data to synchronized buffer with proper timing."""
+        try:
+            with self._sync_buffer_lock:
+                # Initialize sync buffer if not exists
+                if user_id not in self.sync_audio_buffer:
+                    self.sync_audio_buffer[user_id] = []
+                    self.sync_buffer_locks[user_id] = threading.Lock()
+                
+                # Get user's sync buffer lock
+                sync_lock = self.sync_buffer_locks[user_id]
+            
+            with sync_lock:
+                sync_buffer = self.sync_audio_buffer[user_id]
+                
+                # Add timestamped frame data
+                sync_buffer.append((timestamp, audio_data))
+                
+                # Limit buffer size to prevent memory issues
+                if len(sync_buffer) > SYNC_BUFFER_SIZE:
+                    # Remove oldest frames
+                    excess = len(sync_buffer) - SYNC_BUFFER_SIZE
+                    sync_buffer[:excess] = []
+                    logger.warning(f"Sync buffer overflow for user {user_id}: dropped {excess} oldest frames")
+                    
+        except Exception as e:
+            logger.error(f"Error adding to sync buffer for user {user_id}: {e}")
 
     def _append_to_buffer(self, chunk: bytes):
         """Append audio data to combined buffer with improved overflow management."""
@@ -485,6 +530,82 @@ class GarminVoiceManager:
             self.is_processing = False
 
     # ------------------------------ Helpers ------------------------------------
+    def _save_individual_user_recordings(self, base_filename: str) -> dict[int, str]:
+        """Save individual user recordings before mixing.
+        
+        Args:
+            base_filename: Base filename without extension (e.g., "recording_03.08.2025_08-53")
+            
+        Returns:
+            Dictionary mapping user_id to saved file path
+        """
+        saved_files = {}
+        
+        try:
+            with self._sync_buffer_lock:
+                if not self.sync_audio_buffer:
+                    logger.info("No synchronized audio buffers available for individual user recordings")
+                    return saved_files
+                
+                # Get synchronized audio data for all users
+                user_sync_data = {}
+                for user_id, sync_buffer in self.sync_audio_buffer.items():
+                    sync_lock = self.sync_buffer_locks.get(user_id)
+                    if sync_lock:
+                        with sync_lock:
+                            if sync_buffer:
+                                user_sync_data[user_id] = sync_buffer.copy()
+                
+                if not user_sync_data:
+                    logger.info("No synchronized audio data found for individual user recordings")
+                    return saved_files
+                
+                # Save each user's audio separately
+                for user_id, frames in user_sync_data.items():
+                    if not frames:
+                        continue
+                    
+                    try:
+                        # Sort frames by timestamp to ensure proper order
+                        sorted_frames = sorted(frames, key=lambda x: x[0])
+                        
+                        # Extract just the audio data in chronological order
+                        audio_data = bytearray()
+                        for timestamp, frame_data in sorted_frames:
+                            audio_data.extend(frame_data)
+                        
+                        if not audio_data:
+                            logger.warning(f"No audio data for user {user_id}")
+                            continue
+                        
+                        # Create filename for this user
+                        user_filename = f"{base_filename}_user_{user_id}.wav"
+                        user_path = os.path.join(OUTPUT_DIR, user_filename)
+                        
+                        # Save user's audio as WAV file
+                        with wave.open(user_path, "wb") as wf:
+                            wf.setnchannels(CHANNELS)
+                            wf.setsampwidth(BYTES_PER_SAMPLE)
+                            wf.setframerate(SAMPLERATE)
+                            wf.writeframes(bytes(audio_data))
+                        
+                        # Calculate duration
+                        duration = len(audio_data) / SAMPLERATE / CHANNELS / BYTES_PER_SAMPLE
+                        saved_files[user_id] = user_path
+                        
+                        logger.info(f"Saved individual recording for user {user_id}: {user_path} (duration: {duration:.1f}s)")
+                        
+                    except Exception as e:
+                        logger.error(f"Error saving individual recording for user {user_id}: {e}")
+                        continue
+                
+                logger.info(f"Saved {len(saved_files)} individual user recordings")
+                return saved_files
+                
+        except Exception as e:
+            logger.error(f"Error saving individual user recordings: {e}")
+            return saved_files
+
     def save_recording(self):
         """Save current recording by combining per-user audio streams and restart with a delay."""
         try:
@@ -503,14 +624,18 @@ class GarminVoiceManager:
                 total_buffer_size = sum(len(buf) for buf in self.user_buffers.values())
                 logger.info(f"Before combining: {total_users} users, total buffer size: {total_buffer_size} bytes")
             
-            filename = f"recording_{time.strftime('%d.%m.%Y_%H-%M', time.localtime())}.wav"
-            path = os.path.join(OUTPUT_DIR, filename)
+            base_filename = f"recording_{time.strftime('%d.%m.%Y_%H-%M', time.localtime())}"
+            mixed_filename = f"{base_filename}.wav"
+            mixed_path = os.path.join(OUTPUT_DIR, mixed_filename)
             
-            # Combine per-user audio streams
+            # Save individual user recordings first
+            individual_files = self._save_individual_user_recordings(base_filename)
+            
+            # Combine per-user audio streams for mixed recording
             combined_audio = self._combine_user_audio_streams()
             
             if combined_audio:
-                with wave.open(path, "wb") as wf:
+                with wave.open(mixed_path, "wb") as wf:
                     wf.setnchannels(CHANNELS)
                     wf.setsampwidth(BYTES_PER_SAMPLE)
                     wf.setframerate(SAMPLERATE)
@@ -518,10 +643,10 @@ class GarminVoiceManager:
                 
                 # Calculate actual saved duration
                 saved_duration = len(combined_audio) / SAMPLERATE / CHANNELS / BYTES_PER_SAMPLE
-                logger.info("Recording saved: %s (requested: %.1fs, actual: %.1fs, users: %d)", 
-                          path, recording_duration, saved_duration, len(self.user_buffers))
+                logger.info("Mixed recording saved: %s (requested: %.1fs, actual: %.1fs, users: %d, individual files: %d)", 
+                          mixed_path, recording_duration, saved_duration, len(self.user_buffers), len(individual_files))
             else:
-                logger.warning("No audio data available for saving")
+                logger.warning("No audio data available for saving mixed recording")
             
             # Clear all buffers and restart recording
             self._clear_all_buffers(clear_user_buffers=True)  # Clear user buffers after saving
@@ -539,73 +664,225 @@ class GarminVoiceManager:
             self.recording_errors += 1
 
     def _combine_user_audio_streams(self) -> bytes:
-        """Combine all user audio streams into a single synchronized audio file."""
+        """Combine all user audio streams into a single synchronized audio file using timestamp-based alignment."""
         try:
-            with self._user_buffers_lock:
-                logger.info(f"Combining user audio streams. Total user buffers: {len(self.user_buffers)}")
+            with self._sync_buffer_lock:
+                logger.info(f"Combining synchronized user audio streams. Total users: {len(self.sync_audio_buffer)}")
                 
-                # Log detailed buffer information
-                total_buffer_size = 0
-                for user_id, buffer in self.user_buffers.items():
-                    buffer_size = len(buffer)
-                    total_buffer_size += buffer_size
-                    user_name = "unknown" if user_id == 0 else str(user_id)
-                    logger.info(f"User {user_name} buffer size: {buffer_size} bytes ({buffer_size/SAMPLERATE/CHANNELS/BYTES_PER_SAMPLE:.1f}s)")
-                
-                if not self.user_buffers:
-                    logger.warning("No user audio buffers available for combining")
+                if not self.sync_audio_buffer:
+                    logger.warning("No synchronized audio buffers available")
                     return b""
                 
-                if total_buffer_size == 0:
-                    logger.warning("All user buffers are empty (total size: 0 bytes)")
-                    return b""
-                
-                # Get all user buffers with their locks and limit to last 10 minutes
-                user_data = {}
-                max_audio_bytes = MIN_RECORDING_DURATION * SAMPLERATE * CHANNELS * BYTES_PER_SAMPLE
-                
-                for user_id, buffer in self.user_buffers.items():
-                    user_lock = self.user_buffer_locks.get(user_id)
-                    if user_lock:
-                        with user_lock:
-                            buffer_size = len(buffer)
-                            if buffer_size == 0:
-                                logger.warning(f"User {user_id} buffer is empty, skipping")
-                                continue
-                            
-                            # Take only the last 10 minutes of audio data
-                            if buffer_size > max_audio_bytes:
-                                audio_data = bytes(buffer[-max_audio_bytes:])
+                # Get synchronized audio data for all users
+                user_sync_data = {}
+                for user_id, sync_buffer in self.sync_audio_buffer.items():
+                    sync_lock = self.sync_buffer_locks.get(user_id)
+                    if sync_lock:
+                        with sync_lock:
+                            if sync_buffer:
+                                user_sync_data[user_id] = sync_buffer.copy()
                                 user_name = "unknown" if user_id == 0 else str(user_id)
-                                logger.info(f"User {user_name}: truncated from {buffer_size} to {len(audio_data)} bytes (last 10 minutes)")
-                            else:
-                                audio_data = bytes(buffer)
-                                user_name = "unknown" if user_id == 0 else str(user_id)
-                                logger.info(f"User {user_name}: using all {len(audio_data)} bytes")
-                            user_data[user_id] = audio_data
+                                logger.info(f"User {user_name}: {len(sync_buffer)} synchronized frames")
                 
-                if not user_data:
-                    logger.warning("No valid user audio data found after processing")
+                if not user_sync_data:
+                    logger.warning("No synchronized audio data found")
                     return b""
                 
-                # Find the shortest buffer length to synchronize all streams
-                min_length = min(len(data) for data in user_data.values())
-                if min_length == 0:
-                    logger.warning("All user buffers are empty after processing")
-                    return b""
-                
-                logger.info(f"Combining {len(user_data)} user streams, min length: {min_length} bytes ({min_length/SAMPLERATE/CHANNELS/BYTES_PER_SAMPLE:.1f}s)")
-                
-                # Try to use FFmpeg for better audio mixing if available
-                if self._try_ffmpeg_mixing(user_data, min_length):
-                    return self._get_ffmpeg_mixed_audio()
-                else:
-                    # Fallback to simple byte-level mixing
-                    return self._simple_audio_mixing(user_data, min_length)
+                # Use timestamp-based synchronization
+                return self._synchronized_audio_mixing(user_sync_data)
                 
         except Exception as e:
-            logger.error(f"Error combining user audio streams: {e}")
+            logger.error(f"Error combining synchronized user audio streams: {e}")
             return b""
+
+    def _synchronized_audio_mixing(self, user_sync_data: dict[int, list[tuple[float, bytes]]]) -> bytes:
+        """Mix audio streams using timestamp-based synchronization."""
+        try:
+            logger.info(f"Starting synchronized audio mixing for {len(user_sync_data)} users")
+            
+            # Log buffer statistics for debugging
+            for user_id, frames in user_sync_data.items():
+                if frames:
+                    first_ts = frames[0][0]
+                    last_ts = frames[-1][0]
+                    duration = last_ts - first_ts
+                    logger.info(f"User {user_id}: {len(frames)} frames, duration: {duration:.2f}s")
+            
+            # Find the time range covered by all users
+            all_timestamps = []
+            for user_id, frames in user_sync_data.items():
+                for timestamp, _ in frames:
+                    all_timestamps.append(timestamp)
+            
+            if not all_timestamps:
+                logger.warning("No timestamps found in sync data")
+                return b""
+            
+            # Find common time range
+            min_time = min(all_timestamps)
+            max_time = max(all_timestamps)
+            duration = max_time - min_time
+            
+            logger.info(f"Audio time range: {min_time:.2f}s to {max_time:.2f}s (duration: {duration:.2f}s)")
+            
+            # Create time-aligned frames
+            frame_interval = FRAME_DURATION_MS / 1000.0  # Convert to seconds
+            num_frames = int(duration / frame_interval) + 1
+            
+            logger.info(f"Creating {num_frames} synchronized frames")
+            
+            # Initialize output buffer
+            output_buffer = bytearray()
+            
+            # Process each frame
+            for frame_idx in range(num_frames):
+                frame_time = min_time + (frame_idx * frame_interval)
+                frame_start = frame_time
+                frame_end = frame_time + frame_interval
+                
+                # Collect audio data for this specific frame from all users
+                frame_audio_data = []
+                
+                for user_id, frames in user_sync_data.items():
+                    # Find the best matching frame for this time window
+                    best_frame_data = None
+                    best_timestamp_diff = float('inf')
+                    
+                    # Use a more precise frame selection strategy to reduce timing issues
+                    tolerance = SYNC_TOLERANCE_MS / 1000.0
+                    
+                    # First, try to find frames within the exact frame window (most precise)
+                    for timestamp, audio_data in frames:
+                        if frame_start <= timestamp < frame_end:
+                            timestamp_diff = abs(timestamp - frame_time)
+                            if timestamp_diff < best_timestamp_diff:
+                                best_timestamp_diff = timestamp_diff
+                                best_frame_data = audio_data
+                    
+                    # If no exact match, look for frames within tolerance (still good precision)
+                    if best_frame_data is None:
+                        for timestamp, audio_data in frames:
+                            if abs(timestamp - frame_time) <= tolerance:
+                                timestamp_diff = abs(timestamp - frame_time)
+                                if timestamp_diff < best_timestamp_diff:
+                                    best_timestamp_diff = timestamp_diff
+                                    best_frame_data = audio_data
+                    
+                    # Only use closest match as last resort to prevent timing drift
+                    # This helps maintain better timing consistency
+                    if best_frame_data is None and frames:
+                        # Use a stricter tolerance for closest match to prevent timing issues
+                        strict_tolerance = tolerance * 2  # Double the normal tolerance
+                        for timestamp, audio_data in frames:
+                            if abs(timestamp - frame_time) <= strict_tolerance:
+                                timestamp_diff = abs(timestamp - frame_time)
+                                if timestamp_diff < best_timestamp_diff:
+                                    best_timestamp_diff = timestamp_diff
+                                    best_frame_data = audio_data
+                    
+                    if best_frame_data:
+                        frame_audio_data.append(best_frame_data)
+                
+                # Mix the frame audio data
+                if frame_audio_data:
+                    mixed_frame = self._mix_audio_frames(frame_audio_data)
+                    output_buffer.extend(mixed_frame)
+                else:
+                    # Add silence if no audio data for this frame
+                    silence_frame = b'\x00' * FRAME_SIZE_BYTES
+                    output_buffer.extend(silence_frame)
+            
+            logger.info(f"Synchronized mixing complete: {len(output_buffer)} bytes")
+            
+            # Log timing statistics for debugging
+            total_frames_processed = num_frames
+            frames_with_audio = 0
+            
+            for frame_idx in range(num_frames):
+                frame_time = min_time + (frame_idx * frame_interval)
+                frame_start = frame_time
+                frame_end = frame_time + frame_interval
+                
+                # Check if any user had audio for this frame
+                for frames in user_sync_data.values():
+                    for timestamp, _ in frames:
+                        if frame_start <= timestamp < frame_end:
+                            frames_with_audio += 1
+                            break
+                    else:
+                        continue
+                    break
+            
+            logger.info(f"Mixing statistics: {frames_with_audio}/{total_frames_processed} frames had audio data")
+            
+            return bytes(output_buffer)
+            
+        except Exception as e:
+            logger.error(f"Error in synchronized audio mixing: {e}")
+            return b""
+
+    def _mix_audio_frames(self, frame_audio_data: list[bytes]) -> bytes:
+        """Mix multiple audio frames together with improved quality."""
+        try:
+            if not frame_audio_data:
+                return b'\x00' * FRAME_SIZE_BYTES
+            
+            if len(frame_audio_data) == 1:
+                # Ensure single frame is exactly the right size
+                frame_data = frame_audio_data[0]
+                if len(frame_data) == FRAME_SIZE_BYTES:
+                    return frame_data
+                elif len(frame_data) > FRAME_SIZE_BYTES:
+                    return frame_data[:FRAME_SIZE_BYTES]
+                else:
+                    # Pad with silence if too short
+                    return frame_data + b'\x00' * (FRAME_SIZE_BYTES - len(frame_data))
+            
+            # For multiple frames, ensure all are the same size first
+            normalized_frames = []
+            for frame_data in frame_audio_data:
+                if len(frame_data) == FRAME_SIZE_BYTES:
+                    normalized_frames.append(frame_data)
+                elif len(frame_data) > FRAME_SIZE_BYTES:
+                    normalized_frames.append(frame_data[:FRAME_SIZE_BYTES])
+                else:
+                    # Pad with silence if too short
+                    normalized_frames.append(frame_data + b'\x00' * (FRAME_SIZE_BYTES - len(frame_data)))
+            
+            if not normalized_frames:
+                return b'\x00' * FRAME_SIZE_BYTES
+            
+            # Mix audio samples with improved algorithm
+            mixed_frame = bytearray(FRAME_SIZE_BYTES)
+            num_frames = len(normalized_frames)
+            
+            for i in range(0, FRAME_SIZE_BYTES, BYTES_PER_SAMPLE):
+                sample_sum = 0
+                sample_count = 0
+                
+                for frame_data in normalized_frames:
+                    if i + BYTES_PER_SAMPLE <= len(frame_data):
+                        sample_val = int.from_bytes(frame_data[i:i+BYTES_PER_SAMPLE], byteorder='little', signed=True)
+                        sample_sum += sample_val
+                        sample_count += 1
+                
+                if sample_count > 0:
+                    # Improved mixing: proper averaging with clipping protection
+                    mixed_val = sample_sum // sample_count
+                    
+                    # Clipping protection to prevent cracks and distortion
+                    if mixed_val > 32767:
+                        mixed_val = 32767
+                    elif mixed_val < -32768:
+                        mixed_val = -32768
+                    
+                    mixed_frame[i:i+BYTES_PER_SAMPLE] = mixed_val.to_bytes(BYTES_PER_SAMPLE, byteorder='little', signed=True)
+            
+            return bytes(mixed_frame)
+            
+        except Exception as e:
+            logger.error(f"Error mixing audio frames: {e}")
+            return b'\x00' * FRAME_SIZE_BYTES
 
     def _try_ffmpeg_mixing(self, user_data: dict, min_length: int) -> bool:
         """Try to use FFmpeg for audio mixing. Returns True if successful."""
@@ -734,7 +1011,16 @@ class GarminVoiceManager:
                     if user_lock:
                         with user_lock:
                             self.user_buffers[user_id].clear()
-            logger.debug("Cleared all audio buffers (including user buffers)")
+            
+            # Clear synchronized buffers
+            with self._sync_buffer_lock:
+                for user_id in list(self.sync_audio_buffer.keys()):
+                    sync_lock = self.sync_buffer_locks.get(user_id)
+                    if sync_lock:
+                        with sync_lock:
+                            self.sync_audio_buffer[user_id].clear()
+            
+            logger.debug("Cleared all audio buffers (including user buffers and sync buffers)")
         else:
             logger.debug("Cleared combined buffer only (user buffers preserved)")
 
@@ -815,6 +1101,11 @@ class GarminVoiceManager:
                 self.user_buffers.clear()
                 self.user_buffer_locks.clear()
                 self.user_last_activity.clear()
+            
+            # Clear synchronized buffers
+            with self._sync_buffer_lock:
+                self.sync_audio_buffer.clear()
+                self.sync_buffer_locks.clear()
             
             if self.vc:
                 # Check if the voice client is in a valid state before disconnecting
