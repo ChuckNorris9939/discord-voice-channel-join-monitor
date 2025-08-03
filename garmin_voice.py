@@ -24,6 +24,12 @@ except ImportError:
 # --------------------------------------------------
 logger = logging.getLogger(__name__)
 
+# Ensure logs directory exists
+import os
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+LOGS_DIR = os.path.join(SCRIPT_DIR, "data", "logs")
+os.makedirs(LOGS_DIR, exist_ok=True)
+
 import config_loader as cfg
 # ==================================================
 # Configurable Speech‑to‑Text backend
@@ -928,7 +934,7 @@ class GarminVoiceManager:
                     # Log detailed health status
                     audio_status = "healthy" if self.audio_pipeline_healthy else "unhealthy"
                     time_since_audio = current_time - self.last_audio_callback_time if self.last_audio_callback_time > 0 else 0
-                    logger.debug(f"Recording health OK - duration: {recording_duration:.1f}s, buffer: {buffer_size} bytes, "
+                    logger.info(f"Recording health OK - duration: {recording_duration:.1f}s, buffer: {buffer_size} bytes, "
                                f"errors: {self.recording_errors}, audio: {audio_status}, "
                                f"audio_errors: {self.audio_callback_errors}, time_since_audio: {time_since_audio:.1f}s")
                     
