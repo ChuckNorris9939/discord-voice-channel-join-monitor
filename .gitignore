@@ -7,3 +7,6 @@ assets/models/
 *.zip
 venv/
 assets/models/
+discord/
+ffmpeg-master-latest-win64-gpl/
+opus/
