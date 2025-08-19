@@ -707,7 +707,7 @@ def run_flask():
 intents = Intents.default()
 intents.guilds = True
 intents.message_content = True
-intents.guild_messages = True
+intents.messages = True
 intents.voice_states = True
 intents.members = True
 
@@ -1216,13 +1216,11 @@ async def on_ready():
             logger.error(f"WICHTIG: Fehler beim Überprüfen des {cname}-Kanals (ID: {cid}): {e_ch_check}", exc_info=True)
 
     try:
-        # Sync commands globally instead of to a specific guild
+        # Sync application commands globally
         synced_commands = await bot.tree.sync()
         num_synced = len(synced_commands) if synced_commands else 0
         command_names = [cmd.name for cmd in synced_commands] if synced_commands else []
-        
         logger.info(f"{num_synced} Befehle global synchronisiert: {command_names}")
-        # logger.info(f"Aktuelle App‑Commands im Tree:", [c.name for c in bot.tree.get_commands()])
 
 
         if cfg.TESTING:
@@ -1251,6 +1249,8 @@ async def on_ready():
     # Initialize garmin_manager after bot is ready
     global garmin_manager
     try:
+        # Lazy import to avoid import errors during test discovery when voice-recv extension is unavailable
+        from garmin_voice import GarminVoiceManager
         garmin_manager = GarminVoiceManager(bot)
         logger.info("GarminVoiceManager initialized successfully")
     except Exception as e:
@@ -1656,9 +1656,6 @@ async def on_message(message: discord.Message):
             last_message_user_id=last_message_user_id
         )
     # --- End of New Thread Activity Tracking Logic ---
-    # The original command processing line was moved up to ensure commands are always processed if conditions met.
-    # if message.guild and message.guild.id == DISCORD_SERVER_ID:
-    # await bot.process_commands(message) # This line is now at the top of on_message
 
 @bot.event
 async def on_voice_state_update(member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
@@ -1670,6 +1667,18 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
     # User joined a new channel
     if before.channel != after.channel and after.channel is not None:
         log_voice_event(member.id, member.name, after.channel.id, after.channel.name, 'join')
+        # Immediate join notification
+        try:
+            target = TESTING_CHANNEL_ID if getattr(cfg, 'TESTING', False) else cfg.LOG_CHANNEL_ID
+            hidden = set(getattr(cfg, 'HIDDEN_CHANNELS', []) or [])
+            if getattr(cfg, 'TESTING', False) or after.channel.id not in hidden:
+                msg = f"➡️ {member.mention} ist {after.channel.mention} beigetreten"
+                logger.info(f"Sending immediate join message to {target}: {msg}")
+                await send_log_message(msg, target_channel_ids=[target])
+        except Exception as e:
+            logger.error(f"Failed to send immediate join message: {e}", exc_info=True)
+        # Schedule or reset the summary timer for this channel
+        _start_or_reset_join_summary_timer(after.channel.id)
         # Garmin auto-join logic
         if cfg.GARMIN_AUTO_JOIN_ENABLED and after.channel.id in cfg.GARMIN_AUTO_JOIN_CHANNELS and garmin_manager is not None:
             logger.info(f"User {member.name} joined monitored channel {after.channel.name} (ID: {after.channel.id})")
@@ -1692,6 +1701,18 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
     # User left a channel
     elif before.channel is not None and before.channel != after.channel:
         log_voice_event(member.id, member.name, before.channel.id, before.channel.name, 'leave')
+        # Immediate leave notification
+        try:
+            target = TESTING_CHANNEL_ID if getattr(cfg, 'TESTING', False) else cfg.LOG_CHANNEL_ID
+            hidden = set(getattr(cfg, 'HIDDEN_CHANNELS', []) or [])
+            if getattr(cfg, 'TESTING', False) or before.channel.id not in hidden:
+                msg = f"⬅️ {member.mention} hat {before.channel.mention} verlassen"
+                logger.info(f"Sending immediate leave message to {target}: {msg}")
+                await send_log_message(msg, target_channel_ids=[target])
+        except Exception as e:
+            logger.error(f"Failed to send immediate leave message: {e}", exc_info=True)
+        # Schedule or reset the summary timer for the channel that was left
+        _start_or_reset_join_summary_timer(before.channel.id)
         # Garmin auto-leave logic
         if cfg.GARMIN_AUTO_JOIN_ENABLED and before.channel.id in cfg.GARMIN_AUTO_JOIN_CHANNELS and garmin_manager is not None:
             remaining_users = [m for m in before.channel.members if not m.bot]
@@ -1862,10 +1883,42 @@ async def send_summarized_join_message(channel_id: int):
     USERS = await get_user_list()
     online_users = [f"***{u}***" for u in USERS]
     message = f"👥 {len(online_users)} Nutzer online: {', '.join(online_users)}"
-    await send_log_message(message, target_channel_ids=[LOG_CHANNEL_ID])
+    target = TESTING_CHANNEL_ID if getattr(cfg, 'TESTING', False) else LOG_CHANNEL_ID
+    await send_log_message(message, target_channel_ids=[target])
 
 
-from garmin_voice import GarminVoiceManager
+async def _join_summary_timer_worker(channel_id: int, delay_seconds: float):
+    try:
+        await asyncio.sleep(delay_seconds)
+        await send_summarized_join_message(channel_id)
+    except asyncio.CancelledError:
+        logger.debug(f"Join summary timer cancelled for channel_id={channel_id}")
+        return
+    except Exception as e:
+        logger.error(f"Error in join summary timer for channel_id={channel_id}: {e}")
+    finally:
+        # Clean up the stored task reference if it still points to us
+        task = join_timers.get(channel_id)
+        if task and task.done():
+            join_timers.pop(channel_id, None)
+
+
+def _start_or_reset_join_summary_timer(channel_id: int):
+    enabled = getattr(cfg, 'JOIN_MESSAGE_TIMER_ENABLED', JOIN_MESSAGE_TIMER_ENABLED)
+    minutes = getattr(cfg, 'JOIN_MESSAGE_TIMER_MINUTES', JOIN_MESSAGE_TIMER_MINUTES)
+    if not enabled:
+        return
+    try:
+        # Cancel existing timer for this channel if any
+        existing = join_timers.get(channel_id)
+        if existing and not existing.done():
+            existing.cancel()
+        delay_seconds = max(0.0, float(minutes) * 60.0)
+        join_timers[channel_id] = asyncio.create_task(_join_summary_timer_worker(channel_id, delay_seconds))
+        logger.debug(f"(Re)scheduled join summary timer for channel_id={channel_id} in {minutes} minute(s)")
+    except Exception as e:
+        logger.error(f"Failed to (re)schedule join summary timer for channel_id={channel_id}: {e}")
+
 
 # Global variable for garmin_manager - will be initialized in on_ready
 garmin_manager = None
