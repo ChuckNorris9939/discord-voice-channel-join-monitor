@@ -195,15 +195,15 @@ def garmin_recordings_page():
                 
                 # Check if this is an individual user recording or mixed recording
                 if "_user_" in filename:
-                    # Individual user recording: "recording_03.08.2025_08-53_user_123456.wav"
+                    # Individual user recording: "recording_03.08.2025_08-53_user_username.wav"
                     base_filename = filename.replace("_user_", "_").rsplit("_", 1)[0]
-                    user_id = filename.split("_user_")[1].replace(".wav", "")
+                    username = filename.split("_user_")[1].replace(".wav", "")
                     recording_type = "individual"
-                    user_info = f"User {user_id}"
+                    user_info = f"User {username}"
                 else:
                     # Mixed recording: "recording_03.08.2025_08-53.wav"
                     base_filename = filename.replace(".wav", "")
-                    user_id = None
+                    username = None
                     recording_type = "mixed"
                     user_info = "Mixed (All Users)"
                 
@@ -215,7 +215,7 @@ def garmin_recordings_page():
                     'path': str(file_path),
                     'recording_type': recording_type,
                     'user_info': user_info,
-                    'user_id': user_id
+                    'username': username
                 }
                 
                 if base_filename not in recording_groups:
@@ -237,7 +237,7 @@ def garmin_recordings_page():
         
         # Sort recordings within each group (mixed first, then individual users)
         for group in recordings:
-            group['recordings'].sort(key=lambda x: (x['recording_type'] != 'mixed', x['user_id'] or ''))
+            group['recordings'].sort(key=lambda x: (x['recording_type'] != 'mixed', x['username'] or ''))
         
         logger.info(f"Found {len(recordings)} recording groups with {sum(len(g['recordings']) for g in recordings)} total files")
     else:
@@ -707,7 +707,7 @@ def run_flask():
 intents = Intents.default()
 intents.guilds = True
 intents.message_content = True
-intents.guild_messages = True
+intents.messages = True
 intents.voice_states = True
 intents.members = True
 
@@ -1251,6 +1251,8 @@ async def on_ready():
     # Initialize garmin_manager after bot is ready
     global garmin_manager
     try:
+        # Lazy import to avoid import errors during test discovery when voice-recv extension is unavailable
+        from garmin_voice import GarminVoiceManager
         garmin_manager = GarminVoiceManager(bot)
         logger.info("GarminVoiceManager initialized successfully")
     except Exception as e:
@@ -1667,9 +1669,39 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
     if member.bot:
         return
 
-    # User joined a new channel
-    if before.channel != after.channel and after.channel is not None:
+    # Get target channel and hidden channels
+    target = TESTING_CHANNEL_ID if getattr(cfg, 'TESTING', False) else cfg.LOG_CHANNEL_ID
+    hidden = set(getattr(cfg, 'HIDDEN_CHANNELS', []) or [])
+    
+    # Determine channel states
+    before_is_hidden = before.channel and before.channel.id in hidden
+    after_is_hidden = after.channel and after.channel.id in hidden
+    
+    # Determine what type of event occurred
+    joined_visible_channel = after.channel and not after_is_hidden and \
+                             (not before.channel or before_is_hidden)
+    
+    left_visible_channel = before.channel and not before_is_hidden and \
+                           (not after.channel or after_is_hidden)
+    
+    switched_between_visible_channels = before.channel and not before_is_hidden and \
+                                       after.channel and not after_is_hidden and \
+                                       before.channel.id != after.channel.id
+    
+    # Handle join events
+    if joined_visible_channel:
         log_voice_event(member.id, member.name, after.channel.id, after.channel.name, 'join')
+        # Send join message
+        try:
+            msg = f"➕ **{member.name}** ist {after.channel.mention} beigetreten"
+            logger.info(f"Sending immediate join message to {target}: {msg}")
+            await send_log_message(msg, target_channel_ids=[target])
+        except Exception as e:
+            logger.error(f"Failed to send immediate join message: {e}", exc_info=True)
+        
+        # Schedule or reset the global summary timer
+        _start_or_reset_global_join_summary_timer()
+        
         # Garmin auto-join logic
         if cfg.GARMIN_AUTO_JOIN_ENABLED and after.channel.id in cfg.GARMIN_AUTO_JOIN_CHANNELS and garmin_manager is not None:
             logger.info(f"User {member.name} joined monitored channel {after.channel.name} (ID: {after.channel.id})")
@@ -1689,9 +1721,20 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
             else:
                 logger.info("Bot is already connected to a voice channel, skipping auto-join")
 
-    # User left a channel
-    elif before.channel is not None and before.channel != after.channel:
+    # Handle leave events
+    elif left_visible_channel:
         log_voice_event(member.id, member.name, before.channel.id, before.channel.name, 'leave')
+        # Send leave message
+        try:
+            msg = f"➖ **{member.name}** hat {before.channel.mention} verlassen"
+            logger.info(f"Sending immediate leave message to {target}: {msg}")
+            await send_log_message(msg, target_channel_ids=[target])
+        except Exception as e:
+            logger.error(f"Failed to send immediate leave message: {e}", exc_info=True)
+        
+        # Schedule or reset the global summary timer
+        _start_or_reset_global_join_summary_timer()
+        
         # Garmin auto-leave logic
         if cfg.GARMIN_AUTO_JOIN_ENABLED and before.channel.id in cfg.GARMIN_AUTO_JOIN_CHANNELS and garmin_manager is not None:
             remaining_users = [m for m in before.channel.members if not m.bot]
@@ -1714,6 +1757,34 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
             del fully_deafened_users[member.id]
             logger.info(f"AFK Mover: Cancelled timer for {member.name} (left voice channel)")
 
+    # Handle channel switches (no message sent)
+    elif switched_between_visible_channels:
+        logger.debug(f"User {member.name} switched from {before.channel.name} to {after.channel.name} (no message sent)")
+        # Still log the event but don't send messages
+        log_voice_event(member.id, member.name, after.channel.id, after.channel.name, 'switch')
+        
+        # Schedule or reset the global summary timer
+        _start_or_reset_global_join_summary_timer()
+        
+        # Garmin auto-join logic for the new channel
+        if cfg.GARMIN_AUTO_JOIN_ENABLED and after.channel.id in cfg.GARMIN_AUTO_JOIN_CHANNELS and garmin_manager is not None:
+            logger.info(f"User {member.name} switched to monitored channel {after.channel.name} (ID: {after.channel.id})")
+            if not garmin_manager.is_connected():
+                max_retries = 3
+                for attempt in range(max_retries):
+                    try:
+                        await garmin_manager.join_channel(after.channel)
+                        logger.info(f"Auto-joined channel {after.channel.name} due to user {member.name} switching")
+                        break
+                    except Exception as e:
+                        logger.error(f"Failed to auto-join channel {after.channel.name} (attempt {attempt + 1}/{max_retries}): {e}")
+                        if attempt < max_retries - 1:
+                            await asyncio.sleep(1.0)
+                        else:
+                            logger.error(f"Failed to auto-join channel {after.channel.name} after {max_retries} attempts")
+            else:
+                logger.info("Bot is already connected to a voice channel, skipping auto-join")
+
     # Handle AFK timer for deafened users
     # Check if user became deafened
     if (after.channel and 
@@ -1732,8 +1803,8 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
           member.id in fully_deafened_users):
         # Cancel AFK timer for newly undeafened user
         fully_deafened_users[member.id].cancel()
-        del fully_deafened_users[member.id]
         logger.info(f"AFK Mover: Cancelled timer for {member.name} (became undeafened)")
+        del fully_deafened_users[member.id]
 
 @bot.hybrid_command(name="viewlogs", description="Zeigt die letzten 10 Benutzer-Join-Events an (nur für Admins).")
 @commands.has_permissions(administrator=True)
@@ -1809,8 +1880,7 @@ async def viewlogs_error(ctx: commands.Context, error: commands.CommandError):
 # Global Vars for summarized join messages
 JOIN_MESSAGE_TIMER_ENABLED = True
 JOIN_MESSAGE_TIMER_MINUTES = 7
-recent_joins: Dict[int, List[str]] = {} # Key: channel_id, Value: list of user mentions
-join_timers: Dict[int, asyncio.Task] = {} # Key: channel_id, Value: asyncio.Task
+global_join_summary_timer: Optional[asyncio.Task] = None # Single global timer for all channels
 
 # Global Vars for AFK Mover
 fully_deafened_users: Dict[int, asyncio.Task] = {} # Key: user_id, Value: asyncio.Task
@@ -1856,16 +1926,57 @@ async def move_to_afk(member: discord.Member):
     if member.id in fully_deafened_users:
         del fully_deafened_users[member.id]
 
-async def send_summarized_join_message(channel_id: int):
-    """Coroutine to send a summarized message of who joined a channel."""
+async def send_global_summarized_join_message():
+    """Coroutine to send a single global summarized message of all users currently online."""
+    try:
+        USERS = await get_user_list()
+        online_users = [f"***{u}***" for u in USERS]
+        message = f"👥 {len(online_users)} Nutzer online: {', '.join(online_users)}"
+        target = TESTING_CHANNEL_ID if getattr(cfg, 'TESTING', False) else LOG_CHANNEL_ID
+        await send_log_message(message, target_channel_ids=[target])
+        logger.info(f"Sent global summarized join message: {len(online_users)} users online")
+    except Exception as e:
+        logger.error(f"Error sending global summarized join message: {e}")
 
-    USERS = await get_user_list()
-    online_users = [f"***{u}***" for u in USERS]
-    message = f"👥 {len(online_users)} Nutzer online: {', '.join(online_users)}"
-    await send_log_message(message, target_channel_ids=[LOG_CHANNEL_ID])
+
+async def _global_join_summary_timer_worker(delay_seconds: float):
+    """Global timer worker that sends a single summarized message for all channels."""
+    try:
+        await asyncio.sleep(delay_seconds)
+        await send_global_summarized_join_message()
+    except asyncio.CancelledError:
+        logger.debug("Global join summary timer cancelled")
+        return
+    except Exception as e:
+        logger.error(f"Error in global join summary timer: {e}")
+    finally:
+        # Clean up the global timer reference
+        global global_join_summary_timer
+        global_join_summary_timer = None
 
 
-from garmin_voice import GarminVoiceManager
+def _start_or_reset_global_join_summary_timer():
+    """Start or reset the global join summary timer. Only one timer runs at a time."""
+    enabled = getattr(cfg, 'JOIN_MESSAGE_TIMER_ENABLED', JOIN_MESSAGE_TIMER_ENABLED)
+    minutes = getattr(cfg, 'JOIN_MESSAGE_TIMER_MINUTES', JOIN_MESSAGE_TIMER_MINUTES)
+    if not enabled:
+        return
+    
+    try:
+        global global_join_summary_timer
+        
+        # Check if global timer is already running
+        if global_join_summary_timer and not global_join_summary_timer.done():
+            logger.debug("Global join summary timer already running, not starting a new one")
+            return  # Don't reset the timer, just let it continue
+        
+        # Start a new global timer only if none is running
+        delay_seconds = max(0.0, float(minutes) * 60.0)
+        global_join_summary_timer = asyncio.create_task(_global_join_summary_timer_worker(delay_seconds))
+        logger.debug(f"Started global join summary timer in {minutes} minute(s)")
+    except Exception as e:
+        logger.error(f"Failed to start global join summary timer: {e}")
+
 
 # Global variable for garmin_manager - will be initialized in on_ready
 garmin_manager = None

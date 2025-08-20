@@ -150,6 +150,10 @@ class GarminVoiceManager:
         self.user_last_activity: dict[int, float] = {}  # user_id -> last activity timestamp
         self._user_buffers_lock = threading.Lock()  # Lock for user_buffers dict operations
 
+        # User names mapping for file naming
+        self.user_names: dict[int, str] = {}  # user_id -> username
+        self._user_names_lock = threading.Lock()  # Lock for user_names dict operations
+
         # Synchronized audio buffer for proper timing
         self.sync_audio_buffer: dict[int, list[tuple[float, bytes]]] = {}  # user_id -> [(timestamp, frame_data), ...]
         self.sync_buffer_locks: dict[int, threading.Lock] = {}  # user_id -> lock for sync buffer
@@ -237,12 +241,21 @@ class GarminVoiceManager:
         
         # Handle per-user audio buffers
         if user is not None:
+            # Store user name for file naming
+            with self._user_names_lock:
+                if user.id not in self.user_names:
+                    self.user_names[user.id] = user.name
+                    logger.debug(f"Stored username for user {user.id}: {user.name}")
+            
             self._handle_user_audio(user.id, data.pcm, now)
             logger.debug(f"Audio callback: user {user.id} ({user.name}), chunk size: {len(data.pcm)} bytes")
         else:
             # If no user is provided, use a special "unknown" user ID
             # This can happen when Discord doesn't provide user information
             unknown_user_id = 0  # Special ID for unknown users
+            with self._user_names_lock:
+                if unknown_user_id not in self.user_names:
+                    self.user_names[unknown_user_id] = "unknown"
             self._handle_user_audio(unknown_user_id, data.pcm, now)
             logger.debug(f"Audio callback: unknown user (ID: {unknown_user_id}), chunk size: {len(data.pcm)} bytes")
         
@@ -387,8 +400,15 @@ class GarminVoiceManager:
                     del self.user_buffer_locks[user_id]
                 if user_id in self.user_last_activity:
                     del self.user_last_activity[user_id]
-                user_name = "unknown" if user_id == 0 else str(user_id)
-                logger.info(f"Cleaned up inactive user buffer: {user_name} (was {buffer_size} bytes)")
+                # Clean up user name mapping
+                with self._user_names_lock:
+                    if user_id in self.user_names:
+                        user_name = self.user_names[user_id]
+                        del self.user_names[user_id]
+                        logger.info(f"Cleaned up inactive user buffer: {user_name} (was {buffer_size} bytes)")
+                    else:
+                        user_name = "unknown" if user_id == 0 else str(user_id)
+                        logger.info(f"Cleaned up inactive user buffer: {user_name} (was {buffer_size} bytes)")
             
             if inactive_users:
                 remaining_users = len(self.user_buffers)
@@ -531,7 +551,7 @@ class GarminVoiceManager:
 
     # ------------------------------ Helpers ------------------------------------
     def _save_individual_user_recordings(self, base_filename: str) -> dict[int, str]:
-        """Save individual user recordings before mixing.
+        """Save individual user recordings as WAV files using decoded PCM data.
         
         Args:
             base_filename: Base filename without extension (e.g., "recording_03.08.2025_08-53")
@@ -560,8 +580,13 @@ class GarminVoiceManager:
                     logger.info("No synchronized audio data found for individual user recordings")
                     return saved_files
                 
-                # Save each user's audio separately
+                # Save each user's audio separately as WAV
                 for user_id, frames in user_sync_data.items():
+                    # Skip unknown users (user_id 0) as they always have empty/0MB files
+                    if user_id == 0:
+                        logger.debug("Skipping unknown user (ID: 0) - not saving empty file")
+                        continue
+                        
                     if not frames:
                         continue
                     
@@ -578,22 +603,22 @@ class GarminVoiceManager:
                             logger.warning(f"No audio data for user {user_id}")
                             continue
                         
-                        # Create filename for this user
-                        user_filename = f"{base_filename}_user_{user_id}.wav"
+                        # Create filename using stored username
+                        user_name = self.user_names.get(user_id, "unknown")
+                        safe_user_name = self._sanitize_filename_component(user_name)
+                        user_filename = f"{base_filename}_user_{safe_user_name}.wav"
                         user_path = os.path.join(OUTPUT_DIR, user_filename)
                         
-                        # Save user's audio as WAV file
-                        with wave.open(user_path, "wb") as wf:
-                            wf.setnchannels(CHANNELS)
-                            wf.setsampwidth(BYTES_PER_SAMPLE)
-                            wf.setframerate(SAMPLERATE)
-                            wf.writeframes(bytes(audio_data))
+                        # Save user's audio as WAV file (48kHz, 16-bit, stereo)
+                        success = self._save_pcm_to_wav(audio_data, user_path)
                         
-                        # Calculate duration
-                        duration = len(audio_data) / SAMPLERATE / CHANNELS / BYTES_PER_SAMPLE
-                        saved_files[user_id] = user_path
-                        
-                        logger.info(f"Saved individual recording for user {user_id}: {user_path} (duration: {duration:.1f}s)")
+                        if success:
+                            # Calculate duration (approximate)
+                            duration = len(audio_data) / SAMPLERATE / CHANNELS / BYTES_PER_SAMPLE
+                            saved_files[user_id] = user_path
+                            logger.info(f"Saved individual recording for user {safe_user_name}: {user_path} (duration: {duration:.1f}s)")
+                        else:
+                            logger.error(f"Failed to save WAV recording for user {safe_user_name}")
                         
                     except Exception as e:
                         logger.error(f"Error saving individual recording for user {user_id}: {e}")
@@ -605,6 +630,40 @@ class GarminVoiceManager:
         except Exception as e:
             logger.error(f"Error saving individual user recordings: {e}")
             return saved_files
+
+    def _sanitize_filename_component(self, name: str) -> str:
+        """Sanitize a username component to be safe for filenames on Windows."""
+        try:
+            forbidden = '<>:"/\\|?*'
+            sanitized = ''.join('_' if c in forbidden or ord(c) < 32 else c for c in name)
+            # Trim and collapse spaces
+            sanitized = sanitized.strip().rstrip('. ')
+            if not sanitized:
+                return 'unknown'
+            return sanitized[:64]
+        except Exception:
+            return 'unknown'
+
+    def _save_pcm_to_wav(self, pcm_data: bytes, file_path: str) -> bool:
+        """Save PCM audio data to a WAV file.
+        
+        Args:
+            pcm_data: Raw PCM audio data
+            file_path: Path where to save the WAV file
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            with wave.open(file_path, "wb") as wf:
+                wf.setnchannels(CHANNELS)
+                wf.setsampwidth(BYTES_PER_SAMPLE)
+                wf.setframerate(SAMPLERATE)
+                wf.writeframes(pcm_data)
+            return True
+        except Exception as e:
+            logger.error(f"Error saving PCM to WAV file {file_path}: {e}")
+            return False
 
     def save_recording(self):
         """Save current recording by combining per-user audio streams and restart with a delay."""
@@ -1102,6 +1161,10 @@ class GarminVoiceManager:
                 self.user_buffer_locks.clear()
                 self.user_last_activity.clear()
             
+            # Clear user names mapping
+            with self._user_names_lock:
+                self.user_names.clear()
+            
             # Clear synchronized buffers
             with self._sync_buffer_lock:
                 self.sync_audio_buffer.clear()
@@ -1294,6 +1357,10 @@ class GarminVoiceManager:
         with self._user_buffers_lock:
             for user_id in self.user_last_activity:
                 self.user_last_activity[user_id] = now
+        
+        # Clear user names mapping on restart to refresh with current users
+        with self._user_names_lock:
+            self.user_names.clear()
         
         # Restart STT worker if STT is enabled
         if cfg.STT_ENABLED:
