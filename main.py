@@ -1216,13 +1216,11 @@ async def on_ready():
             logger.error(f"WICHTIG: Fehler beim Überprüfen des {cname}-Kanals (ID: {cid}): {e_ch_check}", exc_info=True)
 
     try:
-        # Sync commands globally instead of to a specific guild
+        # Sync application commands globally
         synced_commands = await bot.tree.sync()
         num_synced = len(synced_commands) if synced_commands else 0
         command_names = [cmd.name for cmd in synced_commands] if synced_commands else []
-        
         logger.info(f"{num_synced} Befehle global synchronisiert: {command_names}")
-        # logger.info(f"Aktuelle App‑Commands im Tree:", [c.name for c in bot.tree.get_commands()])
 
 
         if cfg.TESTING:
@@ -1251,6 +1249,8 @@ async def on_ready():
     # Initialize garmin_manager after bot is ready
     global garmin_manager
     try:
+        # Lazy import to avoid import errors during test discovery when voice-recv extension is unavailable
+        from garmin_voice import GarminVoiceManager
         # Lazy import to avoid import errors during test discovery when voice-recv extension is unavailable
         from garmin_voice import GarminVoiceManager
         garmin_manager = GarminVoiceManager(bot)
@@ -1658,9 +1658,6 @@ async def on_message(message: discord.Message):
             last_message_user_id=last_message_user_id
         )
     # --- End of New Thread Activity Tracking Logic ---
-    # The original command processing line was moved up to ensure commands are always processed if conditions met.
-    # if message.guild and message.guild.id == DISCORD_SERVER_ID:
-    # await bot.process_commands(message) # This line is now at the top of on_message
 
 @bot.event
 async def on_voice_state_update(member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
