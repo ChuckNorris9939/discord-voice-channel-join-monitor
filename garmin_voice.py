@@ -8,6 +8,7 @@ import logging
 import asyncio
 import queue
 import io
+import math
 from typing import Final, Dict, Optional, List, Tuple
 from pathlib import Path
 from collections import defaultdict, OrderedDict
@@ -95,43 +96,52 @@ TRIGGERS = [
 TRIGGER_COOLDOWN_S: Final[int] = 5
 
 
-class TimestampedAudioBuffer:
-    """Manages audio buffer with timestamp tracking for synchronized playback."""
+class HybridAudioBuffer:
+    """
+    Manages audio buffer with timing preservation and stuttering elimination.
+    Uses frame-based approach with proper silence insertion for gaps.
+    """
     
     def __init__(self, user_id: int, username: str, start_time: float):
         self.user_id = user_id
         self.username = username
         self.start_time = start_time
         
-        # Store audio data with timestamps
-        self.audio_frames: OrderedDict[float, bytes] = OrderedDict()
+        # Store audio frames with their relative timestamps
+        self.audio_frames: Dict[int, bytes] = {}
         self.lock = threading.Lock()
         self.last_activity = time.time()
-        self.first_audio_time: Optional[float] = None
-        self.last_audio_time: Optional[float] = None
+        
+        # Track frame count for timing calculations
+        self.frame_count = 0
         
     def add_audio(self, pcm_data: bytes, timestamp: float):
-        """Add PCM audio data with timestamp."""
+        """Add PCM audio data with timestamp for proper timing."""
         with self.lock:
+            # Calculate which frame this audio belongs to
             relative_time = timestamp - self.start_time
-            self.audio_frames[relative_time] = pcm_data
+            frame_index = int(relative_time * 1000 / FRAME_DURATION_MS)
             
-            if self.first_audio_time is None:
-                self.first_audio_time = relative_time
-            self.last_audio_time = relative_time
+            # Store the audio frame at the correct position
+            self.audio_frames[frame_index] = pcm_data
             self.last_activity = timestamp
             
-            # Limit buffer size by removing old frames
-            max_frames = (MAX_BUFFER_DURATION_S * 1000) // int(FRAME_DURATION_MS)
+            # Update frame count
+            if frame_index > self.frame_count:
+                self.frame_count = frame_index
+            
+            # Limit buffer size to prevent memory issues
+            max_frames = MAX_BUFFER_DURATION_S * 50  # ~50 frames per second
             if len(self.audio_frames) > max_frames:
                 # Remove oldest frames
-                for _ in range(len(self.audio_frames) - max_frames):
-                    self.audio_frames.popitem(last=False)
+                oldest_frame = min(self.audio_frames.keys())
+                del self.audio_frames[oldest_frame]
+                logger.debug(f"User {self.username}: Removed oldest frame {oldest_frame}")
     
-    def create_continuous_segment(self, total_duration_s: float) -> Optional[AudioSegment]:
+    def create_timed_segment(self, total_duration_s: float) -> Optional[AudioSegment]:
         """
-        Create a continuous audio segment with proper timing.
-        Fills gaps with silence to maintain synchronization.
+        Create audio segment with proper timing and no stuttering.
+        Uses frame-based reconstruction with silence for gaps.
         """
         with self.lock:
             if not self.audio_frames:
@@ -139,46 +149,39 @@ class TimestampedAudioBuffer:
                 duration_ms = int(total_duration_s * 1000)
                 return AudioSegment.silent(duration=duration_ms, frame_rate=SAMPLERATE)
             
-            # Build continuous audio by iterating through expected time slots
-            continuous_audio = bytearray()
-            expected_frame_duration = FRAME_DURATION_MS / 1000.0  # in seconds
-            num_frames = int(total_duration_s / expected_frame_duration)
-            
-            # Sort frames by timestamp
-            sorted_frames = sorted(self.audio_frames.items())
-            frame_index = 0
-            
-            for i in range(num_frames):
-                current_time = i * expected_frame_duration
-                
-                # Check if we have audio for this time slot
-                audio_found = False
-                
-                # Look for a frame within tolerance of current time
-                while frame_index < len(sorted_frames):
-                    frame_time, frame_data = sorted_frames[frame_index]
-                    
-                    # Check if this frame belongs to current time slot
-                    if abs(frame_time - current_time) < expected_frame_duration / 2:
-                        continuous_audio.extend(frame_data)
-                        audio_found = True
-                        frame_index += 1
-                        break
-                    elif frame_time > current_time + expected_frame_duration / 2:
-                        # Frame is for a future time slot
-                        break
-                    else:
-                        # Frame is from past, skip it
-                        frame_index += 1
-                
-                if not audio_found:
-                    # Add silence for this time slot
-                    silence_frame = b'\x00' * FRAME_SIZE_BYTES
-                    continuous_audio.extend(silence_frame)
-            
-            # Create AudioSegment from continuous audio
             try:
-                segment = AudioSegment(
+                # Calculate expected frame count for the total duration
+                expected_frame_count = int(total_duration_s * 1000 / FRAME_DURATION_MS)
+                
+                # Create a continuous audio buffer with proper timing
+                continuous_audio = bytearray()
+                
+                # Process each expected frame position
+                for frame_index in range(expected_frame_count):
+                    if frame_index in self.audio_frames:
+                        # We have audio for this frame - use it
+                        frame_data = self.audio_frames[frame_index]
+                        
+                        # Ensure frame is exactly the right size
+                        if len(frame_data) == FRAME_SIZE_BYTES:
+                            continuous_audio.extend(frame_data)
+                        else:
+                            # Pad or trim frame to exact size
+                            if len(frame_data) < FRAME_SIZE_BYTES:
+                                padding_needed = FRAME_SIZE_BYTES - len(frame_data)
+                                frame_data += b'\x00' * padding_needed
+                            else:
+                                frame_data = frame_data[:FRAME_SIZE_BYTES]
+                            
+                            continuous_audio.extend(frame_data)
+                            logger.debug(f"User {self.username}: Adjusted frame {frame_index} size to {FRAME_SIZE_BYTES} bytes")
+                    else:
+                        # No audio for this frame - insert silence
+                        silence_frame = b'\x00' * FRAME_SIZE_BYTES
+                        continuous_audio.extend(silence_frame)
+                
+                # Create AudioSegment from the continuous audio
+                audio_segment = AudioSegment(
                     bytes(continuous_audio),
                     sample_width=SAMPLE_WIDTH,
                     frame_rate=SAMPLERATE,
@@ -187,27 +190,38 @@ class TimestampedAudioBuffer:
                 
                 # Ensure exact duration
                 target_duration_ms = int(total_duration_s * 1000)
-                if len(segment) > target_duration_ms:
-                    segment = segment[:target_duration_ms]
-                elif len(segment) < target_duration_ms:
+                if len(audio_segment) > target_duration_ms:
+                    # Trim to exact duration
+                    audio_segment = audio_segment[:target_duration_ms]
+                    logger.debug(f"User {self.username}: Trimmed segment to {target_duration_ms}ms")
+                elif len(audio_segment) < target_duration_ms:
+                    # Pad with silence to exact duration
+                    silence_needed_ms = target_duration_ms - len(audio_segment)
                     silence_padding = AudioSegment.silent(
-                        duration=target_duration_ms - len(segment),
+                        duration=silence_needed_ms,
                         frame_rate=SAMPLERATE
                     )
-                    segment = segment + silence_padding
+                    audio_segment = audio_segment + silence_padding
+                    logger.debug(f"User {self.username}: Padded segment to {target_duration_ms}ms")
                 
-                return segment
+                # Apply minimal crossfade to smooth any remaining discontinuities
+                if len(audio_segment) > 10:  # Need at least 10ms for crossfade
+                    # Use minimal crossfade (0.1ms) to avoid affecting timing
+                    audio_segment = audio_segment.fade_in(0.1).fade_out(0.1)
+                    logger.debug(f"User {self.username}: Applied 0.1ms crossfade for smooth transitions")
+                
+                logger.info(f"User {self.username}: Created timed segment of {len(audio_segment)}ms from {len(self.audio_frames)} frames")
+                return audio_segment
                 
             except Exception as e:
-                logger.error(f"Error creating continuous segment for user {self.username}: {e}")
+                logger.error(f"Error creating timed segment for user {self.username}: {e}")
                 return None
     
     def clear(self):
         """Clear the audio buffer."""
         with self.lock:
             self.audio_frames.clear()
-            self.first_audio_time = None
-            self.last_audio_time = None
+            self.frame_count = 0
 
 
 class GarminVoiceManager:
@@ -215,7 +229,7 @@ class GarminVoiceManager:
     
     def __init__(self, bot: discord.Client):
         self.bot = bot
-        self.user_buffers: Dict[int, TimestampedAudioBuffer] = {}
+        self.user_buffers: Dict[int, HybridAudioBuffer] = {}
         self._buffers_lock = threading.Lock()
         
         # Recording state
@@ -258,11 +272,11 @@ class GarminVoiceManager:
         os.makedirs(OUTPUT_DIR, exist_ok=True)
         os.makedirs(TEMP_DIR, exist_ok=True)
         
-        logger.info("GarminVoiceManager initialized with timestamped continuous recording")
+        logger.info("GarminVoiceManager initialized with hybrid audio processing")
     
     # ------------------------- Discord voice callbacks -------------------------
     def callback(self, user: Optional[discord.User], data: voice_recv.VoiceData):
-        """Callback for incoming audio data with timestamps."""
+        """Callback for incoming audio data with hybrid processing."""
         try:
             if not self.is_recording:
                 return
@@ -277,13 +291,11 @@ class GarminVoiceManager:
                 # Skip unknown users
                 return
             
-            # Add to timestamped user buffer
+            # Add to hybrid user buffer with timing
             with self._buffers_lock:
                 if user_id not in self.user_buffers:
-                    self.user_buffers[user_id] = TimestampedAudioBuffer(
-                        user_id, username, self.recording_start_time
-                    )
-                    logger.info(f"Created timestamped buffer for user {username} (ID: {user_id})")
+                    self.user_buffers[user_id] = HybridAudioBuffer(user_id, username, self.recording_start_time)
+                    logger.info(f"Created hybrid buffer for user {username} (ID: {user_id})")
                 
                 self.user_buffers[user_id].add_audio(data.pcm, current_time)
             
@@ -428,7 +440,7 @@ class GarminVoiceManager:
     
     # ------------------------------ Recording management ---------------------------
     def save_recording(self):
-        """Save current recording with synchronized timestamps."""
+        """Save current recording with hybrid audio processing."""
         try:
             if not self.is_recording:
                 logger.warning("Not recording, nothing to save")
@@ -446,9 +458,9 @@ class GarminVoiceManager:
                 user_segments = {}
                 active_users = []
                 
-                # Create continuous segments for all users
+                # Create timed segments for all users
                 for user_id, buffer in self.user_buffers.items():
-                    segment = buffer.create_continuous_segment(total_duration_s)
+                    segment = buffer.create_timed_segment(total_duration_s)
                     
                     if segment:
                         user_segments[user_id] = segment
@@ -461,9 +473,9 @@ class GarminVoiceManager:
                         try:
                             segment.export(user_path, format="wav")
                             duration_s = len(segment) / 1000.0
-                            logger.info(f"Saved individual recording for {buffer.username}: {user_path} ({duration_s:.1f}s)")
+                            logger.info(f"Saved timed recording for {buffer.username}: {user_path} ({duration_s:.1f}s)")
                         except Exception as e:
-                            logger.error(f"Error saving individual recording for {buffer.username}: {e}")
+                            logger.error(f"Error saving timed recording for {buffer.username}: {e}")
                 
                 # Create mixed recording if we have audio
                 if user_segments:
@@ -471,17 +483,17 @@ class GarminVoiceManager:
                     mixed_path = os.path.join(OUTPUT_DIR, mixed_filename)
                     
                     try:
-                        mixed_segment = self._mix_equal_length_segments(user_segments)
+                        mixed_segment = self._mix_timed_segments(user_segments)
                         
                         if mixed_segment:
                             mixed_segment.export(mixed_path, format="wav")
                             duration_s = len(mixed_segment) / 1000.0
-                            logger.info(f"Saved mixed recording: {mixed_path} ({duration_s:.1f}s, {len(active_users)} users)")
+                            logger.info(f"Saved timed mixed recording: {mixed_path} ({duration_s:.1f}s, {len(active_users)} users)")
                         else:
                             logger.warning("No mixed audio generated")
                             
                     except Exception as e:
-                        logger.error(f"Error saving mixed recording: {e}")
+                        logger.error(f"Error saving timed mixed recording: {e}")
                 else:
                     logger.warning("No user audio to save")
                 
@@ -493,14 +505,14 @@ class GarminVoiceManager:
                 with self._stt_buffer_lock:
                     self.stt_buffer.clear()
                 
-                logger.info(f"Recording saved: {len(active_users)} users, all synchronized to {total_duration_s:.1f}s")
+                logger.info(f"Timed recording saved: {len(active_users)} users, all synchronized to {total_duration_s:.1f}s")
                 
         except Exception as e:
             logger.error(f"Error during save_recording: {e}")
     
-    def _mix_equal_length_segments(self, user_segments: Dict[int, AudioSegment]) -> Optional[AudioSegment]:
+    def _mix_timed_segments(self, user_segments: Dict[int, AudioSegment]) -> Optional[AudioSegment]:
         """
-        Mix equal-length audio segments with proper gain staging.
+        Mix timed audio segments with proper gain staging.
         """
         try:
             if not user_segments:
@@ -546,7 +558,7 @@ class GarminVoiceManager:
             return mixed
             
         except Exception as e:
-            logger.error(f"Error mixing equal-length segments: {e}")
+            logger.error(f"Error mixing timed segments: {e}")
             return None
     
     def _normalize_audio(self, segment: AudioSegment) -> AudioSegment:
@@ -592,6 +604,7 @@ class GarminVoiceManager:
         if self.vc and os.path.isfile(filepath):
             try:
                 self.vc.play(discord.FFmpegPCMAudio(filepath))
+                logger.debug(f"Playing sound: {filepath}")
             except Exception as e:
                 logger.error(f"Error playing sound {filepath}: {e}")
         else:
@@ -621,7 +634,7 @@ class GarminVoiceManager:
             else:
                 logger.info(f"🔊 Joined voice channel '{channel.name}' (STT disabled)")
             
-            logger.info(f"Recording started at {self.recording_start_time}")
+            logger.info(f"Hybrid recording started at {self.recording_start_time}")
             
         except Exception as e:
             logger.error(f"Failed to join voice channel '{channel.name}': {e}")
@@ -694,7 +707,6 @@ class GarminVoiceManager:
             "active_users": active_users,
             "total_user_buffer_size": estimated_size,
             "user_buffers": {}
-        }# Add math import for normalization
-import math
+        }
 
 
