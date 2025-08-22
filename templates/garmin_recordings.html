@@ -155,6 +155,7 @@
             align-items: center;
             gap: 15px;
             transition: all 0.3s ease;
+            min-width: 0; /* Allows flex items to shrink below content size */
         }
 
         .recording-sub-item:hover {
@@ -171,8 +172,8 @@
         }
 
         .recording-info {
-            flex: 0 0 300px;
-            min-width: 300px;
+            flex: 0 0 365px;
+            min-width: 365px;
         }
 
         .recording-title {
@@ -183,18 +184,28 @@
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .user-badge, .mixed-badge {
+            margin-left: 0;
+            margin-right: 10px;
         }
 
         .recording-details {
             font-size: 1em;
             color: #bdc3c7;
-            display: flex;
+            display: block;
             gap: 15px;
-            flex-wrap: wrap;
         }
 
         .recording-details span {
-            display: inline-block;
+            display: block;
+            white-space: nowrap;
+            overflow: visible;
+            margin-bottom: 5px;
         }
 
         .recording-details strong {
@@ -208,7 +219,7 @@
             border-radius: 4px;
             font-size: 0.8em;
             font-weight: 600;
-            margin-left: 10px;
+            margin-right: 3px;
         }
 
         .mixed-badge {
@@ -218,7 +229,17 @@
             border-radius: 4px;
             font-size: 0.8em;
             font-weight: 600;
-            margin-left: 10px;
+            margin-right: 3px;
+        }
+
+        .size-badge {
+            background: linear-gradient(135deg, #27ae60, #229954);
+            color: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.8em;
+            font-weight: 600;
+            margin-left: 0px;
         }
 
         .audio-controls {
@@ -339,15 +360,15 @@
                             <div class="recording-sub-item {{ recording.recording_type }}">
                                 <div class="recording-info">
                                     <div class="recording-title">
-                                        {{ recording.user_info }}
                                         {% if recording.recording_type == 'mixed' %}
                                             <span class="mixed-badge">Mixed</span>
                                         {% else %}
                                             <span class="user-badge">User</span>
                                         {% endif %}
+                                        <span class="size-badge">{{ recording.size_mb }} MB</span>
+                                        {{ recording.user_info }}
                                     </div>
                                     <div class="recording-details">
-                                        <span><strong>Size:</strong> {{ recording.size_mb }} MB</span>
                                         <span><strong>File:</strong> {{ recording.filename }}</span>
                                     </div>
                                 </div>

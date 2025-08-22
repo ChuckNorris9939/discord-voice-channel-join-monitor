@@ -242,7 +242,7 @@ class AlignedPerUserSink(voice_recv.AudioSink):
         self.output_dir = output_dir
         self.garmin_manager = garmin_manager  # Reference to call STT callback
         self.session_start_time = time.perf_counter()
-        self.session_start_timestamp = datetime.now().strftime('%Y%m%d_%H%M%SZ')
+        self.session_start_timestamp = datetime.now().strftime('%d.%m.%y_%H-%M-%S')
         self.user_writers: Dict[int, UserWavWriter] = {}
         self.writers_lock = threading.Lock()
         self.is_recording = True
@@ -331,8 +331,8 @@ class AlignedPerUserSink(voice_recv.AudioSink):
             if user_id in self.user_writers:
                 return self.user_writers[user_id]
             
-            # Create filename: YYYYMMDD_HHMMSSZ_userId_username.wav
-            filename = f"{self.session_start_timestamp}_{user_id}_{username}.wav"
+            # Create filename: dd.mm.yy_HH-MM-SS_username.wav
+            filename = f"{self.session_start_timestamp}_{username}.wav"
             file_path = os.path.join(self.output_dir, filename)
             
             try:
@@ -402,28 +402,22 @@ class AlignedPerUserSink(voice_recv.AudioSink):
         os.makedirs(garmin_output_dir, exist_ok=True)
         
         # Parse session timestamp for filename
-        session_timestamp = self.session_start_timestamp  # Format: 20250822_151524Z
+        session_timestamp = self.session_start_timestamp  # Format: 22.08.25_15-15-30
         try:
-            # Convert from 20250822_151524Z to dd.mm.yy_hh-mm format
-            date_part = session_timestamp.split('_')[0]  # 20250822
-            time_part = session_timestamp.split('_')[1].replace('Z', '')  # 151524
+            # Convert from 22.08.25_15-15-30 to dd.mm.yy_hh-mm-ss format
+            date_part = session_timestamp.split('_')[0]  # 22.08.25
+            time_part = session_timestamp.split('_')[1]  # 15-15-30
             
-            # Parse date: 20250822 -> 22.08.25
-            year = date_part[2:4]  # 25
-            month = date_part[4:6]  # 08  
-            day = date_part[6:8]   # 22
+            # Parse date: 22.08.25 -> 22.08.25 (already correct)
+            # Parse time: 15-15-30 -> 15-15-30 (already correct)
             
-            # Parse time: 151524 -> 15-15
-            hour = time_part[0:2]   # 15
-            minute = time_part[2:4] # 15
-            
-            webgui_timestamp = f"{day}.{month}.{year}_{hour}-{minute}"
+            webgui_timestamp = f"{date_part}_{time_part}"
             
         except Exception as e:
             logger.warning(f"Error parsing timestamp {session_timestamp}, using fallback: {e}")
             # Fallback to current time
             now = datetime.now()
-            webgui_timestamp = now.strftime("%d.%m.%y_%H-%M")
+            webgui_timestamp = now.strftime("%d.%m.%y_%H-%M-%S")
         
         logger.info(f"📂 Copying compressed files to garmin-output with timestamp: {webgui_timestamp}")
         
@@ -436,10 +430,10 @@ class AlignedPerUserSink(voice_recv.AudioSink):
                 
             try:
                 if file_type == 'mixed':
-                    # Mixed file: {dd.mm.yy_hh-mm}_mixed.wav
-                    dest_filename = f"{webgui_timestamp}_mixed.wav"
+                    # Mixed file: {dd.mm.yy_hh-mm-ss}.wav
+                    dest_filename = f"{webgui_timestamp}.wav"
                 else:
-                    # Individual user file: {dd.mm.yy_hh-mm}_user_{username}.wav  
+                    # Individual user file: {dd.mm.yy_hh-mm-ss}_user_{username}.wav
                     # Extract username from original filename
                     original_basename = os.path.basename(source_file)
                     if '_compressed.wav' in original_basename:
@@ -621,7 +615,7 @@ class AlignedPerUserSink(voice_recv.AudioSink):
             if 'mixed' in compressed_files:
                 compressed_timeline['mixed_file'] = {
                     'file_path': compressed_files['mixed'],
-                    'tracks_count': len(compressed_audio_segments),
+                    'tracks_count': len([f for f in compressed_files if f != 'mixed']),
                     'description': 'All compressed user tracks overlaid synchronously'
                 }
             
@@ -1129,7 +1123,7 @@ class GarminVoiceManager:
                     logger.error(f"Error saving aligned recording: {e}")
             
             # Fallback to old recording method
-            timestamp = time.strftime('%d.%m.%Y_%H-%M', time.localtime())
+            timestamp = time.strftime('%d.%m.%y_%H-%M-%S', time.localtime())
             base_filename = f"recording_{timestamp}"
             
             with self._buffers_lock:
