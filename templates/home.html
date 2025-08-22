@@ -529,6 +529,33 @@
                              </div>
                              <div class="status-number" id="stt-output-status">{{ "True" if status_data.garmin_health.stt_output else "False" }}</div>
                          </div>
+                         <div class="status-card">
+                             <div class="status-left">
+                                 <div class="status-icon">🗑️</div>
+                                 <div class="status-label">Aligned Files</div>
+                             </div>
+                             <div class="status-number" id="aligned-files-count">
+                                 {{ status_data.cleanup_stats.aligned_recordings.file_count if status_data.cleanup_stats.aligned_recordings.exists else "0" }}
+                             </div>
+                         </div>
+                         <div class="status-card">
+                             <div class="status-left">
+                                 <div class="status-icon">🗑️</div>
+                                 <div class="status-label">Garmin Files</div>
+                             </div>
+                             <div class="status-number" id="garmin-files-count">
+                                 {{ status_data.cleanup_stats.garmin_output.file_count if status_data.cleanup_stats.garmin_output.exists else "0" }}
+                             </div>
+                         </div>
+                         <div class="status-card">
+                             <div class="status-left">
+                                 <div class="status-icon">💾</div>
+                                 <div class="status-label">Total Size</div>
+                             </div>
+                             <div class="status-number" id="total-size">
+                                 {{ "%.1f MB"|format(status_data.cleanup_stats.aligned_recordings.total_size_mb + status_data.cleanup_stats.garmin_output.total_size_mb) }}
+                             </div>
+                         </div>
                      </div>
                 </div>
             </div>
@@ -609,6 +636,16 @@
                         document.getElementById('errors-status').textContent = data.status.garmin_health.errors;
                         document.getElementById('processing-status').textContent = data.status.garmin_health.processing;
                         document.getElementById('stt-output-status').textContent = data.status.garmin_health.stt_output ? 'True' : 'False';
+                        
+                        // Update cleanup statistics
+                        const alignedStats = data.status.cleanup_stats.aligned_recordings;
+                        const garminStats = data.status.cleanup_stats.garmin_output;
+                        
+                        document.getElementById('aligned-files-count').textContent = alignedStats.exists ? alignedStats.file_count : "0";
+                        document.getElementById('garmin-files-count').textContent = garminStats.exists ? garminStats.file_count : "0";
+                        
+                        const totalSize = (alignedStats.total_size_mb || 0) + (garminStats.total_size_mb || 0);
+                        document.getElementById('total-size').textContent = totalSize.toFixed(1) + " MB";
                     }
                 })
                 .catch(error => {

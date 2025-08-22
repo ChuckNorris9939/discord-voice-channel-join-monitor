@@ -14,6 +14,9 @@ import asyncio
 import time
 import logging.handlers
 
+# Import the audio cleanup service
+from audio_cleanup_service import cleanup_service, run_cleanup, get_cleanup_stats
+
 # Load environment variables from .env file
 try:
     from dotenv import load_dotenv
@@ -335,6 +338,15 @@ def settings_route():
             save_setting(DB_KEY_DISCORD_LOG_LEVEL, request.form.get('discord_log_level', 'INFO'))
             logger.info(f"Saved DISCORD_LOG_LEVEL: {request.form.get('discord_log_level', 'INFO')}")
 
+            # Handle Cleanup Settings
+            cleanup_aligned_hours = request.form.get('cleanup_aligned_recordings_hours', '48')
+            save_setting(DB_KEY_CLEANUP_ALIGNED_RECORDINGS_HOURS, cleanup_aligned_hours)
+            logger.info(f"Saved {DB_KEY_CLEANUP_ALIGNED_RECORDINGS_HOURS}: {cleanup_aligned_hours}")
+
+            cleanup_garmin_hours = request.form.get('cleanup_garmin_output_hours', '72')
+            save_setting(DB_KEY_CLEANUP_GARMIN_OUTPUT_HOURS, cleanup_garmin_hours)
+            logger.info(f"Saved {DB_KEY_CLEANUP_GARMIN_OUTPUT_HOURS}: {cleanup_garmin_hours}")
+
             # Reload settings into global scope
             cfg.load_all_settings()
             
@@ -429,6 +441,10 @@ def settings_route():
     current_settings_display['LOG_LEVEL'] = cfg.LOG_LEVEL
     current_settings_display['DISCORD_LOG_LEVEL'] = cfg.DISCORD_LOG_LEVEL
 
+    # Cleanup Settings
+    current_settings_display['CLEANUP_ALIGNED_RECORDINGS_HOURS'] = str(cfg.CLEANUP_ALIGNED_RECORDINGS_HOURS)
+    current_settings_display['CLEANUP_GARMIN_OUTPUT_HOURS'] = str(cfg.CLEANUP_GARMIN_OUTPUT_HOURS)
+
     return render_template('settings.html', current_settings=current_settings_display, message=message, error=error, vosk_models=vosk_models)
 
 @app.route('/restart_bot', methods=['POST'])
@@ -482,11 +498,15 @@ def get_status_data():
         # Get Garmin health data
         garmin_health = get_garmin_health_data()
         
+        # Get cleanup statistics
+        cleanup_stats = get_cleanup_stats()
+        
         return {
             'voice_events': voice_events_count,
             'recordings': recordings_count,
             'online_users': online_users_count,
-            'garmin_health': garmin_health
+            'garmin_health': garmin_health,
+            'cleanup_stats': cleanup_stats
         }
     except Exception as e:
         logger.error(f"Error getting status data: {e}")
@@ -501,6 +521,10 @@ def get_status_data():
                 'buffer': '0.00 MB',
                 'errors': '0/5',  # Default fallback - will be updated by get_garmin_health_data() if available
                 'processing': 'Idle'
+            },
+            'cleanup_stats': {
+                'aligned_recordings': {'exists': False, 'file_count': 0, 'total_size_mb': 0},
+                'garmin_output': {'exists': False, 'file_count': 0, 'total_size_mb': 0}
             }
         }
 
@@ -693,6 +717,33 @@ def status_route():
         return {"success": True, "status": status_data}
     except Exception as e:
         logger.error(f"Error in status_route: {e}")
+        return {"success": False, "error": str(e)}
+
+@app.route('/cleanup/run', methods=['POST'])
+def cleanup_run_route():
+    """API endpoint to manually trigger audio cleanup"""
+    try:
+        logger.info("Manual cleanup triggered via web UI")
+        aligned_deleted, garmin_deleted = run_cleanup()
+        
+        return {
+            "success": True,
+            "aligned_deleted": aligned_deleted,
+            "garmin_deleted": garmin_deleted,
+            "message": f"Cleanup completed: {aligned_deleted + garmin_deleted} files deleted"
+        }
+    except Exception as e:
+        logger.error(f"Error in cleanup_run_route: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
+
+@app.route('/cleanup/stats')
+def cleanup_stats_route():
+    """API endpoint to get cleanup statistics"""
+    try:
+        stats = get_cleanup_stats()
+        return {"success": True, "stats": stats}
+    except Exception as e:
+        logger.error(f"Error in cleanup_stats_route: {e}", exc_info=True)
         return {"success": False, "error": str(e)}
 
 def run_flask():
@@ -1074,7 +1125,7 @@ def update_thread_reminder_sent(thread_id: int, timestamp_iso: str):
 
 # --------- Helper Functions for bot_settings Table ---------
 import config_loader as cfg
-from config_loader import save_setting, DB_KEY_APP_TESTING_MODE, DB_KEY_HIDDEN_CHANNELS, DB_KEY_LOG_CHANNEL_ID, DB_KEY_BOT_AUDIT_ID, DB_KEY_TECHSUPPORT_CHANNEL_ID, DB_KEY_AFK_CHANNEL_ID, DB_KEY_PURGE_OLDER_THAN_DAYS, DB_KEY_JOIN_MESSAGE_TIMER_ENABLED, DB_KEY_JOIN_MESSAGE_TIMER_MINUTES, DB_KEY_AFK_TIMER_MINUTES, DB_KEY_STT_ENABLED, DB_KEY_STT_ENGINE, DB_KEY_VOSK_MODEL_PATH, DB_KEY_GARMIN_AUTO_JOIN_ENABLED, DB_KEY_GARMIN_AUTO_JOIN_CHANNELS, DB_KEY_GARMIN_RECORD_SECONDS, DB_KEY_GARMIN_MAX_RECORDING_DURATION, DB_KEY_GARMIN_STT_OUTPUT_ENABLED, DB_KEY_LOG_LEVEL, DB_KEY_DISCORD_LOG_LEVEL
+from config_loader import save_setting, DB_KEY_APP_TESTING_MODE, DB_KEY_HIDDEN_CHANNELS, DB_KEY_LOG_CHANNEL_ID, DB_KEY_BOT_AUDIT_ID, DB_KEY_TECHSUPPORT_CHANNEL_ID, DB_KEY_AFK_CHANNEL_ID, DB_KEY_PURGE_OLDER_THAN_DAYS, DB_KEY_JOIN_MESSAGE_TIMER_ENABLED, DB_KEY_JOIN_MESSAGE_TIMER_MINUTES, DB_KEY_AFK_TIMER_MINUTES, DB_KEY_STT_ENABLED, DB_KEY_STT_ENGINE, DB_KEY_VOSK_MODEL_PATH, DB_KEY_GARMIN_AUTO_JOIN_ENABLED, DB_KEY_GARMIN_AUTO_JOIN_CHANNELS, DB_KEY_GARMIN_RECORD_SECONDS, DB_KEY_GARMIN_MAX_RECORDING_DURATION, DB_KEY_GARMIN_STT_OUTPUT_ENABLED, DB_KEY_LOG_LEVEL, DB_KEY_DISCORD_LOG_LEVEL, DB_KEY_CLEANUP_ALIGNED_RECORDINGS_HOURS, DB_KEY_CLEANUP_GARMIN_OUTPUT_HOURS
 
 
 
@@ -1285,6 +1336,22 @@ async def on_ready():
 
     # Load all settings from DB, potentially overriding ENV VARs or hardcoded defaults
     cfg.load_all_settings()
+    
+    # Run initial cleanup on startup
+    try:
+        logger.info("Running initial audio cleanup on startup...")
+        aligned_deleted, garmin_deleted = run_cleanup()
+        if aligned_deleted > 0 or garmin_deleted > 0:
+            logger.info(f"Initial cleanup completed: {aligned_deleted} aligned files, {garmin_deleted} garmin files deleted")
+        else:
+            logger.info("Initial cleanup completed: no files to delete")
+    except Exception as e:
+        logger.error(f"Error during initial cleanup on startup: {e}", exc_info=True)
+    
+    # Start periodic cleanup task
+    if not periodic_cleanup_task.is_running():
+        periodic_cleanup_task.start()
+        logger.info("Periodic cleanup task started.")
 
     # Re-evaluate TESTING-dependent channel IDs after loading from DB
     if cfg.TESTING:
@@ -2469,6 +2536,22 @@ async def msg_purge_task():
             await send_log_message(f"⚠️ Daily Purge generic error in {channel_to_purge_obj.mention}: {e}", target_channel_ids=target_ids_task_log)
 
 
+@tasks.loop(hours=6)
+async def periodic_cleanup_task():
+    """Periodically clean up old audio files based on configured retention periods."""
+    try:
+        logger.info("Starting periodic audio cleanup...")
+        aligned_deleted, garmin_deleted = run_cleanup()
+        
+        if aligned_deleted > 0 or garmin_deleted > 0:
+            logger.info(f"Periodic cleanup completed: {aligned_deleted} aligned files, {garmin_deleted} garmin files deleted")
+        else:
+            logger.debug("Periodic cleanup completed: no files to delete")
+            
+    except Exception as e:
+        logger.error(f"Error during periodic cleanup: {e}", exc_info=True)
+
+
 @bot.event
 async def on_thread_update(before: Thread, after: Thread):
     if after.guild.id != DISCORD_SERVER_ID: return
@@ -2506,6 +2589,16 @@ async def graceful_shutdown():
             logger.info("msg_purge_task erfolgreich abgebrochen.")
         except Exception as e:
             logger.error(f"Fehler beim Stoppen von msg_purge_task: {e}", exc_info=True)
+    
+    if periodic_cleanup_task.is_running():
+        logger.info("Stoppe periodic_cleanup_task...")
+        periodic_cleanup_task.cancel()
+        try:
+            pass # cancel() wurde gerufen, das reicht für den Shutdown-Prozess
+        except asyncio.CancelledError:
+            logger.info("periodic_cleanup_task erfolgreich abgebrochen.")
+        except Exception as e:
+            logger.error(f"Fehler beim Stoppen von periodic_cleanup_task: {e}", exc_info=True)
     
     logger.info("Sende 'Bot wird gestoppt...' Nachricht (falls möglich).")
     stop_message_targets = []

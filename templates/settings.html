@@ -240,16 +240,49 @@
     <script>
         function toggleCategory(categoryId) {
             const content = document.getElementById(categoryId);
-            const header = document.querySelector(`[onclick="toggleCategory('${categoryId}')"]`);
-            const icon = header.querySelector('.toggle-icon');
+            const header = content.previousElementSibling;
+            const toggleIcon = header.querySelector('.toggle-icon');
             
             if (content.classList.contains('collapsed')) {
                 content.classList.remove('collapsed');
-                icon.classList.remove('collapsed');
+                toggleIcon.classList.remove('collapsed');
             } else {
                 content.classList.add('collapsed');
-                icon.classList.add('collapsed');
+                toggleIcon.classList.add('collapsed');
             }
+        }
+
+        function runManualCleanup() {
+            const button = event.target;
+            const originalText = button.innerHTML;
+            
+            // Disable button and show loading state
+            button.disabled = true;
+            button.innerHTML = '⏳ Running Cleanup...';
+            
+            fetch('/cleanup/run', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert(`Cleanup completed successfully!\n\nFiles deleted:\n- Aligned recordings: ${data.aligned_deleted}\n- Garmin output: ${data.garmin_deleted}\n\nTotal: ${data.aligned_deleted + data.garmin_deleted} files`);
+                } else {
+                    alert(`Cleanup failed: ${data.error}`);
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('Cleanup failed due to an error. Check console for details.');
+            })
+            .finally(() => {
+                // Restore button state
+                button.disabled = false;
+                button.innerHTML = originalText;
+            });
         }
     </script>
 </head>
@@ -443,6 +476,35 @@
                     <div class="form-group">
                         <label for="afk_channel_id">AFK Channel ID</label>
                         <input type="text" name="afk_channel_id" id="afk_channel_id" value="{{ current_settings.get('AFK_CHANNEL_ID', '') }}">
+                    </div>
+                </div>
+
+                <div class="category-header" onclick="toggleCategory('cleanup-category')">
+                    <h2>🗑️ Audio Cleanup Settings</h2>
+                    <span class="toggle-icon collapsed">▼</span>
+                </div>
+                <div id="cleanup-category" class="category-content collapsed">
+                    <!-- Aligned Recordings Retention -->
+                    <div class="form-group">
+                        <label for="cleanup_aligned_recordings_hours">Aligned Recordings Retention (Hours)</label>
+                        <input type="number" name="cleanup_aligned_recordings_hours" id="cleanup_aligned_recordings_hours" value="{{ current_settings.get('CLEANUP_ALIGNED_RECORDINGS_HOURS', '48') }}" min="1" max="8760">
+                        <p class="note">Files in data/aligned-recordings older than this will be automatically deleted. Default: 48 hours (2 days).</p>
+                    </div>
+
+                    <!-- Garmin Output Retention -->
+                    <div class="form-group">
+                        <label for="cleanup_garmin_output_hours">Garmin Output Retention (Hours)</label>
+                        <input type="number" name="cleanup_garmin_output_hours" id="cleanup_garmin_output_hours" value="{{ current_settings.get('CLEANUP_GARMIN_OUTPUT_HOURS', '72') }}" min="1" max="8760">
+                        <p class="note">Files in data/garmin-output older than this will be automatically deleted. Default: 72 hours (3 days).</p>
+                    </div>
+
+                    <!-- Manual Cleanup Button -->
+                    <div class="form-group">
+                        <label>Manual Cleanup</label>
+                        <button type="button" class="save-button" onclick="runManualCleanup()" style="width: auto; margin-top: 10px;">
+                            🧹 Run Cleanup Now
+                        </button>
+                        <p class="note">Click to manually trigger the audio cleanup process. This will delete files according to the retention settings above.</p>
                     </div>
                 </div>
 
