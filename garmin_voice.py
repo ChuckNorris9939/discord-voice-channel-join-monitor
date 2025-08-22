@@ -280,8 +280,15 @@ class AlignedPerUserSink(voice_recv.AudioSink):
         self.last_frame_times: Dict[int, float] = {}  # user_id -> last frame time
         self.user_sample_cursors: Dict[int, int] = {}  # user_id -> expected next sample position
         
+        # Smart silence compression: intelligently reduce long silence gaps
+        self.last_global_activity = time.perf_counter()  # Track when anyone last spoke
+        self.silence_compression_threshold = 5.0  # Compress silence longer than 5 seconds
+        self.silence_compression_target = 1.0    # Reduce long silence to 1 second
+        self.compress_silence = False  # Disable live compression - use post-processing instead
+        self.global_compressed_offset = 0  # Track how much time we've saved
+        
         os.makedirs(output_dir, exist_ok=True)
-        logger.info(f"AlignedPerUserSink initialized: session_start={self.session_start_timestamp}")
+        logger.info(f"AlignedPerUserSink initialized: session_start={self.session_start_timestamp}, silence_compression={'ON' if self.compress_silence else 'OFF'}")
     
     def wants_opus(self) -> bool:
         """Request PCM data instead of Opus."""
@@ -335,10 +342,18 @@ class AlignedPerUserSink(voice_recv.AudioSink):
         
         logger.debug(f"User {username}: frame_duration={frame_duration_ms:.1f}ms, samples={frame_samples}, session_elapsed={session_elapsed_ms:.1f}ms")
         
-        # Gap detection and padding
-        logger.debug(f"About to handle gaps and padding for {username}")
-        self._handle_gaps_and_padding(user_id, writer, expected_sample_position, frame_samples, current_time)
-        logger.debug(f"Gap handling completed for {username}")
+        # Calculate compressed position if silence compression is enabled
+        if self.compress_silence:
+            compressed_position = self._calculate_compressed_position(current_time)
+            logger.debug(f"User {username}: original_pos={expected_sample_position}, compressed_pos={compressed_position}")
+            
+            # Use compressed position for gap detection
+            self._handle_gaps_and_padding(user_id, writer, compressed_position, frame_samples, current_time)
+        else:
+            # Standard gap detection without compression
+            logger.debug(f"About to handle gaps and padding for {username}")
+            self._handle_gaps_and_padding(user_id, writer, expected_sample_position, frame_samples, current_time)
+            logger.debug(f"Gap handling completed for {username}")
         
         # Write the actual audio data
         logger.debug(f"Checking PCM data for {username}: {data.pcm is not None}, length={len(data.pcm) if data.pcm else 0}")
@@ -346,6 +361,11 @@ class AlignedPerUserSink(voice_recv.AudioSink):
             logger.debug(f"About to write {len(data.pcm)} bytes for user {username}")
             writer.write_audio(data.pcm)
             logger.debug(f"Audio written for user {username}, current sample position: {writer.get_current_sample()}")
+            
+            # Update global activity timestamp when anyone speaks
+            if self.compress_silence:
+                self.last_global_activity = current_time
+                logger.debug(f"Updated global activity timestamp for compression")
         else:
             logger.warning(f"No PCM data in voice data for user {username}")
         
@@ -431,12 +451,244 @@ class AlignedPerUserSink(voice_recv.AudioSink):
         
         logger.debug(f"Gap handling completed for user {user_id}")
     
+    def _calculate_compressed_position(self, current_time: float) -> int:
+        """Calculate compressed sample position with FIXED intelligent silence reduction."""
+        # Calculate original elapsed time since session start
+        original_elapsed = current_time - self.session_start_time
+        
+        # Calculate how long since last global activity
+        silence_duration = current_time - self.last_global_activity
+        
+        # FIXED: Check if we should compress this silence period
+        # Only compress if we haven't already compressed this silence gap
+        silence_start_time = self.last_global_activity
+        silence_end_time = current_time
+        
+        # Check if this silence period is long enough to compress
+        if silence_duration > self.silence_compression_threshold:
+            # Calculate compressed gap duration
+            compressed_gap = self.silence_compression_target
+            excess_silence = silence_duration - compressed_gap
+            
+            # CRITICAL FIX: Only update offset ONCE per silence period
+            # Mark this silence period as processed by updating last_global_activity
+            if silence_duration > self.silence_compression_threshold:
+                # Update the offset for this silence period
+                silence_offset_for_this_period = excess_silence
+                
+                # Update global tracking
+                self.global_compressed_offset += silence_offset_for_this_period
+                self.last_global_activity = current_time  # Mark as processed
+                
+                logger.debug(f"🔧 NEW silence period compressed: {excess_silence:.1f}s, total offset: {self.global_compressed_offset:.1f}s")
+        
+        # Calculate compressed elapsed time (ALWAYS apply full offset)
+        compressed_elapsed = original_elapsed - self.global_compressed_offset
+        
+        # Convert to samples
+        compressed_position = int(compressed_elapsed * 1000 * self.samples_per_ms)
+        
+        logger.debug(f"Position calc: original={original_elapsed:.1f}s, offset={self.global_compressed_offset:.1f}s, compressed={compressed_elapsed:.1f}s")
+        
+        return max(0, compressed_position)  # Never go negative
+    
+    def _track_activity(self, user_id: int, start_sample: int, frame_samples: int):
+        """Track audio activity for smart silence compression."""
+        end_sample = start_sample + frame_samples
+        
+        # Merge with existing activity or create new entry
+        merged = False
+        for activity in self.activity_timeline:
+            # Check for overlap or immediate adjacency
+            if (start_sample <= activity['end_sample'] + self.expected_frame_samples and 
+                end_sample >= activity['start_sample'] - self.expected_frame_samples):
+                # Merge activity periods
+                activity['start_sample'] = min(activity['start_sample'], start_sample)
+                activity['end_sample'] = max(activity['end_sample'], end_sample)
+                if user_id not in activity['users']:
+                    activity['users'].append(user_id)
+                merged = True
+                break
+        
+        if not merged:
+            self.activity_timeline.append({
+                'start_sample': start_sample,
+                'end_sample': end_sample,
+                'users': [user_id]
+            })
+        
+        # Sort timeline by start sample
+        self.activity_timeline.sort(key=lambda x: x['start_sample'])
+        logger.debug(f"Activity tracked for user {user_id}: {len(self.activity_timeline)} active periods")
+    
+    def _build_compressed_timeline(self) -> List[Dict]:
+        """Build compressed timeline removing long silence gaps."""
+        if not self.activity_timeline:
+            return []
+        
+        compressed = []
+        current_compressed_pos = 0
+        silence_threshold_samples = int(self.silence_threshold_ms * self.samples_per_ms)
+        
+        logger.info(f"Building compressed timeline: {len(self.activity_timeline)} activity periods, silence threshold: {self.silence_threshold_ms}ms")
+        
+        for i, activity in enumerate(self.activity_timeline):
+            if i == 0:
+                # First activity period - start at 0 in compressed timeline
+                compressed_start = 0
+                compressed_end = activity['end_sample'] - activity['start_sample']
+            else:
+                prev_activity = self.activity_timeline[i-1]
+                silence_gap = activity['start_sample'] - prev_activity['end_sample']
+                
+                if silence_gap > silence_threshold_samples:
+                    # Large silence gap - compress it
+                    logger.debug(f"Compressing silence gap: {silence_gap} samples ({silence_gap/48000:.1f}s)")
+                    compressed_start = current_compressed_pos
+                    compressed_end = compressed_start + (activity['end_sample'] - activity['start_sample'])
+                else:
+                    # Small gap - keep it
+                    compressed_start = current_compressed_pos + silence_gap
+                    compressed_end = compressed_start + (activity['end_sample'] - activity['start_sample'])
+            
+            compressed.append({
+                'original_start': activity['start_sample'],
+                'original_end': activity['end_sample'],
+                'compressed_start': compressed_start,
+                'compressed_end': compressed_end,
+                'users': activity['users']
+            })
+            
+            current_compressed_pos = compressed_end
+        
+        logger.info(f"Compressed timeline built: {len(compressed)} periods, final length: {current_compressed_pos} samples ({current_compressed_pos/48000:.1f}s)")
+        return compressed
+    
     def _sanitize_filename(self, name: str) -> str:
         """Sanitize username for filename use."""
         forbidden = '<>:"/\\|?*'
         sanitized = ''.join('_' if c in forbidden or ord(c) < 32 else c for c in name)
         sanitized = sanitized.strip().rstrip('. ')
         return sanitized[:32] if sanitized else 'unknown'
+    
+    def compress_recordings_post_process(self, wav_files: List[str], timeline_data: dict) -> dict:
+        """Post-process WAV files to remove long silence gaps while maintaining sync."""
+        try:
+            import wave
+            from pydub import AudioSegment
+            
+            logger.info(f"🔧 Starting post-process compression of {len(wav_files)} files")
+            
+            # Load all audio files
+            audio_segments = {}
+            max_length_ms = 0
+            
+            for wav_file in wav_files:
+                if not os.path.exists(wav_file):
+                    continue
+                    
+                audio = AudioSegment.from_wav(wav_file)
+                audio_segments[wav_file] = audio
+                max_length_ms = max(max_length_ms, len(audio))
+                
+            logger.debug(f"Original session length: {max_length_ms}ms")
+            
+            # Find silence periods across ALL tracks
+            silence_threshold_ms = int(self.silence_compression_threshold * 1000)
+            silence_target_ms = int(self.silence_compression_target * 1000)
+            
+            # Analyze silence periods in chunks
+            chunk_size_ms = 100  # 100ms chunks for analysis
+            silence_periods = []
+            
+            for chunk_start in range(0, max_length_ms, chunk_size_ms):
+                chunk_end = min(chunk_start + chunk_size_ms, max_length_ms)
+                
+                # Check if ANY track has audio in this chunk
+                has_audio = False
+                for audio in audio_segments.values():
+                    if chunk_start < len(audio):
+                        chunk = audio[chunk_start:chunk_end]
+                        # Simple volume-based detection
+                        if chunk.dBFS > -60:  # Above silence threshold
+                            has_audio = True
+                            break
+                
+                # Track silence periods
+                if not has_audio:
+                    if not silence_periods or silence_periods[-1]['end'] != chunk_start:
+                        # New silence period
+                        silence_periods.append({'start': chunk_start, 'end': chunk_end})
+                    else:
+                        # Extend current silence period
+                        silence_periods[-1]['end'] = chunk_end
+                        
+            # Identify long silence periods to compress
+            compressions = []
+            total_saved_ms = 0
+            
+            for period in silence_periods:
+                duration_ms = period['end'] - period['start']
+                if duration_ms > silence_threshold_ms:
+                    # Compress this period
+                    saved_ms = duration_ms - silence_target_ms
+                    compressions.append({
+                        'original_start': period['start'],
+                        'original_end': period['end'],
+                        'compressed_duration': silence_target_ms,
+                        'saved_ms': saved_ms
+                    })
+                    total_saved_ms += saved_ms
+                    
+            logger.info(f"Found {len(compressions)} silence periods to compress, saving {total_saved_ms}ms total")
+            
+            # Apply compressions to all audio files
+            compressed_files = {}
+            
+            for wav_file, audio in audio_segments.items():
+                compressed_audio = AudioSegment.empty()
+                current_pos = 0
+                
+                for compression in compressions:
+                    # Add audio before compression
+                    if current_pos < compression['original_start']:
+                        compressed_audio += audio[current_pos:compression['original_start']]
+                    
+                    # Add compressed silence
+                    compressed_audio += AudioSegment.silent(duration=compression['compressed_duration'])
+                    
+                    current_pos = compression['original_end']
+                
+                # Add remaining audio
+                if current_pos < len(audio):
+                    compressed_audio += audio[current_pos:]
+                
+                # Save compressed file
+                compressed_file = wav_file.replace('.wav', '_compressed.wav')
+                compressed_audio.export(compressed_file, format="wav")
+                compressed_files[wav_file] = compressed_file
+                
+                logger.debug(f"Compressed {wav_file}: {len(audio)}ms -> {len(compressed_audio)}ms")
+            
+            # Update timeline data
+            compressed_timeline = timeline_data.copy()
+            compressed_timeline['original_duration_ms'] = timeline_data['session_duration_ms']
+            compressed_timeline['session_duration_ms'] = max_length_ms - total_saved_ms
+            compressed_timeline['compressed_silence_ms'] = total_saved_ms
+            compressed_timeline['compression_method'] = 'post_process'
+            compressed_timeline['compressions'] = compressions
+            
+            logger.info(f"✅ Post-processing complete: {max_length_ms}ms -> {max_length_ms - total_saved_ms}ms")
+            
+            return {
+                'compressed_files': compressed_files,
+                'timeline': compressed_timeline,
+                'saved_ms': total_saved_ms
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in post-process compression: {e}", exc_info=True)
+            return None
     
     def cleanup(self):
         """Cleanup: pad all writers to session end and close files."""
@@ -445,12 +697,22 @@ class AlignedPerUserSink(voice_recv.AudioSink):
         try:
             self.is_recording = False
             
-            # Calculate final session length
+            # Calculate final session length (with compression if enabled)
             current_time = time.perf_counter()
-            session_duration_ms = (current_time - self.session_start_time) * 1000
-            final_session_samples = int(session_duration_ms * self.samples_per_ms)
+            original_session_duration_ms = (current_time - self.session_start_time) * 1000
             
-            logger.debug(f"Session duration: {session_duration_ms:.1f}ms, final samples: {final_session_samples}")
+            if self.compress_silence:
+                # Calculate compressed session length
+                compressed_session_duration_ms = original_session_duration_ms - (self.global_compressed_offset * 1000)
+                final_session_samples = int(compressed_session_duration_ms * self.samples_per_ms)
+                
+                logger.info(f"Session compression: original={original_session_duration_ms:.1f}ms, compressed={compressed_session_duration_ms:.1f}ms, saved={self.global_compressed_offset:.1f}s")
+                logger.debug(f"Compressed session samples: {final_session_samples}")
+            else:
+                # Standard session length
+                compressed_session_duration_ms = original_session_duration_ms
+                final_session_samples = int(original_session_duration_ms * self.samples_per_ms)
+                logger.debug(f"Standard session duration: {original_session_duration_ms:.1f}ms, final samples: {final_session_samples}")
             
             # Update total if larger
             self.total_session_samples = max(self.total_session_samples, final_session_samples)
@@ -461,7 +723,10 @@ class AlignedPerUserSink(voice_recv.AudioSink):
                 
                 timeline_data = {
                     'session_start': self.session_start_timestamp,
-                    'session_duration_ms': session_duration_ms,
+                    'session_duration_ms': compressed_session_duration_ms,
+                    'original_duration_ms': original_session_duration_ms,
+                    'compressed_silence_seconds': self.global_compressed_offset,
+                    'compression_enabled': self.compress_silence,
                     'session_samples': self.total_session_samples,
                     'sample_rate': SAMPLERATE,
                     'users': {}
@@ -507,11 +772,40 @@ class AlignedPerUserSink(voice_recv.AudioSink):
                         json.dump(timeline_data, f, indent=2, ensure_ascii=False)
                     logger.info(f"✅ Saved timeline data: {timeline_path}")
                     
+                    # POST-PROCESSING: Compress silence if enabled
+                    try:
+                        wav_files = [data['file_path'] for data in timeline_data['users'].values()]
+                        
+                        if len(wav_files) > 0 and self.silence_compression_threshold > 0:
+                            logger.info("🔧 Starting post-process silence compression...")
+                            
+                            compression_result = self.compress_recordings_post_process(wav_files, timeline_data)
+                            
+                            if compression_result:
+                                # Save compressed timeline
+                                compressed_timeline_path = timeline_path.replace('.json', '_compressed.json')
+                                with open(compressed_timeline_path, 'w', encoding='utf-8') as f:
+                                    json.dump(compression_result['timeline'], f, indent=2, ensure_ascii=False)
+                                
+                                logger.info(f"✅ Compressed recordings saved: {compression_result['saved_ms']}ms saved")
+                                logger.info(f"✅ Compressed timeline: {compressed_timeline_path}")
+                                
+                                # Log compression details
+                                for original, compressed in compression_result['compressed_files'].items():
+                                    logger.info(f"   📄 {os.path.basename(compressed)}")
+                            else:
+                                logger.warning("⚠️ Post-process compression failed")
+                        else:
+                            logger.debug("ℹ️ Skipping post-process compression (disabled or no files)")
+                            
+                    except Exception as comp_error:
+                        logger.error(f"❌ Error in post-process compression: {comp_error}", exc_info=True)
+                    
                 except Exception as e:
                     logger.error(f"❌ Failed to save timeline data: {e}", exc_info=True)
             
             logger.info(f"🎯 AlignedPerUserSink cleanup completed: {len(self.user_writers)} user tracks, "
-                       f"{self.total_session_samples} samples ({session_duration_ms:.1f}ms)")
+                       f"{self.total_session_samples} samples ({compressed_session_duration_ms:.1f}ms)")
                        
         except Exception as e:
             logger.error(f"💥 Critical error in cleanup: {e}", exc_info=True)
