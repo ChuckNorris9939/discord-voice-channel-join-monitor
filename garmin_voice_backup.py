@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import wave
 import threading
@@ -6,15 +7,18 @@ import difflib
 import logging
 import asyncio
 import queue
+import io
 import json
 from typing import Final, Dict, Optional, List
 from pathlib import Path
+from collections import defaultdict, deque
 from datetime import datetime
 
 import discord
 import speech_recognition as sr
 from discord.ext import voice_recv
 from pydub import AudioSegment
+from pydub.utils import make_chunks
 
 try:
     import vosk  # optional, only needed for offline STT
@@ -25,22 +29,15 @@ except ImportError:
 # Logging setup - now handled by config_loader.py
 # --------------------------------------------------
 logger = logging.getLogger(__name__)
+# Temporary debug logging for aligned recording
+logger.setLevel(logging.DEBUG)
 
+# Ensure logs directory exists
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+LOGS_DIR = os.path.join(SCRIPT_DIR, "data", "logs")
+os.makedirs(LOGS_DIR, exist_ok=True)
 
 import config_loader as cfg
-
-# ==================================================
-# Helper Functions
-# ==================================================
-
-def sanitize_filename(name: str) -> str:
-    """Sanitize username for filename use."""
-    forbidden = '<>:"/\\|?*'
-    sanitized = ''.join('_' if c in forbidden or ord(c) < 32 else c for c in name)
-    sanitized = sanitized.strip().rstrip('. ')
-    return sanitized[:32] if sanitized else 'unknown'
-
 
 # ==================================================
 # Audio / Recording constants
@@ -50,8 +47,14 @@ CHANNELS: Final[int] = 2  # stereo
 BYTES_PER_SAMPLE: Final[int] = 2  # 16-bit
 SAMPLE_WIDTH: Final[int] = 2  # 16-bit PCM
 
+# Frame size for Discord (20ms @ 48kHz stereo)
+FRAME_DURATION_MS: Final[float] = 20.0
+FRAME_SIZE_SAMPLES: Final[int] = int(FRAME_DURATION_MS / 1000 * SAMPLERATE)
+FRAME_SIZE_BYTES: Final[int] = FRAME_SIZE_SAMPLES * CHANNELS * BYTES_PER_SAMPLE
+
 # Buffer management
 MAX_BUFFER_DURATION_S: Final[int] = int(os.getenv("GARMIN_MAX_BUFFER_DURATION", "600"))  # 10 minutes max per user
+MAX_BUFFER_SIZE: Final[int] = cfg.GARMIN_RECORD_SECONDS * SAMPLERATE * CHANNELS * BYTES_PER_SAMPLE
 
 # STT processing
 PROCESS_INTERVAL_S: Final[float] = float(os.getenv("GARMIN_PROCESS_INTERVAL", "3.0"))
@@ -286,7 +289,7 @@ class AlignedPerUserSink(voice_recv.AudioSink):
             username = "unknown"
         else:
             user_id = user.id
-            username = sanitize_filename(user.name)
+            username = self._sanitize_filename(user.name)
         
         # Check if we have PCM data
         if not data.pcm:
@@ -393,9 +396,19 @@ class AlignedPerUserSink(voice_recv.AudioSink):
                     if gap_samples > 240000:  # More than 5 seconds
                         logger.debug(f"🔇 Gap filled for {writer.username}: {gap_samples} samples ({gap_samples/48000:.1f}s)")
     
+
+
+    def _sanitize_filename(self, name: str) -> str:
+        """Sanitize username for filename use."""
+        forbidden = '<>:"/\\|?*'
+        sanitized = ''.join('_' if c in forbidden or ord(c) < 32 else c for c in name)
+        sanitized = sanitized.strip().rstrip('. ')
+        return sanitized[:32] if sanitized else 'unknown'
+    
     def _copy_to_garmin_output(self, compressed_files: dict, timeline_data: dict):
         """Copy compressed files to garmin-output directory with WebGUI naming scheme."""
         import shutil
+        from datetime import datetime
         
         # Create garmin-output directory if it doesn't exist
         garmin_output_dir = os.path.join(os.path.dirname(self.output_dir), "garmin-output")
@@ -482,6 +495,9 @@ class AlignedPerUserSink(voice_recv.AudioSink):
     def compress_recordings_post_process(self, wav_files: List[str], timeline_data: dict) -> dict:
         """Post-process WAV files to remove long silence gaps while maintaining sync."""
         try:
+            import wave
+            from pydub import AudioSegment
+            
             logger.info(f"🔧 Starting post-process compression of {len(wav_files)} files")
             
             # Load all audio files
@@ -784,6 +800,373 @@ class AlignedPerUserSink(voice_recv.AudioSink):
             logger.error(f"💥 Critical error in cleanup: {e}", exc_info=True)
 
 
+# ==================================================
+# User Audio Buffer Class  
+# ==================================================
+    """
+    Validate that aligned recordings have consistent timing.
+    
+    Args:
+        timeline_path: Path to the timeline JSON file
+        
+    Returns:
+        Dictionary with validation results
+    """
+    try:
+        with open(timeline_path, 'r') as f:
+            timeline_data = json.load(f)
+        
+        expected_samples = timeline_data['session_samples']
+        expected_duration_ms = timeline_data['session_duration_ms']
+        sample_rate = timeline_data['sample_rate']
+        
+        results = {
+            'valid': True,
+            'expected_samples': expected_samples,
+            'expected_duration_ms': expected_duration_ms,
+            'users': {},
+            'errors': []
+        }
+        
+        for user_id, user_data in timeline_data['users'].items():
+            file_path = user_data['file_path']
+            recorded_samples = user_data['final_samples']
+            
+            # Validate using pydub
+            try:
+                audio = AudioSegment.from_wav(file_path)
+                actual_duration_ms = len(audio)
+                actual_samples = int((actual_duration_ms / 1000.0) * sample_rate)
+                
+                # Check if duration matches within tolerance (10ms)
+                duration_diff_ms = abs(actual_duration_ms - expected_duration_ms)
+                samples_diff = abs(actual_samples - expected_samples)
+                
+                user_result = {
+                    'file_path': file_path,
+                    'username': user_data['username'],
+                    'expected_samples': expected_samples,
+                    'recorded_samples': recorded_samples,
+                    'actual_samples': actual_samples,
+                    'expected_duration_ms': expected_duration_ms,
+                    'actual_duration_ms': actual_duration_ms,
+                    'duration_diff_ms': duration_diff_ms,
+                    'samples_diff': samples_diff,
+                    'valid': duration_diff_ms <= 10,  # 10ms tolerance
+                    'sample_rate': audio.frame_rate,
+                    'channels': audio.channels,
+                    'sample_width': audio.sample_width
+                }
+                
+                if not user_result['valid']:
+                    results['valid'] = False
+                    results['errors'].append(f"User {user_data['username']}: Duration mismatch {duration_diff_ms:.1f}ms")
+                
+                # Validate audio format
+                if audio.frame_rate != sample_rate:
+                    results['valid'] = False
+                    results['errors'].append(f"User {user_data['username']}: Wrong sample rate {audio.frame_rate} (expected {sample_rate})")
+                
+                if audio.channels != 1:
+                    results['valid'] = False
+                    results['errors'].append(f"User {user_data['username']}: Wrong channels {audio.channels} (expected 1)")
+                
+                if audio.sample_width != 2:
+                    results['valid'] = False
+                    results['errors'].append(f"User {user_data['username']}: Wrong sample width {audio.sample_width} (expected 2)")
+                
+                results['users'][user_id] = user_result
+                
+            except Exception as e:
+                results['valid'] = False
+                results['errors'].append(f"User {user_data['username']}: Failed to validate audio file: {e}")
+        
+        return results
+        
+    except Exception as e:
+        return {
+            'valid': False,
+            'errors': [f"Failed to validate recordings: {e}"],
+            'users': {}
+        }
+
+
+def create_test_validation_script(output_dir: str) -> str:
+    """
+    Create a standalone validation script for testing aligned recordings.
+    
+    Args:
+        output_dir: Directory to save the validation script
+        
+    Returns:
+        Path to the created script
+    """
+    script_content = '''#!/usr/bin/env python3
+"""
+Standalone validation script for aligned Discord recordings.
+"""
+import json
+import sys
+import os
+from pydub import AudioSegment
+from pathlib import Path
+
+def validate_aligned_recordings(timeline_path):
+    """Validate aligned recordings against timeline."""
+    try:
+        with open(timeline_path, 'r') as f:
+            timeline_data = json.load(f)
+        
+        expected_samples = timeline_data['session_samples']
+        expected_duration_ms = timeline_data['session_duration_ms']
+        sample_rate = timeline_data['sample_rate']
+        
+        print(f"Validating session: {expected_duration_ms:.1f}ms ({expected_samples} samples @ {sample_rate}Hz)")
+        print("=" * 80)
+        
+        all_valid = True
+        
+        for user_id, user_data in timeline_data['users'].items():
+            file_path = user_data['file_path']
+            username = user_data['username']
+            
+            if not os.path.exists(file_path):
+                print(f"❌ {username}: File not found: {file_path}")
+                all_valid = False
+                continue
+            
+            try:
+                audio = AudioSegment.from_wav(file_path)
+                actual_duration_ms = len(audio)
+                duration_diff_ms = abs(actual_duration_ms - expected_duration_ms)
+                
+                status = "✅" if duration_diff_ms <= 10 else "❌"
+                print(f"{status} {username}: {actual_duration_ms:.1f}ms (diff: {duration_diff_ms:.1f}ms)")
+                print(f"   Format: {audio.frame_rate}Hz, {audio.channels}ch, {audio.sample_width*8}bit")
+                
+                if duration_diff_ms > 10:
+                    all_valid = False
+                
+                if audio.frame_rate != sample_rate or audio.channels != 1 or audio.sample_width != 2:
+                    print(f"   ⚠️ Format mismatch (expected: {sample_rate}Hz, 1ch, 16bit)")
+                    all_valid = False
+                    
+            except Exception as e:
+                print(f"❌ {username}: Error reading audio: {e}")
+                all_valid = False
+        
+        print("=" * 80)
+        print(f"Overall result: {'✅ VALID' if all_valid else '❌ INVALID'}")
+        return all_valid
+        
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        return False
+
+if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        print("Usage: python validate_recordings.py <timeline.json>")
+        sys.exit(1)
+    
+    timeline_path = sys.argv[1]
+    if not os.path.exists(timeline_path):
+        print(f"Error: Timeline file not found: {timeline_path}")
+        sys.exit(1)
+    
+    success = validate_aligned_recordings(timeline_path)
+    sys.exit(0 if success else 1)
+'''
+    
+    script_path = os.path.join(output_dir, "validate_recordings.py")
+    os.makedirs(output_dir, exist_ok=True)
+    
+    with open(script_path, 'w') as f:
+        f.write(script_content)
+    
+    # Make executable
+    os.chmod(script_path, 0o755)
+    
+    return script_path
+
+
+# ==================================================
+# Test Functions
+# ==================================================
+
+def create_test_aligned_recording() -> str:
+    """
+    Create a test function that simulates Discord voice packets.
+    
+    Returns:
+        Path to created test script
+    """
+    test_script_content = '''#!/usr/bin/env python3
+"""
+Test script for aligned Discord voice recording.
+Simulates Discord voice packets with gaps and validates output.
+"""
+import os
+import sys
+import time
+import wave
+import random
+import tempfile
+from typing import Optional
+from unittest.mock import Mock
+
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from garmin_voice import AlignedPerUserSink, validate_aligned_recordings
+
+class MockUser:
+    def __init__(self, user_id: int, name: str):
+        self.id = user_id
+        self.name = name
+
+class MockVoiceData:
+    def __init__(self, pcm_data: bytes, duration_ms: float = 20.0):
+        self.pcm = pcm_data
+        self.duration = duration_ms
+
+def generate_test_pcm(duration_ms: float, frequency: float = 440.0, amplitude: float = 0.1) -> bytes:
+    """Generate test PCM audio data (stereo 16-bit at 48kHz)."""
+    sample_rate = 48000
+    samples = int(duration_ms * sample_rate / 1000)
+    
+    pcm_data = bytearray()
+    for i in range(samples):
+        # Generate sine wave
+        sample_value = int(amplitude * 32767 * 
+                          (0.5 + 0.5 * (i / samples)) *  # fade in
+                          (random.random() * 0.3 + 0.7) *  # noise
+                          1.0)  # sin(2π * frequency * t)
+        
+        # Stereo: left and right channel (same data)
+        pcm_data.extend(sample_value.to_bytes(2, 'little', signed=True))
+        pcm_data.extend(sample_value.to_bytes(2, 'little', signed=True))
+    
+    return bytes(pcm_data)
+
+def simulate_voice_session():
+    """Simulate a voice session with multiple users and gaps."""
+    print("🎙️ Starting aligned recording test simulation")
+    print("=" * 60)
+    
+    # Create temporary output directory
+    with tempfile.TemporaryDirectory() as temp_dir:
+        output_dir = os.path.join(temp_dir, "test_recordings")
+        
+        # Create sink
+        sink = AlignedPerUserSink(output_dir)
+        
+        # Create test users
+        users = [
+            MockUser(12345, "TestUser1"),
+            MockUser(67890, "TestUser2"),
+            MockUser(11111, "TestUser3")
+        ]
+        
+        print(f"Created test users: {[u.name for u in users]}")
+        
+        # Session parameters
+        session_duration_s = 5.0  # 5 second test session
+        frame_duration_ms = 20.0  # 20ms frames
+        frames_per_second = 1000 / frame_duration_ms  # 50 frames/sec
+        total_frames = int(session_duration_s * frames_per_second)
+        
+        print(f"Session: {session_duration_s}s, {frame_duration_ms}ms frames, {total_frames} total frames")
+        print()
+        
+        # Simulate voice packets
+        start_time = time.perf_counter()
+        frame_count = 0
+        
+        for frame_idx in range(total_frames):
+            current_time = start_time + (frame_idx * frame_duration_ms / 1000)
+            
+            # Simulate each user speaking with different patterns
+            for user_idx, user in enumerate(users):
+                # User 1: speaks first 2 seconds, then gap, then last 1 second
+                # User 2: speaks middle 3 seconds
+                # User 3: speaks randomly (50% chance each frame)
+                
+                should_speak = False
+                if user_idx == 0:  # TestUser1
+                    should_speak = (frame_idx < 100) or (frame_idx >= 200)  # 0-2s and 4-5s
+                elif user_idx == 1:  # TestUser2
+                    should_speak = (50 <= frame_idx < 200)  # 1-4s
+                elif user_idx == 2:  # TestUser3
+                    should_speak = random.random() < 0.4  # 40% random
+                
+                if should_speak:
+                    # Generate unique frequency for each user
+                    frequency = 440 + (user_idx * 200)  # 440Hz, 640Hz, 840Hz
+                    pcm_data = generate_test_pcm(frame_duration_ms, frequency)
+                    
+                    voice_data = MockVoiceData(pcm_data, frame_duration_ms)
+                    sink.write(user, voice_data)
+                    frame_count += 1
+            
+            # Add small delay to simulate real timing
+            if frame_idx % 25 == 0:  # Every 500ms
+                print(f"  Frame {frame_idx:3d}/{total_frames} ({frame_idx * frame_duration_ms / 1000:.1f}s)")
+        
+        print(f"\\nSimulated {frame_count} voice packets over {total_frames} frames")
+        
+        # Finalize recording
+        print("\\n🔄 Finalizing recordings...")
+        sink.cleanup()
+        
+        # Find timeline file
+        timeline_files = [f for f in os.listdir(output_dir) if f.startswith("timeline_")]
+        if not timeline_files:
+            print("❌ No timeline file found!")
+            return False
+        
+        timeline_path = os.path.join(output_dir, timeline_files[0])
+        print(f"📊 Timeline: {timeline_path}")
+        
+        # Validate recordings
+        print("\\n🔍 Validating aligned recordings...")
+        results = validate_aligned_recordings(timeline_path)
+        
+        print(f"\\nValidation Results:")
+        print(f"  Valid: {'✅ YES' if results['valid'] else '❌ NO'}")
+        print(f"  Expected duration: {results.get('expected_duration_ms', 0):.1f}ms")
+        print(f"  Expected samples: {results.get('expected_samples', 0)}")
+        
+        if results['errors']:
+            print("  Errors:")
+            for error in results['errors']:
+                print(f"    - {error}")
+        
+        print("\\n📁 Generated files:")
+        for file in sorted(os.listdir(output_dir)):
+            file_path = os.path.join(output_dir, file)
+            size_kb = os.path.getsize(file_path) / 1024
+            print(f"  - {file} ({size_kb:.1f} KB)")
+        
+        print("\\n" + "=" * 60)
+        return results['valid']
+
+if __name__ == "__main__":
+    success = simulate_voice_session()
+    print(f"\\n🎯 Test result: {'SUCCESS' if success else 'FAILED'}")
+    sys.exit(0 if success else 1)
+'''
+    
+    script_path = os.path.join(SCRIPT_DIR, "test_aligned_recording.py")
+    
+    with open(script_path, 'w') as f:
+        f.write(test_script_content)
+    
+    # Make executable
+    os.chmod(script_path, 0o755)
+    
+    return script_path
+
+
 class UserAudioBuffer:
     """Manages audio buffer for a single user."""
     
@@ -1020,7 +1403,7 @@ class GarminVoiceManager:
             
             # Speech-to-Text
             if cfg.STT_ENGINE == "vosk":
-                import audioop
+                import audioop, json
                 mono = audioop.tomono(window, BYTES_PER_SAMPLE, 0.5, 0.5)
                 pcm16k, _ = audioop.ratecv(mono, BYTES_PER_SAMPLE, 1, SAMPLERATE, 16_000, None)
                 rec = vosk.KaldiRecognizer(self.vosk_model, 16_000)
@@ -1063,7 +1446,6 @@ class GarminVoiceManager:
                     matched = phrase in text or difflib.SequenceMatcher(None, phrase, text).ratio() >= trig["threshold"]
                     
                     if matched:
-                        self.play_sound(trig["sound"])
                         # Check cooldown
                         if now - self.last_trigger_time[trig["name"]] < TRIGGER_COOLDOWN_S:
                             continue
@@ -1079,6 +1461,8 @@ class GarminVoiceManager:
                         
                         if trig["save"]:
                             self.save_recording()
+                        
+                        self.play_sound(trig["sound"])
                         break
                         
         except Exception as e:
@@ -1144,7 +1528,7 @@ class GarminVoiceManager:
                         active_users.append(buffer.username)
                         
                         # Save individual user recording
-                        user_filename = f"{base_filename}_user_{sanitize_filename(buffer.username)}.wav"
+                        user_filename = f"{base_filename}_user_{self._sanitize_filename(buffer.username)}.wav"
                         user_path = os.path.join(OUTPUT_DIR, user_filename)
                         
                         try:
@@ -1195,6 +1579,13 @@ class GarminVoiceManager:
                 
         except Exception as e:
             logger.error(f"Error during save_recording: {e}")
+    
+    def _sanitize_filename(self, name: str) -> str:
+        """Sanitize a username for use in filenames."""
+        forbidden = '<>:"/\\|?*'
+        sanitized = ''.join('_' if c in forbidden or ord(c) < 32 else c for c in name)
+        sanitized = sanitized.strip().rstrip('. ')
+        return sanitized[:64] if sanitized else 'unknown'
     
     def play_sound(self, filepath: str):
         """Play a sound file in the voice channel."""
