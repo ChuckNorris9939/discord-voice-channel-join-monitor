@@ -664,16 +664,16 @@
                     .then(response => response.json())
                     .then(data => {
                         if (data.success) {
-                            showToast('✅ Garmin recording started successfully!', 'success');
+                            showToast('Garmin recording started successfully!', 'success');
                             // Refresh status immediately after successful action
                             setTimeout(refreshStatusData, 1000);
                         } else {
-                            showToast('❌ Failed to start recording: ' + data.error, 'error');
+                            showToast('Failed to start recording: ' + data.error, 'error');
                         }
                     })
                     .catch(error => {
                         console.error('Error:', error);
-                        showToast('❌ Error starting recording. Check console for details.', 'error');
+                        showToast('Error starting recording. Check console for details.', 'error');
                     });
             },
             
@@ -683,16 +683,16 @@
                     .then(response => response.json())
                     .then(data => {
                         if (data.success) {
-                            showToast('✅ Garmin recording stopped successfully!', 'success');
+                            showToast('Garmin recording stopped successfully!', 'success');
                             // Refresh status immediately after successful action
                             setTimeout(refreshStatusData, 1000);
                         } else {
-                            showToast('❌ Failed to stop recording: ' + data.error, 'error');
+                            showToast('Failed to stop recording: ' + data.error, 'error');
                         }
                     })
                     .catch(error => {
                         console.error('Error:', error);
-                        showToast('❌ Error stopping recording. Check console for details.', 'error');
+                        showToast('Error stopping recording. Check console for details.', 'error');
                     });
             },
             
@@ -702,16 +702,16 @@
                     .then(response => response.json())
                     .then(data => {
                         if (data.success) {
-                            showToast('✅ Garmin recording saved successfully!', 'success');
+                            showToast('Garmin recording saved successfully!', 'success');
                             // Refresh status immediately after successful action
                             setTimeout(refreshStatusData, 1000);
                         } else {
-                            showToast('❌ Failed to save recording: ' + data.error, 'error');
+                            showToast('Failed to save recording: ' + data.error, 'error');
                         }
                     })
                     .catch(error => {
                         console.error('Error:', error);
-                        showToast('❌ Error saving recording. Check console for details.', 'error');
+                        showToast('Error saving recording. Check console for details.', 'error');
                     });
             },
             
@@ -721,16 +721,16 @@
                     .then(response => response.json())
                     .then(data => {
                         if (data.success) {
-                            showToast('✅ Garmin auto-join toggled successfully!', 'success');
+                            showToast('Garmin auto-join toggled successfully!', 'success');
                             // Refresh status immediately after successful action
                             setTimeout(refreshStatusData, 1000);
                         } else {
-                            showToast('❌ Failed to toggle auto-join: ' + data.error, 'error');
+                            showToast('Failed to toggle auto-join: ' + data.error, 'error');
                         }
                     })
                     .catch(error => {
                         console.error('Error:', error);
-                        showToast('❌ Error toggling auto-join. Check console for details.', 'error');
+                        showToast('Error toggling auto-join. Check console for details.', 'error');
                     });
             },
             
@@ -740,16 +740,16 @@
                     .then(response => response.json())
                     .then(data => {
                         if (data.success) {
-                            showToast('✅ STT output toggled successfully!', 'success');
+                            showToast('STT output toggled successfully!', 'success');
                             // Refresh status immediately after successful action
                             setTimeout(refreshStatusData, 1000);
                         } else {
-                            showToast('❌ Failed to toggle STT output: ' + data.error, 'error');
+                            showToast('Failed to toggle STT output: ' + data.error, 'error');
                         }
                     })
                     .catch(error => {
                         console.error('Error:', error);
-                        showToast('❌ Error toggling STT output. Check console for details.', 'error');
+                        showToast('Error toggling STT output. Check console for details.', 'error');
                     });
             }
         };

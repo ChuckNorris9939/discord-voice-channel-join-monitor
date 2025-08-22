@@ -174,6 +174,25 @@
             box-shadow: 0 6px 20px rgba(231, 76, 60, 0.4);
         }
 
+        .expand-all-button {
+            background: linear-gradient(135deg, #3498db, #2980b9);
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 16px;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 12px rgba(52, 152, 219, 0.3);
+        }
+
+        .expand-all-button:hover {
+            background: linear-gradient(135deg, #2980b9, #1f5f8b);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(52, 152, 219, 0.4);
+        }
+
         .category-header {
             background: linear-gradient(135deg, #34495e, #2c3e50);
             padding: 15px 20px;
@@ -284,6 +303,43 @@
                 button.innerHTML = originalText;
             });
         }
+
+        function toggleAllCategories() {
+            const categoryHeaders = document.querySelectorAll('.category-header');
+            const categoryContents = document.querySelectorAll('.category-content');
+            const expandAllButton = document.querySelector('.expand-all-button');
+            
+            // Check if all categories are currently collapsed
+            const allCollapsed = Array.from(categoryContents).every(content => 
+                content.classList.contains('collapsed')
+            );
+            
+            if (allCollapsed) {
+                // Expand all categories
+                categoryContents.forEach(content => {
+                    content.classList.remove('collapsed');
+                });
+                categoryHeaders.forEach(header => {
+                    const icon = header.querySelector('.toggle-icon');
+                    if (icon) {
+                        icon.classList.remove('collapsed');
+                    }
+                });
+                expandAllButton.innerHTML = '📁 Collapse All';
+            } else {
+                // Collapse all categories
+                categoryContents.forEach(content => {
+                    content.classList.add('collapsed');
+                });
+                categoryHeaders.forEach(header => {
+                    const icon = header.querySelector('.toggle-icon');
+                    if (icon) {
+                        icon.classList.add('collapsed');
+                    }
+                });
+                expandAllButton.innerHTML = '📁 Expand All';
+            }
+        }
     </script>
 </head>
 <body>
@@ -294,6 +350,9 @@
 
         <div class="content">
             <a href="{{ url_for('home') }}" class="back-button">🔙 Back to Home</a>
+            <button type="button" class="expand-all-button" onclick="toggleAllCategories()" style="margin-left: 15px;">
+                📁 Expand All
+            </button>
 
             {% if message %}
                 <div class="message">{{ message }}</div>
@@ -304,10 +363,10 @@
 
             <form method="POST" action="{{ url_for('settings_route') }}">
                 <div class="category-header" onclick="toggleCategory('settings-category')">
-                    <h2>Settings</h2>
-                    <span class="toggle-icon">▼</span>
+                    <h2>🔧 General</h2>
+                    <span class="toggle-icon collapsed">▼</span>
                 </div>
-                <div id="settings-category" class="category-content">
+                <div id="settings-category" class="category-content collapsed">
                     <!-- App Testing Mode -->
                     <div class="form-group">
                         <label for="app_testing_mode">App Testing Mode</label>
@@ -318,13 +377,18 @@
                     </div>
                     <!-- Join Message Timer -->
                     <div class="form-group">
-                        <label>Summarized Join Messages</label>
+                        <label for="join_message_timer_enabled">Join Message Timer Enabled</label>
                         <select name="join_message_timer_enabled" id="join_message_timer_enabled">
-                            <option value="true" {% if current_settings.get('JOIN_MESSAGE_TIMER_ENABLED') == 'true' %}selected{% endif %}>Enabled</option>
-                            <option value="false" {% if current_settings.get('JOIN_MESSAGE_TIMER_ENABLED') == 'false' %}selected{% endif %}>Disabled</option>
+                            <option value="true" {% if current_settings.get('JOIN_MESSAGE_TIMER_ENABLED') == 'true' %}selected{% endif %}>True</option>
+                            <option value="false" {% if current_settings.get('JOIN_MESSAGE_TIMER_ENABLED') == 'false' %}selected{% endif %}>False</option>
                         </select>
                     </div>
+                    <div class="form-group">
+                        <label for="join_message_timer_minutes">Join Message Timer (Minutes)</label>
+                        <input type="number" name="join_message_timer_minutes" id="join_message_timer_minutes" value="{{ current_settings.get('JOIN_MESSAGE_TIMER_MINUTES', '7') }}" min="1">
+                    </div>
 
+                    <!-- Log Level -->
                     <div class="form-group">
                         <label for="log_level">Log Level</label>
                         <select name="log_level" id="log_level">
@@ -336,6 +400,7 @@
                         </select>
                     </div>
 
+                    <!-- Discord Log Level -->
                     <div class="form-group">
                         <label for="discord_log_level">Discord Log Level</label>
                         <select name="discord_log_level" id="discord_log_level">
@@ -350,7 +415,7 @@
                 </div>
 
                 <div class="category-header" onclick="toggleCategory('garmin-category')">
-                    <h2>Garmin Recorder Settings</h2>
+                    <h2>🎙️ Garmin Recorder Settings</h2>
                     <span class="toggle-icon collapsed">▼</span>
                 </div>
                 <div id="garmin-category" class="category-content collapsed">
@@ -420,8 +485,37 @@
                     </div>
                 </div>
 
+                <div class="category-header" onclick="toggleCategory('cleanup-category')">
+                    <h2>🗑️ Audio Cleanup Settings</h2>
+                    <span class="toggle-icon collapsed">▼</span>
+                </div>
+                <div id="cleanup-category" class="category-content collapsed">
+                    <!-- Aligned Recordings Retention -->
+                    <div class="form-group">
+                        <label for="cleanup_aligned_recordings_hours">Aligned Recordings Retention (Hours)</label>
+                        <input type="number" name="cleanup_aligned_recordings_hours" id="cleanup_aligned_recordings_hours" value="{{ current_settings.get('CLEANUP_ALIGNED_RECORDINGS_HOURS', '48') }}" min="1" max="8760">
+                        <p class="note">Files in data/aligned-recordings older than this will be automatically deleted. Default: 48 hours (2 days).</p>
+                    </div>
+
+                    <!-- Garmin Output Retention -->
+                    <div class="form-group">
+                        <label for="cleanup_garmin_output_hours">Garmin Output Retention (Hours)</label>
+                        <input type="number" name="cleanup_garmin_output_hours" id="cleanup_garmin_output_hours" value="{{ current_settings.get('CLEANUP_GARMIN_OUTPUT_HOURS', '72') }}" min="1" max="8760">
+                        <p class="note">Files in data/garmin-output older than this will be automatically deleted. Default: 72 hours (3 days).</p>
+                    </div>
+
+                    <!-- Manual Cleanup Button -->
+                    <div class="form-group">
+                        <label>Manual Cleanup</label>
+                        <button type="button" class="save-button" onclick="runManualCleanup()" style="width: auto; margin-top: 10px;">
+                            🧹 Run Cleanup Now
+                        </button>
+                        <p class="note">Click to manually trigger the audio cleanup process. This will delete files according to the retention settings above.</p>
+                    </div>
+                </div>
+
                 <div class="category-header" onclick="toggleCategory('timer-category')">
-                    <h2>Timer settings</h2>
+                    <h2>⏰ Timer Settings</h2>
                     <span class="toggle-icon collapsed">▼</span>
                 </div>
                 <div id="timer-category" class="category-content collapsed">
@@ -444,7 +538,7 @@
                 </div>
 
                 <div class="category-header" onclick="toggleCategory('channels-category')">
-                    <h2>Channel IDs</h2>
+                    <h2>📺 Channel IDs</h2>
                     <span class="toggle-icon collapsed">▼</span>
                 </div>
                 <div id="channels-category" class="category-content collapsed">
@@ -476,35 +570,6 @@
                     <div class="form-group">
                         <label for="afk_channel_id">AFK Channel ID</label>
                         <input type="text" name="afk_channel_id" id="afk_channel_id" value="{{ current_settings.get('AFK_CHANNEL_ID', '') }}">
-                    </div>
-                </div>
-
-                <div class="category-header" onclick="toggleCategory('cleanup-category')">
-                    <h2>🗑️ Audio Cleanup Settings</h2>
-                    <span class="toggle-icon collapsed">▼</span>
-                </div>
-                <div id="cleanup-category" class="category-content collapsed">
-                    <!-- Aligned Recordings Retention -->
-                    <div class="form-group">
-                        <label for="cleanup_aligned_recordings_hours">Aligned Recordings Retention (Hours)</label>
-                        <input type="number" name="cleanup_aligned_recordings_hours" id="cleanup_aligned_recordings_hours" value="{{ current_settings.get('CLEANUP_ALIGNED_RECORDINGS_HOURS', '48') }}" min="1" max="8760">
-                        <p class="note">Files in data/aligned-recordings older than this will be automatically deleted. Default: 48 hours (2 days).</p>
-                    </div>
-
-                    <!-- Garmin Output Retention -->
-                    <div class="form-group">
-                        <label for="cleanup_garmin_output_hours">Garmin Output Retention (Hours)</label>
-                        <input type="number" name="cleanup_garmin_output_hours" id="cleanup_garmin_output_hours" value="{{ current_settings.get('CLEANUP_GARMIN_OUTPUT_HOURS', '72') }}" min="1" max="8760">
-                        <p class="note">Files in data/garmin-output older than this will be automatically deleted. Default: 72 hours (3 days).</p>
-                    </div>
-
-                    <!-- Manual Cleanup Button -->
-                    <div class="form-group">
-                        <label>Manual Cleanup</label>
-                        <button type="button" class="save-button" onclick="runManualCleanup()" style="width: auto; margin-top: 10px;">
-                            🧹 Run Cleanup Now
-                        </button>
-                        <p class="note">Click to manually trigger the audio cleanup process. This will delete files according to the retention settings above.</p>
                     </div>
                 </div>
 
