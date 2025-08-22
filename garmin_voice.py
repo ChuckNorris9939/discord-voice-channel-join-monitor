@@ -8,10 +8,9 @@ import logging
 import asyncio
 import queue
 import io
-import math
-from typing import Final, Dict, Optional, List, Tuple
+from typing import Final, Dict, Optional
 from pathlib import Path
-from collections import defaultdict, OrderedDict
+from collections import defaultdict
 
 import discord
 import speech_recognition as sr
@@ -96,145 +95,107 @@ TRIGGERS = [
 TRIGGER_COOLDOWN_S: Final[int] = 5
 
 
-class HybridAudioBuffer:
-    """
-    Manages audio buffer with timing preservation and stuttering elimination.
-    Uses frame-based approach with proper silence insertion for gaps.
-    """
+class UserAudioBuffer:
+    """Manages audio buffer for a single user."""
     
-    def __init__(self, user_id: int, username: str, start_time: float):
+    def __init__(self, user_id: int, username: str):
         self.user_id = user_id
         self.username = username
-        self.start_time = start_time
-        
-        # Store audio frames with their relative timestamps
-        self.audio_frames: Dict[int, bytes] = {}
+        self.audio_segments = []  # List of pydub AudioSegments
+        self.raw_buffer = bytearray()  # Raw PCM data buffer
         self.lock = threading.Lock()
         self.last_activity = time.time()
+        self.total_duration_ms = 0
         
-        # Track frame count for timing calculations
-        self.frame_count = 0
-        
-    def add_audio(self, pcm_data: bytes, timestamp: float):
-        """Add PCM audio data with timestamp for proper timing."""
+    def add_audio(self, pcm_data: bytes):
+        """Add PCM audio data to the buffer."""
         with self.lock:
-            # Calculate which frame this audio belongs to
-            relative_time = timestamp - self.start_time
-            frame_index = int(relative_time * 1000 / FRAME_DURATION_MS)
+            self.raw_buffer.extend(pcm_data)
+            self.last_activity = time.time()
             
-            # Store the audio frame at the correct position
-            self.audio_frames[frame_index] = pcm_data
-            self.last_activity = timestamp
+            # Convert accumulated raw buffer to AudioSegment periodically
+            # Process in chunks of 1 second to avoid memory issues
+            chunk_size = SAMPLERATE * CHANNELS * BYTES_PER_SAMPLE  # 1 second
             
-            # Update frame count
-            if frame_index > self.frame_count:
-                self.frame_count = frame_index
-            
-            # Limit buffer size to prevent memory issues
-            max_frames = MAX_BUFFER_DURATION_S * 50  # ~50 frames per second
-            if len(self.audio_frames) > max_frames:
-                # Remove oldest frames
-                oldest_frame = min(self.audio_frames.keys())
-                del self.audio_frames[oldest_frame]
-                logger.debug(f"User {self.username}: Removed oldest frame {oldest_frame}")
-    
-    def create_timed_segment(self, total_duration_s: float) -> Optional[AudioSegment]:
-        """
-        Create audio segment with proper timing and no stuttering.
-        Uses frame-based reconstruction with silence for gaps.
-        """
-        with self.lock:
-            if not self.audio_frames:
-                # Return silence for the entire duration if no audio
-                duration_ms = int(total_duration_s * 1000)
-                return AudioSegment.silent(duration=duration_ms, frame_rate=SAMPLERATE)
-            
-            try:
-                # Calculate expected frame count for the total duration
-                expected_frame_count = int(total_duration_s * 1000 / FRAME_DURATION_MS)
+            while len(self.raw_buffer) >= chunk_size:
+                chunk_data = bytes(self.raw_buffer[:chunk_size])
+                self.raw_buffer = self.raw_buffer[chunk_size:]
                 
-                # Create a continuous audio buffer with proper timing
-                continuous_audio = bytearray()
-                
-                # Process each expected frame position
-                for frame_index in range(expected_frame_count):
-                    if frame_index in self.audio_frames:
-                        # We have audio for this frame - use it
-                        frame_data = self.audio_frames[frame_index]
-                        
-                        # Ensure frame is exactly the right size
-                        if len(frame_data) == FRAME_SIZE_BYTES:
-                            continuous_audio.extend(frame_data)
-                        else:
-                            # Pad or trim frame to exact size
-                            if len(frame_data) < FRAME_SIZE_BYTES:
-                                padding_needed = FRAME_SIZE_BYTES - len(frame_data)
-                                frame_data += b'\x00' * padding_needed
-                            else:
-                                frame_data = frame_data[:FRAME_SIZE_BYTES]
-                            
-                            continuous_audio.extend(frame_data)
-                            logger.debug(f"User {self.username}: Adjusted frame {frame_index} size to {FRAME_SIZE_BYTES} bytes")
-                    else:
-                        # No audio for this frame - insert silence
-                        silence_frame = b'\x00' * FRAME_SIZE_BYTES
-                        continuous_audio.extend(silence_frame)
-                
-                # Create AudioSegment from the continuous audio
-                audio_segment = AudioSegment(
-                    bytes(continuous_audio),
-                    sample_width=SAMPLE_WIDTH,
-                    frame_rate=SAMPLERATE,
-                    channels=CHANNELS
-                )
-                
-                # Ensure exact duration
-                target_duration_ms = int(total_duration_s * 1000)
-                if len(audio_segment) > target_duration_ms:
-                    # Trim to exact duration
-                    audio_segment = audio_segment[:target_duration_ms]
-                    logger.debug(f"User {self.username}: Trimmed segment to {target_duration_ms}ms")
-                elif len(audio_segment) < target_duration_ms:
-                    # Pad with silence to exact duration
-                    silence_needed_ms = target_duration_ms - len(audio_segment)
-                    silence_padding = AudioSegment.silent(
-                        duration=silence_needed_ms,
-                        frame_rate=SAMPLERATE
+                # Create AudioSegment from raw PCM data
+                try:
+                    segment = AudioSegment(
+                        chunk_data,
+                        sample_width=SAMPLE_WIDTH,
+                        frame_rate=SAMPLERATE,
+                        channels=CHANNELS
                     )
-                    audio_segment = audio_segment + silence_padding
-                    logger.debug(f"User {self.username}: Padded segment to {target_duration_ms}ms")
-                
-                # Apply minimal crossfade to smooth any remaining discontinuities
-                if len(audio_segment) > 10:  # Need at least 10ms for crossfade
-                    # Use minimal crossfade (0.1ms) to avoid affecting timing
-                    audio_segment = audio_segment.fade_in(0.1).fade_out(0.1)
-                    logger.debug(f"User {self.username}: Applied 0.1ms crossfade for smooth transitions")
-                
-                logger.info(f"User {self.username}: Created timed segment of {len(audio_segment)}ms from {len(self.audio_frames)} frames")
-                return audio_segment
-                
-            except Exception as e:
-                logger.error(f"Error creating timed segment for user {self.username}: {e}")
+                    self.audio_segments.append(segment)
+                    self.total_duration_ms += len(segment)
+                    
+                    # Limit buffer size
+                    max_duration_ms = MAX_BUFFER_DURATION_S * 1000
+                    if self.total_duration_ms > max_duration_ms:
+                        # Remove oldest segments
+                        while self.audio_segments and self.total_duration_ms > max_duration_ms:
+                            removed = self.audio_segments.pop(0)
+                            self.total_duration_ms -= len(removed)
+                            
+                except Exception as e:
+                    logger.error(f"Error creating AudioSegment for user {self.user_id}: {e}")
+    
+    def get_audio_segment(self) -> Optional[AudioSegment]:
+        """Get the complete audio segment for this user."""
+        with self.lock:
+            if not self.audio_segments and not self.raw_buffer:
                 return None
+            
+            segments = list(self.audio_segments)
+            
+            # Add any remaining raw buffer data
+            if len(self.raw_buffer) > 0:
+                try:
+                    # Pad to frame boundary if needed
+                    remaining = len(self.raw_buffer) % (CHANNELS * BYTES_PER_SAMPLE)
+                    if remaining:
+                        self.raw_buffer.extend(b'\x00' * (CHANNELS * BYTES_PER_SAMPLE - remaining))
+                    
+                    segment = AudioSegment(
+                        bytes(self.raw_buffer),
+                        sample_width=SAMPLE_WIDTH,
+                        frame_rate=SAMPLERATE,
+                        channels=CHANNELS
+                    )
+                    segments.append(segment)
+                except Exception as e:
+                    logger.error(f"Error processing remaining buffer for user {self.user_id}: {e}")
+            
+            if not segments:
+                return None
+            
+            # Combine all segments
+            if len(segments) == 1:
+                return segments[0]
+            else:
+                combined = segments[0]
+                for seg in segments[1:]:
+                    combined += seg
+                return combined
     
     def clear(self):
         """Clear the audio buffer."""
         with self.lock:
-            self.audio_frames.clear()
-            self.frame_count = 0
-
+            self.audio_segments.clear()
+            self.raw_buffer.clear()
+            self.total_duration_ms = 0
+            
 
 class GarminVoiceManager:
     """Voice listener that reacts on trigger phrases and plays sounds."""
     
     def __init__(self, bot: discord.Client):
         self.bot = bot
-        self.user_buffers: Dict[int, HybridAudioBuffer] = {}
+        self.user_buffers: Dict[int, UserAudioBuffer] = {}
         self._buffers_lock = threading.Lock()
-        
-        # Recording state
-        self.recording_start_time: float = 0.0
-        self.is_recording: bool = False
         
         # STT combined buffer for trigger detection
         self.stt_buffer = bytearray()
@@ -266,38 +227,35 @@ class GarminVoiceManager:
         self._last_ok_time: float = 0.0
         self._last_stt_text: str = ""
         
-        # Voice connection
+        # Recording state
+        self.recording_start_time: float = time.time()
         self.vc: Optional[voice_recv.VoiceRecvClient] = None
         
         os.makedirs(OUTPUT_DIR, exist_ok=True)
         os.makedirs(TEMP_DIR, exist_ok=True)
         
-        logger.info("GarminVoiceManager initialized with hybrid audio processing")
+        logger.info("GarminVoiceManager initialized with simplified pydub-based mixing")
     
     # ------------------------- Discord voice callbacks -------------------------
     def callback(self, user: Optional[discord.User], data: voice_recv.VoiceData):
-        """Callback for incoming audio data with hybrid processing."""
+        """Callback for incoming audio data."""
         try:
-            if not self.is_recording:
-                return
-            
-            current_time = time.time()
-            
             # Handle user audio buffering
             if user is not None:
                 user_id = user.id
                 username = user.name
             else:
-                # Skip unknown users
-                return
+                # Unknown user
+                user_id = 0
+                username = "unknown"
             
-            # Add to hybrid user buffer with timing
+            # Add to user buffer
             with self._buffers_lock:
                 if user_id not in self.user_buffers:
-                    self.user_buffers[user_id] = HybridAudioBuffer(user_id, username, self.recording_start_time)
-                    logger.info(f"Created hybrid buffer for user {username} (ID: {user_id})")
+                    self.user_buffers[user_id] = UserAudioBuffer(user_id, username)
+                    logger.debug(f"Created audio buffer for user {username} (ID: {user_id})")
                 
-                self.user_buffers[user_id].add_audio(data.pcm, current_time)
+                self.user_buffers[user_id].add_audio(data.pcm)
             
             # Add to STT buffer for trigger detection
             if cfg.STT_ENABLED:
@@ -310,13 +268,14 @@ class GarminVoiceManager:
                         self.stt_buffer = self.stt_buffer[-max_stt_buffer:]
                 
                 # Process STT if enough time has passed
+                now = time.time()
                 if (len(self.stt_buffer) >= WINDOW_BYTES_MIN and 
-                    current_time - self.last_process_time >= PROCESS_INTERVAL_S):
+                    now - self.last_process_time >= PROCESS_INTERVAL_S):
                     
                     try:
                         if not self.stt_queue.full():
-                            self.stt_queue.put_nowait(current_time)
-                            self.last_process_time = current_time
+                            self.stt_queue.put_nowait(now)
+                            self.last_process_time = now
                     except queue.Full:
                         pass
                         
@@ -440,29 +399,19 @@ class GarminVoiceManager:
     
     # ------------------------------ Recording management ---------------------------
     def save_recording(self):
-        """Save current recording with hybrid audio processing."""
+        """Save current recording with pydub-based mixing."""
         try:
-            if not self.is_recording:
-                logger.warning("Not recording, nothing to save")
-                return
-            
-            current_time = time.time()
-            total_duration_s = current_time - self.recording_start_time
-            
-            logger.info(f"Saving recording with total duration: {total_duration_s:.1f}s")
-            
             timestamp = time.strftime('%d.%m.%Y_%H-%M', time.localtime())
             base_filename = f"recording_{timestamp}"
             
             with self._buffers_lock:
-                user_segments = {}
                 active_users = []
+                user_segments = {}
                 
-                # Create timed segments for all users
+                # Collect audio segments from all users
                 for user_id, buffer in self.user_buffers.items():
-                    segment = buffer.create_timed_segment(total_duration_s)
-                    
-                    if segment:
+                    segment = buffer.get_audio_segment()
+                    if segment and len(segment) > 0:
                         user_segments[user_id] = segment
                         active_users.append(buffer.username)
                         
@@ -473,9 +422,9 @@ class GarminVoiceManager:
                         try:
                             segment.export(user_path, format="wav")
                             duration_s = len(segment) / 1000.0
-                            logger.info(f"Saved timed recording for {buffer.username}: {user_path} ({duration_s:.1f}s)")
+                            logger.info(f"Saved individual recording for {buffer.username}: {user_path} ({duration_s:.1f}s)")
                         except Exception as e:
-                            logger.error(f"Error saving timed recording for {buffer.username}: {e}")
+                            logger.error(f"Error saving individual recording for {buffer.username}: {e}")
                 
                 # Create mixed recording if we have audio
                 if user_segments:
@@ -483,19 +432,19 @@ class GarminVoiceManager:
                     mixed_path = os.path.join(OUTPUT_DIR, mixed_filename)
                     
                     try:
-                        mixed_segment = self._mix_timed_segments(user_segments)
+                        # Mix all user segments using pydub overlay
+                        mixed_segment = self._mix_audio_segments(user_segments)
                         
                         if mixed_segment:
+                            # Export mixed audio
                             mixed_segment.export(mixed_path, format="wav")
                             duration_s = len(mixed_segment) / 1000.0
-                            logger.info(f"Saved timed mixed recording: {mixed_path} ({duration_s:.1f}s, {len(active_users)} users)")
+                            logger.info(f"Saved mixed recording: {mixed_path} ({duration_s:.1f}s, {len(active_users)} users)")
                         else:
                             logger.warning("No mixed audio generated")
                             
                     except Exception as e:
-                        logger.error(f"Error saving timed mixed recording: {e}")
-                else:
-                    logger.warning("No user audio to save")
+                        logger.error(f"Error saving mixed recording: {e}")
                 
                 # Clear buffers after saving
                 for buffer in self.user_buffers.values():
@@ -505,15 +454,13 @@ class GarminVoiceManager:
                 with self._stt_buffer_lock:
                     self.stt_buffer.clear()
                 
-                logger.info(f"Timed recording saved: {len(active_users)} users, all synchronized to {total_duration_s:.1f}s")
+                logger.info(f"Recording saved successfully with {len(active_users)} users")
                 
         except Exception as e:
             logger.error(f"Error during save_recording: {e}")
     
-    def _mix_timed_segments(self, user_segments: Dict[int, AudioSegment]) -> Optional[AudioSegment]:
-        """
-        Mix timed audio segments with proper gain staging.
-        """
+    def _mix_audio_segments(self, user_segments: Dict[int, AudioSegment]) -> Optional[AudioSegment]:
+        """Mix multiple audio segments using pydub overlay."""
         try:
             if not user_segments:
                 return None
@@ -523,74 +470,38 @@ class GarminVoiceManager:
             if len(segments) == 1:
                 return segments[0]
             
-            # All segments should have the same length already
-            target_length = len(segments[0])
+            # Find the longest segment duration
+            max_length = max(len(seg) for seg in segments)
             
-            # Start with silence as base
-            mixed = AudioSegment.silent(duration=target_length, frame_rate=SAMPLERATE)
+            # Create a silent base track of the maximum length
+            mixed = AudioSegment.silent(duration=max_length)
             
-            # Calculate appropriate gain reduction
-            # Use logarithmic scaling for better results with multiple users
-            num_users = len(segments)
-            if num_users <= 2:
-                gain_reduction = 0  # No reduction for 1-2 users
-            elif num_users <= 4:
-                gain_reduction = -3  # -3dB for 3-4 users
-            elif num_users <= 8:
-                gain_reduction = -6  # -6dB for 5-8 users
-            else:
-                gain_reduction = -9  # -9dB for 9+ users
-            
-            # Mix all segments
+            # Overlay each user's audio onto the mixed track
             for segment in segments:
-                # Apply gain reduction before mixing
-                if gain_reduction != 0:
-                    adjusted = segment + gain_reduction
-                else:
-                    adjusted = segment
+                # Reduce volume slightly to prevent clipping when mixing multiple sources
+                # Adjust gain based on number of users to prevent overall clipping
+                gain_reduction = -3 * min(len(segments) - 1, 3)  # Reduce by 3dB per additional user, max -9dB
+                adjusted_segment = segment + gain_reduction
                 
-                # Overlay onto mixed track
-                mixed = mixed.overlay(adjusted, position=0)
+                # Overlay this user's audio onto the mixed track
+                mixed = mixed.overlay(adjusted_segment, position=0)
             
-            # Apply compression/normalization to prevent clipping
-            mixed = self._normalize_audio(mixed)
+            # Normalize the mixed audio to prevent clipping
+            # Find peak amplitude
+            peak = mixed.max
+            if peak > 0:
+                # Calculate how much to reduce to avoid clipping
+                # Leave some headroom (95% of max)
+                target_peak = 32767 * 0.95  # 16-bit max * 0.95
+                if peak > target_peak:
+                    reduction_db = 20 * (target_peak / peak)
+                    mixed = mixed + reduction_db
             
             return mixed
             
         except Exception as e:
-            logger.error(f"Error mixing timed segments: {e}")
+            logger.error(f"Error mixing audio segments: {e}")
             return None
-    
-    def _normalize_audio(self, segment: AudioSegment) -> AudioSegment:
-        """
-        Normalize audio to prevent clipping while maintaining dynamics.
-        """
-        try:
-            # Get the peak amplitude
-            peak = segment.max
-            
-            if peak <= 0:
-                return segment
-            
-            # Calculate headroom (use 95% of maximum to avoid hard clipping)
-            target_peak = int(32767 * 0.95)
-            
-            # Only reduce if we're over the target
-            if peak > target_peak:
-                # Calculate reduction in dB
-                reduction_ratio = target_peak / peak
-                reduction_db = 20 * math.log10(reduction_ratio) if reduction_ratio > 0 else -20
-                
-                # Apply gain reduction
-                normalized = segment + reduction_db
-                logger.debug(f"Applied normalization: {reduction_db:.1f}dB reduction")
-                return normalized
-            
-            return segment
-            
-        except Exception as e:
-            logger.error(f"Error normalizing audio: {e}")
-            return segment
     
     def _sanitize_filename(self, name: str) -> str:
         """Sanitize a username for use in filenames."""
@@ -604,7 +515,6 @@ class GarminVoiceManager:
         if self.vc and os.path.isfile(filepath):
             try:
                 self.vc.play(discord.FFmpegPCMAudio(filepath))
-                logger.debug(f"Playing sound: {filepath}")
             except Exception as e:
                 logger.error(f"Error playing sound {filepath}: {e}")
         else:
@@ -623,10 +533,6 @@ class GarminVoiceManager:
             self.vc = await channel.connect(cls=voice_recv.VoiceRecvClient)
             self.vc.listen(voice_recv.BasicSink(self.callback))
             
-            # Start recording
-            self.recording_start_time = time.time()
-            self.is_recording = True
-            
             # Start STT worker if enabled
             if cfg.STT_ENABLED:
                 self._start_stt_worker()
@@ -634,7 +540,7 @@ class GarminVoiceManager:
             else:
                 logger.info(f"🔊 Joined voice channel '{channel.name}' (STT disabled)")
             
-            logger.info(f"Hybrid recording started at {self.recording_start_time}")
+            self.recording_start_time = time.time()
             
         except Exception as e:
             logger.error(f"Failed to join voice channel '{channel.name}': {e}")
@@ -644,7 +550,6 @@ class GarminVoiceManager:
                 except:
                     pass
                 self.vc = None
-            self.is_recording = False
             raise
     
     def is_connected(self) -> bool:
@@ -655,9 +560,6 @@ class GarminVoiceManager:
         """Disconnect from the current voice channel."""
         try:
             self._stop_stt_worker()
-            
-            # Stop recording
-            self.is_recording = False
             
             # Clear all buffers
             with self._buffers_lock:
@@ -679,34 +581,38 @@ class GarminVoiceManager:
     def get_recording_health(self) -> dict:
         """Get current recording system health status."""
         current_time = time.time()
-        recording_duration = current_time - self.recording_start_time if self.is_recording else 0
+        recording_duration = current_time - self.recording_start_time if self.is_connected() else 0
         
         with self._buffers_lock:
             active_users = len(self.user_buffers)
-            total_frames = sum(len(buf.audio_frames) for buf in self.user_buffers.values())
-            estimated_size = total_frames * FRAME_SIZE_BYTES
+            total_buffer_size = 0
+            
+            for buffer in self.user_buffers.values():
+                # Estimate buffer size
+                segment = buffer.get_audio_segment()
+                if segment:
+                    # Calculate approximate size in bytes
+                    duration_s = len(segment) / 1000.0
+                    total_buffer_size += int(duration_s * SAMPLERATE * CHANNELS * BYTES_PER_SAMPLE)
         
         return {
             "connected": self.is_connected(),
-            "recording": self.is_recording,
             "recording_duration": recording_duration,
             "max_recording_duration": cfg.GARMIN_RECORD_SECONDS,
-            "buffer_size": estimated_size,
-            "recording_errors": 0,
+            "buffer_size": total_buffer_size,
+            "recording_errors": 0,  # Simplified - no error tracking needed
             "max_errors": 5,
             "is_processing": self.is_processing,
             "stt_enabled": cfg.STT_ENABLED,
             "stt_engine": cfg.STT_ENGINE if cfg.STT_ENABLED else "disabled",
             "last_process_time": self.last_process_time,
-            "audio_pipeline_healthy": True,
-            "audio_callback_count": total_frames,
+            "audio_pipeline_healthy": True,  # Simplified - always healthy with pydub
+            "audio_callback_count": 0,  # Not tracked in simplified version
             "audio_callback_errors": 0,
             "time_since_last_audio": 0,
             "audio_callback_rate": 0,
             "last_chunk_size": 0,
             "active_users": active_users,
-            "total_user_buffer_size": estimated_size,
-            "user_buffers": {}
+            "total_user_buffer_size": total_buffer_size,
+            "user_buffers": {}  # Simplified - details not needed
         }
-
-
