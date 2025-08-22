@@ -8,9 +8,11 @@ import logging
 import asyncio
 import queue
 import io
-from typing import Final, Dict, Optional
+import json
+from typing import Final, Dict, Optional, List
 from pathlib import Path
-from collections import defaultdict
+from collections import defaultdict, deque
+from datetime import datetime
 
 import discord
 import speech_recognition as sr
@@ -27,6 +29,8 @@ except ImportError:
 # Logging setup - now handled by config_loader.py
 # --------------------------------------------------
 logger = logging.getLogger(__name__)
+# Temporary debug logging for aligned recording
+logger.setLevel(logging.DEBUG)
 
 # Ensure logs directory exists
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -63,6 +67,7 @@ WINDOW_BYTES_MIN: Final[int] = int(MIN_WINDOW_S * SAMPLERATE * CHANNELS * BYTES_
 SOUNDS_DIR = os.path.join(SCRIPT_DIR, "assets", "sounds")
 TEMP_DIR = os.path.join(SCRIPT_DIR, "data", "temp")
 OUTPUT_DIR: Final[str] = os.path.join(SCRIPT_DIR, "data", "garmin-output")
+ALIGNED_RECORDINGS_DIR: Final[str] = os.path.join(SCRIPT_DIR, "data", "aligned-recordings")
 
 # Trigger phrase detection
 SOUND_DING = os.path.join(SOUNDS_DIR, "garmin_ding.wav")
@@ -93,6 +98,792 @@ TRIGGERS = [
 ]
 
 TRIGGER_COOLDOWN_S: Final[int] = 5
+
+
+# ==================================================
+# Aligned Recording Classes
+# ==================================================
+
+class UserWavWriter:
+    """Thread-safe WAV writer for a single user with padding support."""
+    
+    def __init__(self, file_path: str, user_id: int, username: str):
+        self.file_path = file_path
+        self.user_id = user_id
+        self.username = username
+        self.lock = threading.Lock()
+        self.sample_cursor = 0  # Current position in samples since recording start
+        self.wav_file = None
+        self.is_closed = False
+        
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        
+        # Open WAV file for writing - PCM 16-bit, 48kHz, mono
+        self.wav_file = wave.open(file_path, 'wb')
+        self.wav_file.setnchannels(1)  # mono
+        self.wav_file.setsampwidth(2)  # 16-bit
+        self.wav_file.setframerate(SAMPLERATE)  # 48000 Hz
+        
+        logger.debug(f"UserWavWriter initialized for {username} (ID: {user_id}): {file_path}")
+    
+    def write_silence(self, num_samples: int):
+        """Write silence padding for the specified number of samples."""
+        logger.debug(f"write_silence called for {self.username}: {num_samples} samples, closed={self.is_closed}")
+        
+        if self.is_closed:
+            logger.warning(f"Cannot write silence for {self.username}: WAV file is closed")
+            return
+            
+        if num_samples <= 0:
+            logger.warning(f"Invalid num_samples for {self.username}: {num_samples}")
+            return
+            
+        # REMOVE LOCK - this was causing deadlock!
+        # The wav file writes are already atomic enough for our use case
+        if not self.wav_file:
+            logger.error(f"WAV file is None for {self.username}")
+            return
+        
+        logger.debug(f"About to write {num_samples} silence samples for {self.username}")
+        
+        try:
+            # Write silence efficiently
+            if num_samples <= 240000:  # Up to ~5 seconds in one go
+                silence_bytes = b'\x00\x00' * num_samples
+                logger.debug(f"Created silence bytes for {self.username}: {len(silence_bytes)} bytes")
+                
+                self.wav_file.writeframes(silence_bytes)
+                logger.debug(f"WAV writeframes completed for {self.username}")
+                
+                self.sample_cursor += num_samples
+                logger.debug(f"✅ Wrote {num_samples} silence samples for user {self.username} (total: {self.sample_cursor})")
+            else:
+                # Write in chunks for very large silence blocks
+                logger.debug(f"Writing large silence block in chunks for {self.username}: {num_samples} samples")
+                chunk_size = 240000  # 5 seconds
+                samples_written = 0
+                
+                while samples_written < num_samples:
+                    chunk_samples = min(chunk_size, num_samples - samples_written)
+                    silence_chunk = b'\x00\x00' * chunk_samples
+                    
+                    self.wav_file.writeframes(silence_chunk)
+                    samples_written += chunk_samples
+                    self.sample_cursor += chunk_samples
+                    
+                    logger.debug(f"Wrote silence chunk {samples_written}/{num_samples} for {self.username}")
+                
+                logger.debug(f"✅ Wrote total {num_samples} silence samples for user {self.username} (total: {self.sample_cursor})")
+                
+        except Exception as e:
+            logger.error(f"💥 Error writing silence for {self.username}: {e}", exc_info=True)
+    
+    def write_audio(self, pcm_data: bytes):
+        """Write PCM audio data to the WAV file."""
+        logger.debug(f"write_audio called for {self.username}: {len(pcm_data) if pcm_data else 0} bytes, closed={self.is_closed}")
+        
+        if self.is_closed:
+            logger.warning(f"Cannot write audio for {self.username}: WAV file is closed")
+            return
+            
+        # REMOVE LOCK - this was causing deadlock!
+        if not self.wav_file:
+            logger.error(f"Cannot write audio for {self.username}: WAV file is None")
+            return
+            
+        if not pcm_data:
+            logger.warning(f"Cannot write audio for {self.username}: No PCM data provided")
+            return
+            
+        try:
+                original_length = len(pcm_data)
+                logger.debug(f"Original PCM data length for {self.username}: {original_length} bytes")
+                
+                # Convert stereo to mono if needed (take left channel)
+                if len(pcm_data) % 4 == 0:  # Stereo 16-bit
+                    mono_data = bytearray()
+                    for i in range(0, len(pcm_data), 4):
+                        # Take left channel (first 2 bytes)
+                        mono_data.extend(pcm_data[i:i+2])
+                    pcm_data = bytes(mono_data)
+                    logger.debug(f"Converted stereo to mono for {self.username}: {original_length} -> {len(pcm_data)} bytes")
+                
+                if pcm_data:  # Only write if we have data
+                    self.wav_file.writeframes(pcm_data)
+                    samples_written = len(pcm_data) // 2  # 16-bit samples
+                    self.sample_cursor += samples_written
+                    logger.debug(f"✅ Wrote {samples_written} audio samples for user {self.username} (total: {self.sample_cursor})")
+                else:
+                    logger.warning(f"No PCM data to write for user {self.username} after conversion")
+                    
+        except Exception as e:
+            logger.error(f"💥 Error writing audio for user {self.username}: {e}", exc_info=True)
+    
+    def pad_to_sample(self, target_sample: int):
+        """Pad with silence to reach the target sample position."""
+        logger.debug(f"pad_to_sample called for {self.username}: target={target_sample}, current={self.sample_cursor}, closed={self.is_closed}")
+        
+        if self.is_closed:
+            logger.warning(f"Cannot pad {self.username}: WAV file is closed")
+            return
+            
+        with self.lock:
+            if target_sample > self.sample_cursor:
+                missing_samples = target_sample - self.sample_cursor
+                logger.debug(f"About to write {missing_samples} silence samples for {self.username}")
+                
+                # Limit excessive padding (more than 5 minutes for safety)
+                max_padding = 5 * 60 * 48000  # 5 minutes at 48kHz
+                if missing_samples > max_padding:
+                    logger.warning(f"Excessive padding requested for {self.username}: {missing_samples} samples ({missing_samples/48000:.1f}s), limiting to {max_padding}")
+                    missing_samples = max_padding
+                
+                self.write_silence(missing_samples)
+                logger.debug(f"✅ Padded {missing_samples} samples to reach position {target_sample} for user {self.username}")
+            else:
+                logger.debug(f"No padding needed for {self.username}: target={target_sample} <= current={self.sample_cursor}")
+    
+    def get_current_sample(self) -> int:
+        """Get current sample position."""
+        with self.lock:
+            return self.sample_cursor
+    
+    def close(self):
+        """Close the WAV file."""
+        with self.lock:
+            if self.wav_file and not self.is_closed:
+                self.wav_file.close()
+                self.is_closed = True
+                logger.debug(f"UserWavWriter closed for {self.username}: {self.sample_cursor} samples written")
+
+
+class AlignedPerUserSink(voice_recv.AudioSink):
+    """AudioSink that creates time-aligned WAV files per user and handles STT."""
+    
+    def __init__(self, output_dir: str, garmin_manager=None):
+        super().__init__()
+        self.output_dir = output_dir
+        self.garmin_manager = garmin_manager  # Reference to call STT callback
+        self.session_start_time = time.perf_counter()
+        self.session_start_timestamp = datetime.now().strftime('%Y%m%d_%H%M%SZ')
+        self.user_writers: Dict[int, UserWavWriter] = {}
+        self.writers_lock = threading.Lock()
+        self.is_recording = True
+        self.total_session_samples = 0
+        
+        # Frame timing constants
+        self.samples_per_ms = SAMPLERATE / 1000.0  # 48 samples per ms
+        self.expected_frame_samples = int(20 * self.samples_per_ms)  # 20ms = 960 samples
+        
+        # Timeline tracking for gap detection
+        self.last_frame_times: Dict[int, float] = {}  # user_id -> last frame time
+        self.user_sample_cursors: Dict[int, int] = {}  # user_id -> expected next sample position
+        
+        os.makedirs(output_dir, exist_ok=True)
+        logger.info(f"AlignedPerUserSink initialized: session_start={self.session_start_timestamp}")
+    
+    def wants_opus(self) -> bool:
+        """Request PCM data instead of Opus."""
+        return False
+    
+    def write(self, user: Optional[discord.User], data: voice_recv.VoiceData):
+        """Process incoming audio data with time alignment and STT."""
+        if not self.is_recording:
+            logger.debug("AlignedPerUserSink: Not recording, ignoring write")
+            return
+        
+        # Forward to STT callback if available
+        if self.garmin_manager and hasattr(self.garmin_manager, 'callback'):
+            try:
+                self.garmin_manager.callback(user, data)
+            except Exception as e:
+                logger.error(f"Error in STT callback: {e}")
+        
+        # Handle unknown users
+        if user is None:
+            user_id = 0
+            username = "unknown"
+            logger.debug("Processing audio from unknown user")
+        else:
+            user_id = user.id
+            username = self._sanitize_filename(user.name)
+            logger.debug(f"Processing audio from user {username} (ID: {user_id})")
+        
+        # Check if we have PCM data
+        if not data.pcm:
+            logger.debug(f"No PCM data for user {username}")
+            return
+        
+        logger.debug(f"Received {len(data.pcm)} bytes PCM data from {username}")
+        
+        current_time = time.perf_counter()
+        session_elapsed_ms = (current_time - self.session_start_time) * 1000
+        expected_sample_position = int(session_elapsed_ms * self.samples_per_ms)
+        
+        # Get or create writer for this user
+        logger.debug(f"Getting or creating writer for user {username}")
+        writer = self._get_or_create_writer(user_id, username)
+        if not writer:
+            logger.error(f"Failed to create writer for user {username}")
+            return
+        logger.debug(f"Writer obtained for user {username}: {writer.file_path}")
+        
+        # Calculate frame duration and samples
+        frame_duration_ms = self._estimate_frame_duration(data)
+        frame_samples = int(frame_duration_ms * self.samples_per_ms)
+        
+        logger.debug(f"User {username}: frame_duration={frame_duration_ms:.1f}ms, samples={frame_samples}, session_elapsed={session_elapsed_ms:.1f}ms")
+        
+        # Gap detection and padding
+        logger.debug(f"About to handle gaps and padding for {username}")
+        self._handle_gaps_and_padding(user_id, writer, expected_sample_position, frame_samples, current_time)
+        logger.debug(f"Gap handling completed for {username}")
+        
+        # Write the actual audio data
+        logger.debug(f"Checking PCM data for {username}: {data.pcm is not None}, length={len(data.pcm) if data.pcm else 0}")
+        if data.pcm:
+            logger.debug(f"About to write {len(data.pcm)} bytes for user {username}")
+            writer.write_audio(data.pcm)
+            logger.debug(f"Audio written for user {username}, current sample position: {writer.get_current_sample()}")
+        else:
+            logger.warning(f"No PCM data in voice data for user {username}")
+        
+        # Update tracking
+        self.last_frame_times[user_id] = current_time
+        self.user_sample_cursors[user_id] = writer.get_current_sample()
+        
+        # Update total session length
+        self.total_session_samples = max(self.total_session_samples, expected_sample_position + frame_samples)
+    
+    def _get_or_create_writer(self, user_id: int, username: str) -> Optional[UserWavWriter]:
+        """Get existing writer or create new one for user."""
+        with self.writers_lock:
+            if user_id in self.user_writers:
+                return self.user_writers[user_id]
+            
+            # Create filename: YYYYMMDD_HHMMSSZ_userId_username.wav
+            filename = f"{self.session_start_timestamp}_{user_id}_{username}.wav"
+            file_path = os.path.join(self.output_dir, filename)
+            
+            try:
+                writer = UserWavWriter(file_path, user_id, username)
+                self.user_writers[user_id] = writer
+                
+                # Pad from session start to current position (CRITICAL for time alignment)
+                current_time = time.perf_counter()
+                session_elapsed_ms = (current_time - self.session_start_time) * 1000
+                current_sample_position = int(session_elapsed_ms * self.samples_per_ms)
+                logger.debug(f"About to pad writer for {username} to sample {current_sample_position} (session elapsed: {session_elapsed_ms:.1f}ms)")
+                writer.pad_to_sample(current_sample_position)
+                logger.debug(f"Initial padding completed for {username}")
+                
+                logger.info(f"Created aligned writer for user {username} (ID: {user_id}): {file_path}")
+                return writer
+            except Exception as e:
+                logger.error(f"Failed to create writer for user {username} (ID: {user_id}): {e}")
+                return None
+    
+    def _estimate_frame_duration(self, data: voice_recv.VoiceData) -> float:
+        """Estimate frame duration in milliseconds from VoiceData."""
+        # Default Discord frame is 20ms, but can vary
+        if hasattr(data, 'duration') and data.duration:
+            return data.duration
+        
+        # Fallback: estimate from PCM data length
+        if data.pcm:
+            # Assuming stereo 16-bit PCM at 48kHz
+            samples = len(data.pcm) // 4  # stereo 16-bit
+            duration_ms = (samples / SAMPLERATE) * 1000
+            return duration_ms
+        
+        # Default fallback
+        return 20.0  # 20ms default
+    
+    def _handle_gaps_and_padding(self, user_id: int, writer: UserWavWriter, 
+                                  expected_position: int, frame_samples: int, current_time: float):
+        """Handle gap detection and silence padding."""
+        logger.debug(f"_handle_gaps_and_padding: user_id={user_id}, expected_pos={expected_position}")
+        
+        # For first frame from this user, just update cursor
+        if user_id not in self.user_sample_cursors:
+            logger.debug(f"First frame for user {user_id}, setting cursor to {expected_position}")
+            self.user_sample_cursors[user_id] = expected_position
+            return
+        
+        current_cursor = writer.get_current_sample()
+        logger.debug(f"Gap check for user {user_id}: current_cursor={current_cursor}, expected_pos={expected_position}")
+        
+        # Check for gap based on time elapsed
+        if user_id in self.last_frame_times:
+            time_since_last = current_time - self.last_frame_times[user_id]
+            expected_samples_since_last = int(time_since_last * 1000 * self.samples_per_ms)
+            
+            logger.debug(f"Time check for user {user_id}: time_since_last={time_since_last:.3f}s, expected_samples={expected_samples_since_last}")
+            
+            # If gap is detected (more than 1.5x expected frame duration)
+            if expected_samples_since_last > (self.expected_frame_samples * 1.5):
+                gap_samples = expected_position - current_cursor
+                if gap_samples > 0:
+                    logger.debug(f"Gap detected for user {user_id}: filling {gap_samples} samples")
+                    writer.write_silence(gap_samples)
+                    logger.debug(f"Filled gap of {gap_samples} samples for user {user_id}")
+        
+        logger.debug(f"Gap handling completed for user {user_id}")
+    
+    def _sanitize_filename(self, name: str) -> str:
+        """Sanitize username for filename use."""
+        forbidden = '<>:"/\\|?*'
+        sanitized = ''.join('_' if c in forbidden or ord(c) < 32 else c for c in name)
+        sanitized = sanitized.strip().rstrip('. ')
+        return sanitized[:32] if sanitized else 'unknown'
+    
+    def cleanup(self):
+        """Cleanup: pad all writers to session end and close files."""
+        logger.info("AlignedPerUserSink cleanup: finalizing aligned recordings")
+        
+        try:
+            self.is_recording = False
+            
+            # Calculate final session length
+            current_time = time.perf_counter()
+            session_duration_ms = (current_time - self.session_start_time) * 1000
+            final_session_samples = int(session_duration_ms * self.samples_per_ms)
+            
+            logger.debug(f"Session duration: {session_duration_ms:.1f}ms, final samples: {final_session_samples}")
+            
+            # Update total if larger
+            self.total_session_samples = max(self.total_session_samples, final_session_samples)
+            
+            # Pad all writers to session end and close
+            with self.writers_lock:
+                logger.debug(f"Processing {len(self.user_writers)} user writers")
+                
+                timeline_data = {
+                    'session_start': self.session_start_timestamp,
+                    'session_duration_ms': session_duration_ms,
+                    'session_samples': self.total_session_samples,
+                    'sample_rate': SAMPLERATE,
+                    'users': {}
+                }
+                
+                for user_id, writer in self.user_writers.items():
+                    try:
+                        logger.debug(f"Processing user {writer.username} (ID: {user_id})")
+                        current_samples = writer.get_current_sample()
+                        
+                        # Only pad if needed (avoid excessive padding)
+                        if current_samples < self.total_session_samples:
+                            samples_to_pad = self.total_session_samples - current_samples
+                            logger.debug(f"Padding {samples_to_pad} samples for {writer.username}")
+                            writer.pad_to_sample(self.total_session_samples)
+                        
+                        # Record timeline info
+                        timeline_data['users'][str(user_id)] = {  # Ensure string key for JSON
+                            'username': writer.username,
+                            'file_path': writer.file_path,
+                            'final_samples': writer.get_current_sample()
+                        }
+                        
+                        # Close writer
+                        writer.close()
+                        logger.info(f"✅ Finalized aligned recording for {writer.username}: {writer.get_current_sample()} samples")
+                        
+                    except Exception as e:
+                        logger.error(f"❌ Error finalizing writer for user {user_id}: {e}", exc_info=True)
+                        # Try to close writer anyway
+                        try:
+                            writer.close()
+                        except:
+                            pass
+                
+                # Save timeline JSON
+                timeline_path = os.path.join(self.output_dir, f"timeline_{self.session_start_timestamp}.json")
+                try:
+                    logger.debug(f"Saving timeline to: {timeline_path}")
+                    os.makedirs(os.path.dirname(timeline_path), exist_ok=True)
+                    
+                    with open(timeline_path, 'w', encoding='utf-8') as f:
+                        json.dump(timeline_data, f, indent=2, ensure_ascii=False)
+                    logger.info(f"✅ Saved timeline data: {timeline_path}")
+                    
+                except Exception as e:
+                    logger.error(f"❌ Failed to save timeline data: {e}", exc_info=True)
+            
+            logger.info(f"🎯 AlignedPerUserSink cleanup completed: {len(self.user_writers)} user tracks, "
+                       f"{self.total_session_samples} samples ({session_duration_ms:.1f}ms)")
+                       
+        except Exception as e:
+            logger.error(f"💥 Critical error in cleanup: {e}", exc_info=True)
+
+
+# ==================================================
+# Validation Functions
+# ==================================================
+
+def validate_aligned_recordings(timeline_path: str) -> dict:
+    """
+    Validate that aligned recordings have consistent timing.
+    
+    Args:
+        timeline_path: Path to the timeline JSON file
+        
+    Returns:
+        Dictionary with validation results
+    """
+    try:
+        with open(timeline_path, 'r') as f:
+            timeline_data = json.load(f)
+        
+        expected_samples = timeline_data['session_samples']
+        expected_duration_ms = timeline_data['session_duration_ms']
+        sample_rate = timeline_data['sample_rate']
+        
+        results = {
+            'valid': True,
+            'expected_samples': expected_samples,
+            'expected_duration_ms': expected_duration_ms,
+            'users': {},
+            'errors': []
+        }
+        
+        for user_id, user_data in timeline_data['users'].items():
+            file_path = user_data['file_path']
+            recorded_samples = user_data['final_samples']
+            
+            # Validate using pydub
+            try:
+                audio = AudioSegment.from_wav(file_path)
+                actual_duration_ms = len(audio)
+                actual_samples = int((actual_duration_ms / 1000.0) * sample_rate)
+                
+                # Check if duration matches within tolerance (10ms)
+                duration_diff_ms = abs(actual_duration_ms - expected_duration_ms)
+                samples_diff = abs(actual_samples - expected_samples)
+                
+                user_result = {
+                    'file_path': file_path,
+                    'username': user_data['username'],
+                    'expected_samples': expected_samples,
+                    'recorded_samples': recorded_samples,
+                    'actual_samples': actual_samples,
+                    'expected_duration_ms': expected_duration_ms,
+                    'actual_duration_ms': actual_duration_ms,
+                    'duration_diff_ms': duration_diff_ms,
+                    'samples_diff': samples_diff,
+                    'valid': duration_diff_ms <= 10,  # 10ms tolerance
+                    'sample_rate': audio.frame_rate,
+                    'channels': audio.channels,
+                    'sample_width': audio.sample_width
+                }
+                
+                if not user_result['valid']:
+                    results['valid'] = False
+                    results['errors'].append(f"User {user_data['username']}: Duration mismatch {duration_diff_ms:.1f}ms")
+                
+                # Validate audio format
+                if audio.frame_rate != sample_rate:
+                    results['valid'] = False
+                    results['errors'].append(f"User {user_data['username']}: Wrong sample rate {audio.frame_rate} (expected {sample_rate})")
+                
+                if audio.channels != 1:
+                    results['valid'] = False
+                    results['errors'].append(f"User {user_data['username']}: Wrong channels {audio.channels} (expected 1)")
+                
+                if audio.sample_width != 2:
+                    results['valid'] = False
+                    results['errors'].append(f"User {user_data['username']}: Wrong sample width {audio.sample_width} (expected 2)")
+                
+                results['users'][user_id] = user_result
+                
+            except Exception as e:
+                results['valid'] = False
+                results['errors'].append(f"User {user_data['username']}: Failed to validate audio file: {e}")
+        
+        return results
+        
+    except Exception as e:
+        return {
+            'valid': False,
+            'errors': [f"Failed to validate recordings: {e}"],
+            'users': {}
+        }
+
+
+def create_test_validation_script(output_dir: str) -> str:
+    """
+    Create a standalone validation script for testing aligned recordings.
+    
+    Args:
+        output_dir: Directory to save the validation script
+        
+    Returns:
+        Path to the created script
+    """
+    script_content = '''#!/usr/bin/env python3
+"""
+Standalone validation script for aligned Discord recordings.
+"""
+import json
+import sys
+import os
+from pydub import AudioSegment
+from pathlib import Path
+
+def validate_aligned_recordings(timeline_path):
+    """Validate aligned recordings against timeline."""
+    try:
+        with open(timeline_path, 'r') as f:
+            timeline_data = json.load(f)
+        
+        expected_samples = timeline_data['session_samples']
+        expected_duration_ms = timeline_data['session_duration_ms']
+        sample_rate = timeline_data['sample_rate']
+        
+        print(f"Validating session: {expected_duration_ms:.1f}ms ({expected_samples} samples @ {sample_rate}Hz)")
+        print("=" * 80)
+        
+        all_valid = True
+        
+        for user_id, user_data in timeline_data['users'].items():
+            file_path = user_data['file_path']
+            username = user_data['username']
+            
+            if not os.path.exists(file_path):
+                print(f"❌ {username}: File not found: {file_path}")
+                all_valid = False
+                continue
+            
+            try:
+                audio = AudioSegment.from_wav(file_path)
+                actual_duration_ms = len(audio)
+                duration_diff_ms = abs(actual_duration_ms - expected_duration_ms)
+                
+                status = "✅" if duration_diff_ms <= 10 else "❌"
+                print(f"{status} {username}: {actual_duration_ms:.1f}ms (diff: {duration_diff_ms:.1f}ms)")
+                print(f"   Format: {audio.frame_rate}Hz, {audio.channels}ch, {audio.sample_width*8}bit")
+                
+                if duration_diff_ms > 10:
+                    all_valid = False
+                
+                if audio.frame_rate != sample_rate or audio.channels != 1 or audio.sample_width != 2:
+                    print(f"   ⚠️ Format mismatch (expected: {sample_rate}Hz, 1ch, 16bit)")
+                    all_valid = False
+                    
+            except Exception as e:
+                print(f"❌ {username}: Error reading audio: {e}")
+                all_valid = False
+        
+        print("=" * 80)
+        print(f"Overall result: {'✅ VALID' if all_valid else '❌ INVALID'}")
+        return all_valid
+        
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        return False
+
+if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        print("Usage: python validate_recordings.py <timeline.json>")
+        sys.exit(1)
+    
+    timeline_path = sys.argv[1]
+    if not os.path.exists(timeline_path):
+        print(f"Error: Timeline file not found: {timeline_path}")
+        sys.exit(1)
+    
+    success = validate_aligned_recordings(timeline_path)
+    sys.exit(0 if success else 1)
+'''
+    
+    script_path = os.path.join(output_dir, "validate_recordings.py")
+    os.makedirs(output_dir, exist_ok=True)
+    
+    with open(script_path, 'w') as f:
+        f.write(script_content)
+    
+    # Make executable
+    os.chmod(script_path, 0o755)
+    
+    return script_path
+
+
+# ==================================================
+# Test Functions
+# ==================================================
+
+def create_test_aligned_recording() -> str:
+    """
+    Create a test function that simulates Discord voice packets.
+    
+    Returns:
+        Path to created test script
+    """
+    test_script_content = '''#!/usr/bin/env python3
+"""
+Test script for aligned Discord voice recording.
+Simulates Discord voice packets with gaps and validates output.
+"""
+import os
+import sys
+import time
+import wave
+import random
+import tempfile
+from typing import Optional
+from unittest.mock import Mock
+
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from garmin_voice import AlignedPerUserSink, validate_aligned_recordings
+
+class MockUser:
+    def __init__(self, user_id: int, name: str):
+        self.id = user_id
+        self.name = name
+
+class MockVoiceData:
+    def __init__(self, pcm_data: bytes, duration_ms: float = 20.0):
+        self.pcm = pcm_data
+        self.duration = duration_ms
+
+def generate_test_pcm(duration_ms: float, frequency: float = 440.0, amplitude: float = 0.1) -> bytes:
+    """Generate test PCM audio data (stereo 16-bit at 48kHz)."""
+    sample_rate = 48000
+    samples = int(duration_ms * sample_rate / 1000)
+    
+    pcm_data = bytearray()
+    for i in range(samples):
+        # Generate sine wave
+        sample_value = int(amplitude * 32767 * 
+                          (0.5 + 0.5 * (i / samples)) *  # fade in
+                          (random.random() * 0.3 + 0.7) *  # noise
+                          1.0)  # sin(2π * frequency * t)
+        
+        # Stereo: left and right channel (same data)
+        pcm_data.extend(sample_value.to_bytes(2, 'little', signed=True))
+        pcm_data.extend(sample_value.to_bytes(2, 'little', signed=True))
+    
+    return bytes(pcm_data)
+
+def simulate_voice_session():
+    """Simulate a voice session with multiple users and gaps."""
+    print("🎙️ Starting aligned recording test simulation")
+    print("=" * 60)
+    
+    # Create temporary output directory
+    with tempfile.TemporaryDirectory() as temp_dir:
+        output_dir = os.path.join(temp_dir, "test_recordings")
+        
+        # Create sink
+        sink = AlignedPerUserSink(output_dir)
+        
+        # Create test users
+        users = [
+            MockUser(12345, "TestUser1"),
+            MockUser(67890, "TestUser2"),
+            MockUser(11111, "TestUser3")
+        ]
+        
+        print(f"Created test users: {[u.name for u in users]}")
+        
+        # Session parameters
+        session_duration_s = 5.0  # 5 second test session
+        frame_duration_ms = 20.0  # 20ms frames
+        frames_per_second = 1000 / frame_duration_ms  # 50 frames/sec
+        total_frames = int(session_duration_s * frames_per_second)
+        
+        print(f"Session: {session_duration_s}s, {frame_duration_ms}ms frames, {total_frames} total frames")
+        print()
+        
+        # Simulate voice packets
+        start_time = time.perf_counter()
+        frame_count = 0
+        
+        for frame_idx in range(total_frames):
+            current_time = start_time + (frame_idx * frame_duration_ms / 1000)
+            
+            # Simulate each user speaking with different patterns
+            for user_idx, user in enumerate(users):
+                # User 1: speaks first 2 seconds, then gap, then last 1 second
+                # User 2: speaks middle 3 seconds
+                # User 3: speaks randomly (50% chance each frame)
+                
+                should_speak = False
+                if user_idx == 0:  # TestUser1
+                    should_speak = (frame_idx < 100) or (frame_idx >= 200)  # 0-2s and 4-5s
+                elif user_idx == 1:  # TestUser2
+                    should_speak = (50 <= frame_idx < 200)  # 1-4s
+                elif user_idx == 2:  # TestUser3
+                    should_speak = random.random() < 0.4  # 40% random
+                
+                if should_speak:
+                    # Generate unique frequency for each user
+                    frequency = 440 + (user_idx * 200)  # 440Hz, 640Hz, 840Hz
+                    pcm_data = generate_test_pcm(frame_duration_ms, frequency)
+                    
+                    voice_data = MockVoiceData(pcm_data, frame_duration_ms)
+                    sink.write(user, voice_data)
+                    frame_count += 1
+            
+            # Add small delay to simulate real timing
+            if frame_idx % 25 == 0:  # Every 500ms
+                print(f"  Frame {frame_idx:3d}/{total_frames} ({frame_idx * frame_duration_ms / 1000:.1f}s)")
+        
+        print(f"\\nSimulated {frame_count} voice packets over {total_frames} frames")
+        
+        # Finalize recording
+        print("\\n🔄 Finalizing recordings...")
+        sink.cleanup()
+        
+        # Find timeline file
+        timeline_files = [f for f in os.listdir(output_dir) if f.startswith("timeline_")]
+        if not timeline_files:
+            print("❌ No timeline file found!")
+            return False
+        
+        timeline_path = os.path.join(output_dir, timeline_files[0])
+        print(f"📊 Timeline: {timeline_path}")
+        
+        # Validate recordings
+        print("\\n🔍 Validating aligned recordings...")
+        results = validate_aligned_recordings(timeline_path)
+        
+        print(f"\\nValidation Results:")
+        print(f"  Valid: {'✅ YES' if results['valid'] else '❌ NO'}")
+        print(f"  Expected duration: {results.get('expected_duration_ms', 0):.1f}ms")
+        print(f"  Expected samples: {results.get('expected_samples', 0)}")
+        
+        if results['errors']:
+            print("  Errors:")
+            for error in results['errors']:
+                print(f"    - {error}")
+        
+        print("\\n📁 Generated files:")
+        for file in sorted(os.listdir(output_dir)):
+            file_path = os.path.join(output_dir, file)
+            size_kb = os.path.getsize(file_path) / 1024
+            print(f"  - {file} ({size_kb:.1f} KB)")
+        
+        print("\\n" + "=" * 60)
+        return results['valid']
+
+if __name__ == "__main__":
+    success = simulate_voice_session()
+    print(f"\\n🎯 Test result: {'SUCCESS' if success else 'FAILED'}")
+    sys.exit(0 if success else 1)
+'''
+    
+    script_path = os.path.join(SCRIPT_DIR, "test_aligned_recording.py")
+    
+    with open(script_path, 'w') as f:
+        f.write(test_script_content)
+    
+    # Make executable
+    os.chmod(script_path, 0o755)
+    
+    return script_path
 
 
 class UserAudioBuffer:
@@ -231,10 +1022,22 @@ class GarminVoiceManager:
         self.recording_start_time: float = time.time()
         self.vc: Optional[voice_recv.VoiceRecvClient] = None
         
+        # Aligned recording sink
+        self.aligned_sink: Optional[AlignedPerUserSink] = None
+        
         os.makedirs(OUTPUT_DIR, exist_ok=True)
         os.makedirs(TEMP_DIR, exist_ok=True)
+        os.makedirs(ALIGNED_RECORDINGS_DIR, exist_ok=True)
         
-        logger.info("GarminVoiceManager initialized with simplified pydub-based mixing")
+        # Create validation and test scripts
+        try:
+            validation_script = create_test_validation_script(SCRIPT_DIR)
+            test_script = create_test_aligned_recording()
+            logger.info(f"Created validation tools: {validation_script}, {test_script}")
+        except Exception as e:
+            logger.warning(f"Failed to create validation tools: {e}")
+        
+        logger.info("GarminVoiceManager initialized with aligned per-user recording")
     
     # ------------------------- Discord voice callbacks -------------------------
     def callback(self, user: Optional[discord.User], data: voice_recv.VoiceData):
@@ -399,8 +1202,42 @@ class GarminVoiceManager:
     
     # ------------------------------ Recording management ---------------------------
     def save_recording(self):
-        """Save current recording with pydub-based mixing."""
+        """Save current recording - triggers aligned recording finalization."""
         try:
+            # If aligned recording is active, finalize it
+            if self.aligned_sink:
+                try:
+                    self.aligned_sink.cleanup()
+                    logger.info("✅ Aligned recording saved and finalized")
+                    
+                    # Reset the sink for continued recording
+                    self.aligned_sink = AlignedPerUserSink(ALIGNED_RECORDINGS_DIR, garmin_manager=self)
+                    
+                    # CRITICAL: Update the voice client to listen to the NEW sink
+                    if hasattr(self, 'vc') and self.vc:
+                        logger.info("🔄 Switching voice client to new aligned sink for continued recording")
+                        try:
+                            # Stop current listening first
+                            self.vc.stop_listening()
+                            logger.debug("Stopped current voice listening")
+                            
+                            # Start listening with new sink
+                            self.vc.listen(self.aligned_sink)
+                            logger.info("✅ Voice client now listening to new sink - recording continues")
+                        except Exception as e:
+                            logger.error(f"Failed to switch to new sink: {e}")
+                            # Fallback: try to restart listening anyway
+                            try:
+                                self.vc.listen(self.aligned_sink)
+                                logger.info("✅ Fallback: Voice client listening to new sink")
+                            except Exception as e2:
+                                logger.error(f"Fallback also failed: {e2}")
+                    
+                    return
+                except Exception as e:
+                    logger.error(f"Error saving aligned recording: {e}")
+            
+            # Fallback to old recording method
             timestamp = time.strftime('%d.%m.%Y_%H-%M', time.localtime())
             base_filename = f"recording_{timestamp}"
             
@@ -531,14 +1368,19 @@ class GarminVoiceManager:
             
             # Connect to the voice channel
             self.vc = await channel.connect(cls=voice_recv.VoiceRecvClient)
-            self.vc.listen(voice_recv.BasicSink(self.callback))
+            
+            # Create aligned recording sink with reference to this manager for STT
+            self.aligned_sink = AlignedPerUserSink(ALIGNED_RECORDINGS_DIR, garmin_manager=self)
+            
+            # Use the aligned sink directly (it will handle both STT and recording)
+            self.vc.listen(self.aligned_sink)
             
             # Start STT worker if enabled
             if cfg.STT_ENABLED:
                 self._start_stt_worker()
-                logger.info(f"🔊 Joined voice channel '{channel.name}' (STT: {cfg.STT_ENGINE})")
+                logger.info(f"🔊 Joined voice channel '{channel.name}' (STT: {cfg.STT_ENGINE}, Aligned Recording: ON)")
             else:
-                logger.info(f"🔊 Joined voice channel '{channel.name}' (STT disabled)")
+                logger.info(f"🔊 Joined voice channel '{channel.name}' (STT disabled, Aligned Recording: ON)")
             
             self.recording_start_time = time.time()
             
@@ -550,6 +1392,12 @@ class GarminVoiceManager:
                 except:
                     pass
                 self.vc = None
+            if self.aligned_sink:
+                try:
+                    self.aligned_sink.cleanup()
+                except:
+                    pass
+                self.aligned_sink = None
             raise
     
     def is_connected(self) -> bool:
@@ -560,6 +1408,16 @@ class GarminVoiceManager:
         """Disconnect from the current voice channel."""
         try:
             self._stop_stt_worker()
+            
+            # Cleanup aligned recording
+            if self.aligned_sink:
+                try:
+                    self.aligned_sink.cleanup()
+                    logger.info("✅ Aligned recordings finalized")
+                except Exception as e:
+                    logger.error(f"Error cleaning up aligned sink: {e}")
+                finally:
+                    self.aligned_sink = None
             
             # Clear all buffers
             with self._buffers_lock:
@@ -577,14 +1435,26 @@ class GarminVoiceManager:
         except Exception as e:
             logger.error(f"Error in leave_channel: {e}")
             self.vc = None
+            if self.aligned_sink:
+                self.aligned_sink = None
     
     def get_recording_health(self) -> dict:
         """Get current recording system health status."""
         current_time = time.time()
         recording_duration = current_time - self.recording_start_time if self.is_connected() else 0
         
+        # Get aligned recording info
+        aligned_active_users = 0
+        aligned_session_samples = 0
+        aligned_session_duration_ms = 0
+        
+        if self.aligned_sink:
+            aligned_active_users = len(self.aligned_sink.user_writers)
+            aligned_session_samples = self.aligned_sink.total_session_samples
+            aligned_session_duration_ms = (current_time - self.aligned_sink.session_start_time) * 1000 if self.aligned_sink.session_start_time else 0
+        
         with self._buffers_lock:
-            active_users = len(self.user_buffers)
+            legacy_active_users = len(self.user_buffers)
             total_buffer_size = 0
             
             for buffer in self.user_buffers.values():
@@ -612,7 +1482,12 @@ class GarminVoiceManager:
             "time_since_last_audio": 0,
             "audio_callback_rate": 0,
             "last_chunk_size": 0,
-            "active_users": active_users,
+            "active_users": max(legacy_active_users, aligned_active_users),
             "total_user_buffer_size": total_buffer_size,
-            "user_buffers": {}  # Simplified - details not needed
+            "user_buffers": {},  # Simplified - details not needed
+            # New aligned recording info
+            "aligned_recording_active": self.aligned_sink is not None,
+            "aligned_users": aligned_active_users,
+            "aligned_session_samples": aligned_session_samples,
+            "aligned_session_duration_ms": aligned_session_duration_ms
         }
