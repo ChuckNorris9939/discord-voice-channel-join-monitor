@@ -184,7 +184,7 @@ def garmin_recordings_page():
         # Group recordings by base filename
         recording_groups = {}
         
-        for file_path in output_dir.glob("*.wav"):
+        for file_path in output_dir.glob("*.mp3"):
             if file_path.is_file():
                 # Get file stats
                 stat = file_path.stat()
@@ -195,14 +195,14 @@ def garmin_recordings_page():
                 
                 # Check if this is an individual user recording or mixed recording
                 if "_user_" in filename:
-                    # Individual user recording: "recording_03.08.2025_08-53_user_username.wav"
+                    # Individual user recording: "recording_03.08.2025_08-53_user_username.mp3"
                     base_filename = filename.replace("_user_", "_").rsplit("_", 1)[0]
-                    username = filename.split("_user_")[1].replace(".wav", "")
+                    username = filename.split("_user_")[1].replace(".mp3", "")
                     recording_type = "individual"
                     user_info = f"User {username}"
                 else:
-                    # Mixed recording: "recording_03.08.2025_08-53.wav"
-                    base_filename = filename.replace(".wav", "")
+                    # Mixed recording: "recording_03.08.2025_08-53.mp3"
+                    base_filename = filename.replace(".mp3", "")
                     username = None
                     recording_type = "mixed"
                     user_info = "Mixed (All Users)"
@@ -467,7 +467,7 @@ def get_status_data():
         output_dir = Path(GARMIN_OUTPUT_DIR)
         recordings_count = 0
         if output_dir.exists():
-            recordings_count = len(list(output_dir.glob("*.wav")))
+            recordings_count = len(list(output_dir.glob("*.mp3")))
         
         # Get online users count (approximate - users in voice channels)
         online_users_count = 0

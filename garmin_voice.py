@@ -102,7 +102,7 @@ TRIGGER_COOLDOWN_S: Final[int] = 5
 # ==================================================
 
 class UserWavWriter:
-    """Thread-safe WAV writer for a single user with padding support."""
+    """Thread-safe MP3 writer for a single user with padding support."""
     
     def __init__(self, file_path: str, user_id: int, username: str):
         self.file_path = file_path
@@ -110,39 +110,29 @@ class UserWavWriter:
         self.username = username
         self.lock = threading.Lock()
         self.sample_cursor = 0  # Current position in samples since recording start
-        self.wav_file = None
+        self.audio_buffer = bytearray()  # Buffer for PCM data
         self.is_closed = False
         
         # Ensure directory exists
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
-        
-        # Open WAV file for writing - PCM 16-bit, 48kHz, mono
-        self.wav_file = wave.open(file_path, 'wb')
-        self.wav_file.setnchannels(1)  # mono
-        self.wav_file.setsampwidth(2)  # 16-bit
-        self.wav_file.setframerate(SAMPLERATE)  # 48000 Hz
         
         logger.debug(f"UserWavWriter initialized for {username} (ID: {user_id}): {file_path}")
     
     def write_silence(self, num_samples: int):
         """Write silence padding for the specified number of samples."""
         if self.is_closed:
-            logger.warning(f"Cannot write silence for {self.username}: WAV file is closed")
+            logger.warning(f"Cannot write silence for {self.username}: audio buffer is closed")
             return
             
         if num_samples <= 0:
             logger.warning(f"Invalid num_samples for {self.username}: {num_samples}")
             return
-            
-        if not self.wav_file:
-            logger.error(f"WAV file is None for {self.username}")
-            return
         
         try:
-            # Write silence efficiently
+            # Write silence efficiently - mono 16-bit samples
             if num_samples <= 240000:  # Up to ~5 seconds in one go
                 silence_bytes = b'\x00\x00' * num_samples
-                self.wav_file.writeframes(silence_bytes)
+                self.audio_buffer.extend(silence_bytes)
                 self.sample_cursor += num_samples
             else:
                 # Write in chunks for very large silence blocks
@@ -153,7 +143,7 @@ class UserWavWriter:
                     chunk_samples = min(chunk_size, num_samples - samples_written)
                     silence_chunk = b'\x00\x00' * chunk_samples
                     
-                    self.wav_file.writeframes(silence_chunk)
+                    self.audio_buffer.extend(silence_chunk)
                     samples_written += chunk_samples
                     self.sample_cursor += chunk_samples
                 
@@ -161,16 +151,10 @@ class UserWavWriter:
             logger.error(f"💥 Error writing silence for {self.username}: {e}", exc_info=True)
     
     def write_audio(self, pcm_data: bytes):
-        """Write PCM audio data to the WAV file."""
-
+        """Write PCM audio data to the audio buffer."""
         
         if self.is_closed:
-            logger.warning(f"Cannot write audio for {self.username}: WAV file is closed")
-            return
-            
-        # REMOVE LOCK - this was causing deadlock!
-        if not self.wav_file:
-            logger.error(f"Cannot write audio for {self.username}: WAV file is None")
+            logger.warning(f"Cannot write audio for {self.username}: audio buffer is closed")
             return
             
         if not pcm_data:
@@ -187,7 +171,7 @@ class UserWavWriter:
                 pcm_data = bytes(mono_data)
             
             if pcm_data:  # Only write if we have data
-                self.wav_file.writeframes(pcm_data)
+                self.audio_buffer.extend(pcm_data)
                 samples_written = len(pcm_data) // 2  # 16-bit samples
                 self.sample_cursor += samples_written
             else:
@@ -201,7 +185,7 @@ class UserWavWriter:
         logger.debug(f"pad_to_sample called for {self.username}: target={target_sample}, current={self.sample_cursor}, closed={self.is_closed}")
         
         if self.is_closed:
-            logger.warning(f"Cannot pad {self.username}: WAV file is closed")
+            logger.warning(f"Cannot pad {self.username}: audio buffer is closed")
             return
             
         with self.lock:
@@ -226,16 +210,35 @@ class UserWavWriter:
             return self.sample_cursor
     
     def close(self):
-        """Close the WAV file."""
+        """Close and export the audio buffer to MP3 file."""
         with self.lock:
-            if self.wav_file and not self.is_closed:
-                self.wav_file.close()
+            if not self.is_closed and len(self.audio_buffer) > 0:
+                try:
+                    # Create AudioSegment from PCM buffer
+                    audio_segment = AudioSegment(
+                        bytes(self.audio_buffer),
+                        sample_width=2,  # 16-bit
+                        frame_rate=SAMPLERATE,  # 48000 Hz
+                        channels=1  # mono
+                    )
+                    
+                    # Export to MP3
+                    audio_segment.export(self.file_path, format="mp3")
+                    logger.debug(f"UserWavWriter exported MP3 for {self.username}: {self.sample_cursor} samples written to {self.file_path}")
+                    
+                except Exception as e:
+                    logger.error(f"Error exporting MP3 for {self.username}: {e}", exc_info=True)
+                
                 self.is_closed = True
-                logger.debug(f"UserWavWriter closed for {self.username}: {self.sample_cursor} samples written")
+                # Clear buffer to free memory
+                self.audio_buffer.clear()
+            elif not self.is_closed:
+                logger.debug(f"UserWavWriter closed for {self.username}: no audio data to export")
+                self.is_closed = True
 
 
 class AlignedPerUserSink(voice_recv.AudioSink):
-    """AudioSink that creates time-aligned WAV files per user and handles STT."""
+    """AudioSink that creates time-aligned MP3 files per user and handles STT."""
     
     def __init__(self, output_dir: str, garmin_manager=None):
         super().__init__()
@@ -331,8 +334,8 @@ class AlignedPerUserSink(voice_recv.AudioSink):
             if user_id in self.user_writers:
                 return self.user_writers[user_id]
             
-            # Create filename: dd.mm.yy_HH-MM-SS_username.wav
-            filename = f"{self.session_start_timestamp}_{username}.wav"
+            # Create filename: dd.mm.yy_HH-MM-SS_username.mp3
+            filename = f"{self.session_start_timestamp}_{username}.mp3"
             file_path = os.path.join(self.output_dir, filename)
             
             try:
@@ -430,26 +433,26 @@ class AlignedPerUserSink(voice_recv.AudioSink):
                 
             try:
                 if file_type == 'mixed':
-                    # Mixed file: {dd.mm.yy_hh-mm-ss}.wav
-                    dest_filename = f"{webgui_timestamp}.wav"
+                    # Mixed file: {dd.mm.yy_hh-mm-ss}.mp3
+                    dest_filename = f"{webgui_timestamp}.mp3"
                 else:
-                    # Individual user file: {dd.mm.yy_hh-mm-ss}_user_{username}.wav
+                    # Individual user file: {dd.mm.yy_hh-mm-ss}_user_{username}.mp3
                     # Extract username from original filename
                     original_basename = os.path.basename(source_file)
-                    if '_compressed.wav' in original_basename:
+                    if '_compressed.mp3' in original_basename:
                         # Find user ID in timeline to get username
                         user_id = None
                         for uid, user_data in timeline_data.get('users', {}).items():
-                            if user_data['file_path'] == source_file.replace('_compressed.wav', '.wav'):
+                            if user_data['file_path'] == source_file.replace('_compressed.mp3', '.mp3'):
                                 username = user_data['username']
-                                dest_filename = f"{webgui_timestamp}_user_{username}.wav"
+                                dest_filename = f"{webgui_timestamp}_user_{username}.mp3"
                                 break
                         else:
                             # Fallback: extract from source filename
                             parts = original_basename.split('_')
                             if len(parts) >= 4:
-                                username = parts[-1].replace('_compressed.wav', '').replace('.wav', '')
-                                dest_filename = f"{webgui_timestamp}_user_{username}.wav"
+                                username = parts[-1].replace('_compressed.mp3', '').replace('.mp3', '')
+                                dest_filename = f"{webgui_timestamp}_user_{username}.mp3"
                             else:
                                 logger.warning(f"Cannot determine username for {source_file}")
                                 continue
@@ -486,7 +489,7 @@ class AlignedPerUserSink(voice_recv.AudioSink):
                 if not os.path.exists(wav_file):
                     continue
                     
-                audio = AudioSegment.from_wav(wav_file)
+                audio = AudioSegment.from_file(wav_file)
                 audio_segments[wav_file] = audio
                 max_length_ms = max(max_length_ms, len(audio))
                 
@@ -564,8 +567,8 @@ class AlignedPerUserSink(voice_recv.AudioSink):
                     compressed_audio += audio[current_pos:]
                 
                 # Save compressed file
-                compressed_file = wav_file.replace('.wav', '_compressed.wav')
-                compressed_audio.export(compressed_file, format="wav")
+                compressed_file = wav_file.replace('.mp3', '_compressed.mp3')
+                compressed_audio.export(compressed_file, format="mp3")
                 compressed_files[wav_file] = compressed_file
                 compressed_audio_segments[wav_file] = compressed_audio
                 
@@ -592,9 +595,9 @@ class AlignedPerUserSink(voice_recv.AudioSink):
                 if mixed_audio:
                     # Create mixed filename based on session timestamp
                     session_timestamp = os.path.basename(list(wav_files)[0]).split('_')[0] + '_' + os.path.basename(list(wav_files)[0]).split('_')[1]
-                    mixed_file = os.path.join(os.path.dirname(list(wav_files)[0]), f"{session_timestamp}_mixed_compressed.wav")
+                    mixed_file = os.path.join(os.path.dirname(list(wav_files)[0]), f"{session_timestamp}_mixed_compressed.mp3")
                     
-                    mixed_audio.export(mixed_file, format="wav")
+                    mixed_audio.export(mixed_file, format="mp3")
                     compressed_files['mixed'] = mixed_file
                     
                     logger.info(f"✅ Mixed compressed file created: {os.path.basename(mixed_file)} ({len(mixed_audio)}ms, {len(compressed_audio_segments)} tracks)")
@@ -737,7 +740,7 @@ class AlignedPerUserSink(voice_recv.AudioSink):
                                 # Add compressed file paths to user data
                                 for user_id_str, user_data in timeline_data['users'].items():
                                     original_path = user_data['file_path']
-                                    compressed_path = original_path.replace('.wav', '_compressed.wav')
+                                    compressed_path = original_path.replace('.mp3', '_compressed.mp3')
                                     if compressed_path in compression_result['compressed_files'].values():
                                         user_data['compressed_file_path'] = compressed_path
                                 
@@ -1138,11 +1141,11 @@ class GarminVoiceManager:
                         active_users.append(buffer.username)
                         
                         # Save individual user recording
-                        user_filename = f"{base_filename}_user_{sanitize_filename(buffer.username)}.wav"
+                        user_filename = f"{base_filename}_user_{sanitize_filename(buffer.username)}.mp3"
                         user_path = os.path.join(OUTPUT_DIR, user_filename)
                         
                         try:
-                            segment.export(user_path, format="wav")
+                            segment.export(user_path, format="mp3")
                             duration_s = len(segment) / 1000.0
                             logger.info(f"Saved individual recording for {buffer.username}: {user_path} ({duration_s:.1f}s)")
                         except Exception as e:
@@ -1150,7 +1153,7 @@ class GarminVoiceManager:
                 
                 # Create mixed recording if we have audio
                 if user_segments:
-                    mixed_filename = f"{base_filename}.wav"
+                    mixed_filename = f"{base_filename}.mp3"
                     mixed_path = os.path.join(OUTPUT_DIR, mixed_filename)
                     
                     try:
@@ -1168,7 +1171,7 @@ class GarminVoiceManager:
                         
                         if mixed_segment:
                             # Export mixed audio
-                            mixed_segment.export(mixed_path, format="wav")
+                            mixed_segment.export(mixed_path, format="mp3")
                             duration_s = len(mixed_segment) / 1000.0
                             logger.info(f"Saved mixed recording: {mixed_path} ({duration_s:.1f}s, {len(active_users)} users)")
                         else:
@@ -1304,7 +1307,7 @@ class GarminVoiceManager:
                 # Estimate buffer size
                 segment = buffer.get_audio_segment()
                 if segment:
-                    # Calculate approximate size in bytes
+                    # Calculate approximate size in bytes 
                     duration_s = len(segment) / 1000.0
                     total_buffer_size += int(duration_s * SAMPLERATE * CHANNELS * BYTES_PER_SAMPLE)
         
