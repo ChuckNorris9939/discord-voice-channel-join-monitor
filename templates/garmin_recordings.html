@@ -89,6 +89,26 @@
             box-shadow: 0 6px 20px rgba(39, 174, 96, 0.4);
         }
 
+        .collapse-all-button {
+            background: linear-gradient(135deg, #9b59b6, #8e44ad);
+            color: white;
+            padding: 12px 24px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 16px;
+            transition: all 0.3s ease;
+            display: inline-block;
+            border: none;
+            cursor: pointer;
+        }
+
+        .collapse-all-button:hover {
+            background: linear-gradient(135deg, #8e44ad, #7d3c98);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(155, 89, 182, 0.4);
+        }
+
         .recordings-list {
             margin-top: 20px;
         }
@@ -115,6 +135,28 @@
             margin-bottom: 15px;
             padding-bottom: 10px;
             border-bottom: 1px solid #404040;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .recording-group-header:hover {
+            background: rgba(52, 73, 94, 0.3);
+            border-radius: 8px;
+            padding: 10px;
+            margin: -10px -10px 5px -10px;
+        }
+
+        .collapse-indicator {
+            font-size: 1.5em;
+            color: #3498db;
+            font-weight: bold;
+            transition: transform 0.3s ease;
+            min-width: 20px;
+            text-align: center;
+        }
+
+        .collapse-indicator.collapsed {
+            transform: rotate(-90deg);
         }
 
         .recording-group-title {
@@ -144,6 +186,15 @@
             display: flex;
             flex-direction: column;
             gap: 10px;
+            overflow: hidden;
+            transition: all 0.3s ease;
+        }
+
+        .recording-sub-items.collapsed {
+            max-height: 0;
+            opacity: 0;
+            margin: 0;
+            padding: 0;
         }
 
         .recording-sub-item {
@@ -342,13 +393,15 @@
             <div class="button-section">
                 <a href="{{ url_for('home') }}" class="back-button">🔙 Back to Home</a>
                 <a href="{{ url_for('garmin_recordings_page') }}" class="refresh-button">🔄 Refresh</a>
+                <button class="collapse-all-button" onclick="toggleAllRecordings()">📁 Collapse All</button>
             </div>
 
             {% if recordings %}
                 <div class="recordings-list">
                     {% for group in recordings %}
                     <div class="recording-item">
-                        <div class="recording-group-header">
+                        <div class="recording-group-header" onclick="toggleRecordingGroup(this)">
+                            <div class="collapse-indicator">▼</div>
                             <div class="recording-group-title">{{ group.base_filename }}</div>
                             <div class="recording-group-details">
                                 <span><strong>Files:</strong> {{ group.recordings|length }}</span>
@@ -395,5 +448,49 @@
             {% endif %}
         </div>
     </div>
+
+    <script>
+        function toggleRecordingGroup(header) {
+            const recordingItem = header.closest('.recording-item');
+            const subItems = recordingItem.querySelector('.recording-sub-items');
+            const indicator = header.querySelector('.collapse-indicator');
+            
+            if (subItems.classList.contains('collapsed')) {
+                subItems.classList.remove('collapsed');
+                indicator.classList.remove('collapsed');
+                indicator.textContent = '▼';
+            } else {
+                subItems.classList.add('collapsed');
+                indicator.classList.add('collapsed');
+                indicator.textContent = '▶';
+            }
+        }
+
+        function toggleAllRecordings() {
+            const allSubItems = document.querySelectorAll('.recording-sub-items');
+            const allIndicators = document.querySelectorAll('.collapse-indicator');
+            const button = document.querySelector('.collapse-all-button');
+            
+            const allCollapsed = Array.from(allSubItems).every(item => item.classList.contains('collapsed'));
+            
+            allSubItems.forEach((subItems, index) => {
+                const indicator = allIndicators[index];
+                if (allCollapsed) {
+                    // Expand all
+                    subItems.classList.remove('collapsed');
+                    indicator.classList.remove('collapsed');
+                    indicator.textContent = '▼';
+                } else {
+                    // Collapse all
+                    subItems.classList.add('collapsed');
+                    indicator.classList.add('collapsed');
+                    indicator.textContent = '▶';
+                }
+            });
+            
+            // Update button text
+            button.textContent = allCollapsed ? '📁 Collapse All' : '📁 Expand All';
+        }
+    </script>
 </body>
 </html> 
