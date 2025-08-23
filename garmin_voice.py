@@ -1095,19 +1095,22 @@ class GarminVoiceManager:
             # If aligned recording is active, finalize it
             if self.aligned_sink:
                 try:
-                    # Get the filename before cleanup
-                    aligned_filename = getattr(self.aligned_sink, 'current_filename', None)
-                    if not aligned_filename:
-                        # Generate a filename based on timestamp
-                        timestamp = time.strftime('%d.%m.%y_%H-%M-%S', time.localtime())
-                        aligned_filename = f"aligned_recording_{timestamp}.mp3"
+                    # Get the session timestamp for filename generation
+                    session_timestamp = self.aligned_sink.session_start_timestamp
                     
+                    # Cleanup the sink first to get compression info
                     self.aligned_sink.cleanup()
                     logger.info("✅ Aligned recording saved and finalized")
+                    
+                    # Generate the correct filename based on session start time
+                    aligned_filename = f"{session_timestamp}.mp3"
                     
                     # Track last saved file info
                     self.last_saved_filename = aligned_filename
                     self.last_saved_timestamp = time.time()
+                    
+                    # Store session timestamp for later use in get_recording_info
+                    self.last_session_timestamp = session_timestamp
                     
                     # Reset the sink for continued recording
                     self.aligned_sink = AlignedPerUserSink(ALIGNED_RECORDINGS_DIR, garmin_manager=self)
@@ -1378,11 +1381,56 @@ class GarminVoiceManager:
                 "aligned_session_duration_ms": (current_time - self.aligned_sink.session_start_time) * 1000 if self.aligned_sink.session_start_time else 0
             }
         
+        # Get actual file size and compression info if available
+        actual_file_size = 0
+        compressed_duration = None
+        
+        if hasattr(self, 'last_saved_filename') and self.last_saved_filename:
+            # Try to get actual file size from the saved file
+            try:
+                # Check garmin-output directory first (this is where files are copied for WebGUI)
+                garmin_output_file_path = os.path.join(OUTPUT_DIR, self.last_saved_filename)
+                if os.path.exists(garmin_output_file_path):
+                    actual_file_size = os.path.getsize(garmin_output_file_path)
+                    logger.debug(f"Found file in garmin-output: {garmin_output_file_path}, size: {actual_file_size}")
+                
+                # Try to get compression info from timeline file using last session timestamp
+                if hasattr(self, 'last_session_timestamp') and self.last_session_timestamp:
+                    timeline_path = os.path.join(ALIGNED_RECORDINGS_DIR, f"timeline_{self.last_session_timestamp}.json")
+                    if os.path.exists(timeline_path):
+                        try:
+                            with open(timeline_path, 'r') as f:
+                                timeline_data = json.load(f)
+                                if 'compression' in timeline_data and timeline_data['compression']['enabled']:
+                                    compressed_duration = timeline_data['compression']['compressed_duration_ms'] / 1000.0
+                                    logger.debug(f"Found compression info: {compressed_duration}s")
+                        except Exception as e:
+                            logger.debug(f"Could not read timeline file: {e}")
+                
+                # Fallback: check aligned recordings directory if not found in garmin-output
+                if actual_file_size == 0 and hasattr(self, 'last_session_timestamp') and self.last_session_timestamp:
+                    mixed_file_path = os.path.join(ALIGNED_RECORDINGS_DIR, f"{self.last_session_timestamp}.mp3")
+                    if os.path.exists(mixed_file_path):
+                        actual_file_size = os.path.getsize(mixed_file_path)
+                        logger.debug(f"Found file in aligned recordings: {mixed_file_path}, size: {actual_file_size}")
+                
+                # Additional fallback: try current aligned sink if available
+                elif actual_file_size == 0 and hasattr(self, 'aligned_sink') and self.aligned_sink and hasattr(self.aligned_sink, 'session_start_timestamp'):
+                    mixed_file_path = os.path.join(ALIGNED_RECORDINGS_DIR, f"{self.aligned_sink.session_start_timestamp}.mp3")
+                    if os.path.exists(mixed_file_path):
+                        actual_file_size = os.path.getsize(mixed_file_path)
+                        logger.debug(f"Found file in current aligned recordings: {mixed_file_path}, size: {actual_file_size}")
+                        
+            except Exception as e:
+                logger.debug(f"Could not get actual file size: {e}")
+        
         return {
             "recording_duration": recording_duration,
             "buffer_size": total_buffer_size,
+            "actual_file_size": actual_file_size,
             "active_users": active_users,
             "last_saved_filename": getattr(self, 'last_saved_filename', None),
             "last_saved_timestamp": getattr(self, 'last_saved_timestamp', None),
+            "compressed_duration": compressed_duration,
             **aligned_info
         }

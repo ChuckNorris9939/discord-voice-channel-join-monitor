@@ -1045,13 +1045,13 @@
                 // Start progress simulation
                 const progressInterval = simulateSaveProgress('save-progress');
                 
-                // Set a timeout for the save operation (30 seconds)
+                // Set a timeout for the save operation (5 minutes)
                 const saveTimeout = setTimeout(() => {
                     clearInterval(progressInterval);
                     completeProgressToast('save-progress', 'Save operation timed out. Please try again.', 'error');
                     updateStatusArea('Save operation timed out. Please try again.', 'error');
                     setTimeout(hideStatusArea, 5000);
-                }, 30000);
+                }, 300000);
                 
                 fetch('/garmin/save', { method: 'POST' })
                     .then(response => {

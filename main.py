@@ -2201,17 +2201,170 @@ async def save_garmin(ctx: commands.Context):
     try:
         health_data = garmin_manager.get_recording_health()
         
-        if health_data["connected"] and health_data["buffer_size"] > 0:
-            garmin_manager.save_recording()
-            await ctx.send("✅ Garmin voice recording saved successfully.")
-        else:
-            if not health_data["connected"]:
-                await ctx.send("❌ Not connected to any voice channel. Join a channel first with `!!garmin-start`")
+        if not health_data["connected"]:
+            await ctx.send("❌ Not connected to any voice channel. Join a channel first with `!!garmin-start`")
+            return
+            
+        if health_data["buffer_size"] <= 0:
+            await ctx.send("❌ No audio data to save. Start recording first with `!!garmin-start`")
+            return
+        
+        # Track start time for performance monitoring
+        start_time = time.time()
+        
+        # Try to use defer for slash commands, fallback to regular send
+        try:
+            await ctx.defer()
+            # This is a slash command - use followup
+            status_message = await ctx.followup.send("⏳ **Saving Garmin recording...**\n\n🔄 Processing audio data...")
+        except:
+            # This is a regular command or defer failed - use regular send
+            status_message = await ctx.send("⏳ **Saving Garmin recording...**\n\n🔄 Processing audio data...")
+        
+        try:
+            # Get recording info before saving
+            recording_info = garmin_manager.get_recording_info()
+            
+            # Update status with progress steps
+            progress_steps = [
+                "⏳ **Saving Garmin recording...**\n\n🔄 Processing audio data...",
+                "⏳ **Saving Garmin recording...**\n\n✅ Processing audio data...\n📊 Mixing audio tracks...",
+                "⏳ **Saving Garmin recording...**\n\n✅ Processing audio data...\n✅ Mixing audio tracks...\n💾 Writing to disk...",
+                "⏳ **Saving Garmin recording...**\n\n✅ Processing audio data...\n✅ Mixing audio tracks...\n✅ Writing to disk...\n🔒 Finalizing..."
+            ]
+            
+            # Show progress steps
+            for i, step in enumerate(progress_steps):
+                # Add progress bar
+                progress_bar = "█" * (i + 1) + "░" * (len(progress_steps) - i - 1)
+                progress_percent = ((i + 1) / len(progress_steps) * 100)
+                
+                # Calculate estimated time remaining
+                remaining_steps = len(progress_steps) - i - 1
+                estimated_seconds = remaining_steps * 0.8
+                time_estimate = f"⏱️ Est. {estimated_seconds:.1f}s remaining"
+                
+                step_with_progress = step + f"\n\n📊 Progress: [{progress_bar}] {progress_percent:.0f}%\n{time_estimate}"
+                
+                await status_message.edit(content=step_with_progress)
+                if i < len(progress_steps) - 1:  # Don't sleep after the last step
+                    await asyncio.sleep(0.8)  # Show each step for 800ms
+            
+            # Save the recording in a thread to avoid blocking
+            loop = asyncio.get_event_loop()
+            
+            # Add timeout for the save operation (max 5 minutes)
+            try:
+                await asyncio.wait_for(
+                    loop.run_in_executor(None, garmin_manager.save_recording),
+                    timeout=300.0
+                )
+            except asyncio.TimeoutError:
+                # Handle timeout gracefully
+                timeout_message = "⏰ **Save operation timed out**\n\n⚠️ The save operation is taking longer than expected.\n🔄 This might happen with very long recordings.\n💡 The recording might still be saved - check the output directory.\n\n**Status:** Processing continues in background..."
+                await status_message.edit(content=timeout_message)
+                return
+            
+            # Small delay to show the final progress step
+            await asyncio.sleep(0.5)
+            
+            # Get updated info after saving
+            updated_info = garmin_manager.get_recording_info()
+            
+            # Calculate total time taken
+            total_time = time.time() - start_time
+            
+            # Prepare completion message with better formatting
+            completion_text = "✅ **Garmin recording saved successfully!**\n\n"
+            
+            # Add filename and duration if available
+            if updated_info and "last_saved_filename" in updated_info:
+                completion_text += f"📁 **File:** `{updated_info['last_saved_filename']}`\n"
+            
+            if recording_info and "recording_duration" in recording_info:
+                duration_seconds = recording_info["recording_duration"]
+                if duration_seconds > 0:
+                    minutes = int(duration_seconds // 60)
+                    seconds = int(duration_seconds % 60)
+                    
+                    # Add compressed duration if available
+                    if recording_info.get("compressed_duration"):
+                        compressed_seconds = recording_info["compressed_duration"]
+                        compressed_minutes = int(compressed_seconds // 60)
+                        compressed_secs = int(compressed_seconds % 60)
+                        completion_text += f"⏱️ **Duration:** {minutes}m {seconds}s (compressed: {compressed_minutes:02d}:{compressed_secs:02d})\n"
+                    else:
+                        completion_text += f"⏱️ **Duration:** {minutes}m {seconds}s\n"
+            
+            if health_data.get("active_users", 0) > 0:
+                completion_text += f"👥 **Users recorded:** {health_data['active_users']}\n"
+            
+            # Add actual file size if available
+            if updated_info and "actual_file_size" in updated_info and updated_info["actual_file_size"] > 0:
+                actual_size_mb = updated_info["actual_file_size"] / (1024 * 1024)
+                completion_text += f"💾 **File size:** {actual_size_mb:.2f} MB\n"
+            elif updated_info and "buffer_size" in updated_info:
+                # Fallback to buffer size estimate
+                buffer_mb = updated_info["buffer_size"] / (1024 * 1024)
+                completion_text += f"💾 **Estimated size:** {buffer_mb:.2f} MB\n"
+            
+            # Add total processing time
+            completion_text += f"⚡ **Processing time:** {total_time:.1f}s\n"
+            
+            completion_text += "\n🎉 **Recording saved and ready for use!**"
+            
+            # Update the message with completion info
+            await status_message.edit(content=completion_text)
+            
+            # Log the successful save operation with timing
+            logger.info(f"✅ Discord command save completed successfully in {total_time:.1f}s")
+            
+        except Exception as e:
+            logger.error(f"Error during save_recording in command: {e}", exc_info=True)
+            
+            # Calculate time taken even for errors
+            error_time = time.time() - start_time
+            
+            # Create a more helpful error message
+            error_text = f"❌ **Error saving recording**\n\n"
+            error_text += "⚠️ An error occurred during the save operation.\n"
+            error_text += "🔍 Check the logs for technical details.\n\n"
+            
+            # Add specific error information
+            if "disk" in str(e).lower() or "space" in str(e).lower():
+                error_text += "💾 **Possible cause:** Disk space full or permission issues\n"
+                error_text += "💡 **Solution:** Check available disk space and file permissions\n"
+            elif "audio" in str(e).lower() or "format" in str(e).lower():
+                error_text += "🎵 **Possible cause:** Audio format or processing issues\n"
+                error_text += "💡 **Solution:** Check audio data integrity\n"
             else:
-                await ctx.send("❌ No audio data to save. Start recording first with `!!garmin-start`")
+                error_text += f"🔧 **Error details:** {str(e)}\n"
+                error_text += "💡 **Solution:** Check logs and try again\n"
+            
+            error_text += f"\n⏱️ **Time taken:** {error_time:.1f}s\n"
+            error_text += "🔄 **You can try the save command again.**"
+            
+            await status_message.edit(content=error_text)
+            
     except Exception as e:
         logger.error(f"Error in garmin_save command: {e}", exc_info=True)
-        await ctx.send("❌ Error saving recording. Check logs for details.")
+        
+        # Send error message using appropriate method
+        try:
+            if ctx.interaction:
+                # For slash commands, try followup if already deferred, otherwise respond
+                try:
+                    await ctx.followup.send("❌ Error saving recording. Check logs for details.")
+                except:
+                    try:
+                        await ctx.send("❌ Error saving recording. Check logs for details.")
+                    except:
+                        pass
+            else:
+                # For regular commands
+                await ctx.send("❌ Error saving recording. Check logs for details.")
+        except:
+            pass
 
 @bot.hybrid_command(name="garmin-health", description="Shows the health status of the Garmin voice recording system.")
 @commands.guild_only()
