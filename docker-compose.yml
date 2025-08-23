@@ -7,10 +7,7 @@ services:
     env_file:
       - ./.env
     ports:
-      - 8008:8080
+      - 8083:8083
     volumes:
-      - ./data/assets/images/:/images/
       - ./data/:/app/data/
-      - ./data/assets/models/:/app/vosk-model/
-      - ./data/garmin-output/:/app/garmin-output/
 

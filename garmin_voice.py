@@ -61,7 +61,7 @@ WINDOW_BYTES_MAX: Final[int] = int(RECOGNITION_WINDOW_S * SAMPLERATE * CHANNELS 
 WINDOW_BYTES_MIN: Final[int] = int(MIN_WINDOW_S * SAMPLERATE * CHANNELS * BYTES_PER_SAMPLE)
 
 # Path configuration
-SOUNDS_DIR = os.path.join(SCRIPT_DIR, "assets", "sounds")
+SOUNDS_DIR = os.path.join(SCRIPT_DIR, "data", "assets", "sounds")
 TEMP_DIR = os.path.join(SCRIPT_DIR, "data", "temp")
 OUTPUT_DIR: Final[str] = os.path.join(SCRIPT_DIR, "data", "garmin-output")
 ALIGNED_RECORDINGS_DIR: Final[str] = os.path.join(SCRIPT_DIR, "data", "aligned-recordings")

@@ -37,3 +37,4 @@ multidict
 yarl
 vosk
 python-dotenv
+pydub

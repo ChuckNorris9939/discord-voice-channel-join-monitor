@@ -20,8 +20,18 @@ COPY requirements.txt .
 # Install python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of the application code
-COPY . .
+# Copy Python source files
+COPY *.py .
+
+# Copy templates directory
+COPY templates/ templates/
+
+# Copy data assets (images and sounds)
+COPY data/assets/images/ data/assets/images/
+COPY data/assets/sounds/ data/assets/sounds/
+
+# Create necessary directories for volume mounts
+RUN mkdir -p data/assets/models data/logs data/garmin-output data/aligned-recordings data/temp
 
 # Expose port for the web server (matching the default in main.py)
 EXPOSE 8080

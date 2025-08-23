@@ -795,7 +795,7 @@ LOG_CHANNEL_ID = 0
 BOT_AUDIT_ID = 0
 HIDDEN_CHANNELS = []
 USERS: List[str] = []
-IMAGES_FOLDER = os.path.join(SCRIPT_DIR, "assets", "images")
+IMAGES_FOLDER = os.path.join(SCRIPT_DIR, "data", "assets", "images")
 GARMIN_AUTO_JOIN_ENABLED = False
 GARMIN_AUTO_JOIN_CHANNELS = []
 
