@@ -62,8 +62,8 @@ class TestMain(unittest.TestCase):
 
         # Set necessary config values in main for tests
         main.DISCORD_SERVER_ID = 123456789 # Dummy server ID
-        main.LOG_CHANNEL_ID = 987654321 # Dummy log channel ID
-        main.BOT_AUDIT_ID = 987654322 # Dummy audit ID
+        main.JOIN_LOGS_ID = 987654321 # Dummy join logs ID
+main.BOT_LOGS_ID = 987654322 # Dummy bot logs ID
         main.HIDDEN_CHANNELS = [111, 222] # Dummy hidden channels
         main.USERS = [] # Reset users list
 

@@ -287,15 +287,20 @@ def settings_route():
             save_setting(DB_KEY_HIDDEN_CHANNELS, hidden_channels_str)
             logger.info(f"Saved {DB_KEY_HIDDEN_CHANNELS}: {hidden_channels_str}")
 
-            # Handle LOG_CHANNEL_ID
-            log_channel_id_str = request.form.get('log_channel_id', '')
-            save_setting(DB_KEY_LOG_CHANNEL_ID, log_channel_id_str if log_channel_id_str else "None")
-            logger.info(f"Saved {DB_KEY_LOG_CHANNEL_ID}: {log_channel_id_str}")
+            # Handle JOIN_LOGS_ID
+            join_logs_id_str = request.form.get('join_logs_id', '')
+            save_setting(DB_KEY_JOIN_LOGS_ID, join_logs_id_str if join_logs_id_str else "None")
+            logger.info(f"Saved {DB_KEY_JOIN_LOGS_ID}: {join_logs_id_str}")
             
-            # Handle BOT_AUDIT_ID
-            bot_audit_id_str = request.form.get('bot_audit_id', '')
-            save_setting(DB_KEY_BOT_AUDIT_ID, bot_audit_id_str if bot_audit_id_str else "None")
-            logger.info(f"Saved {DB_KEY_BOT_AUDIT_ID}: {bot_audit_id_str}")
+            # Handle BOT_LOGS_ID
+            bot_logs_id_str = request.form.get('bot_logs_id', '')
+            save_setting(DB_KEY_BOT_LOGS_ID, bot_logs_id_str if bot_logs_id_str else "None")
+            logger.info(f"Saved {DB_KEY_BOT_LOGS_ID}: {bot_logs_id_str}")
+
+            # Handle TESTING_MODE_ID
+            testing_mode_id_str = request.form.get('testing_mode_id', '')
+            save_setting(DB_KEY_TESTING_MODE_ID, testing_mode_id_str if testing_mode_id_str else "None")
+            logger.info(f"Saved {DB_KEY_TESTING_MODE_ID}: {testing_mode_id_str}")
 
             # Handle TECHSUPPORT_CHANNEL_ID
             techsupport_channel_id_str = request.form.get('techsupport_channel_id', '')
@@ -358,11 +363,11 @@ def settings_route():
             cfg.apply_discord_log_level()
             
             if cfg.TESTING:
-                logger.info(f"Settings Route - TESTING MODE ACTIVE: Overriding LOG_CHANNEL_ID and BOT_AUDIT_ID to {TESTING_CHANNEL_ID}.")
-                cfg.LOG_CHANNEL_ID = TESTING_CHANNEL_ID
-                cfg.BOT_AUDIT_ID = TESTING_CHANNEL_ID
+                logger.info(f"Settings Route - TESTING MODE ACTIVE: Overriding JOIN_LOGS_ID and BOT_LOGS_ID to {TESTING_CHANNEL_ID}.")
+                cfg.JOIN_LOGS_ID = TESTING_CHANNEL_ID
+                cfg.BOT_LOGS_ID = TESTING_CHANNEL_ID
             else:
-                logger.info(f"Settings Route - TESTING MODE INACTIVE. LOG_CHANNEL_ID: {cfg.LOG_CHANNEL_ID}, BOT_AUDIT_ID: {cfg.BOT_AUDIT_ID}.")
+                logger.info(f"Settings Route - TESTING MODE INACTIVE. JOIN_LOGS_ID: {cfg.JOIN_LOGS_ID}, BOT_LOGS_ID: {cfg.BOT_LOGS_ID}.")
 
             message = "Settings saved successfully. Note: Some changes may require a bot restart to take full effect."
 
@@ -439,8 +444,9 @@ def settings_route():
 
     current_settings_display['APP_TESTING_MODE'] = str(cfg.TESTING).lower()
     current_settings_display['HIDDEN_CHANNELS'] = ','.join(map(str, cfg.HIDDEN_CHANNELS)) if cfg.HIDDEN_CHANNELS else ''
-    current_settings_display['LOG_CHANNEL_ID'] = str(cfg.LOG_CHANNEL_ID) if cfg.LOG_CHANNEL_ID is not None else ''
-    current_settings_display['BOT_AUDIT_ID'] = str(cfg.BOT_AUDIT_ID) if cfg.BOT_AUDIT_ID is not None else ''
+    current_settings_display['JOIN_LOGS_ID'] = str(cfg.JOIN_LOGS_ID) if cfg.JOIN_LOGS_ID is not None else ''
+    current_settings_display['BOT_LOGS_ID'] = str(cfg.BOT_LOGS_ID) if cfg.BOT_LOGS_ID is not None else ''
+    current_settings_display['TESTING_MODE_ID'] = str(cfg.TESTING_MODE_ID) if cfg.TESTING_MODE_ID is not None else ''
     current_settings_display['TECHSUPPORT_CHANNEL_ID'] = str(cfg.TECHSUPPORT_CHANNEL_ID) if cfg.TECHSUPPORT_CHANNEL_ID is not None else ''
     current_settings_display['AFK_CHANNEL_ID'] = str(cfg.AFK_CHANNEL_ID) if cfg.AFK_CHANNEL_ID is not None else ''
     current_settings_display['PURGE_OLDER_THAN_DAYS'] = str(cfg.PURGE_OLDER_THAN_DAYS)
@@ -795,8 +801,8 @@ TESTING_CHANNEL_ID = 1376227809474908253 # User-provided ID for testing channel
 
 # Global variables to be populated by config_loader
 TESTING = False
-LOG_CHANNEL_ID = 0
-BOT_AUDIT_ID = 0
+JOIN_LOGS_ID = 0
+BOT_LOGS_ID = 0
 HIDDEN_CHANNELS = []
 USERS: List[str] = []
 IMAGES_FOLDER = os.path.join(SCRIPT_DIR, "data", "assets", "images")
@@ -1168,16 +1174,16 @@ def update_thread_reminder_sent(thread_id: int, timestamp_iso: str):
 
 # --------- Helper Functions for bot_settings Table ---------
 import config_loader as cfg
-from config_loader import save_setting, DB_KEY_APP_TESTING_MODE, DB_KEY_HIDDEN_CHANNELS, DB_KEY_LOG_CHANNEL_ID, DB_KEY_BOT_AUDIT_ID, DB_KEY_TECHSUPPORT_CHANNEL_ID, DB_KEY_AFK_CHANNEL_ID, DB_KEY_PURGE_OLDER_THAN_DAYS, DB_KEY_JOIN_MESSAGE_TIMER_ENABLED, DB_KEY_JOIN_MESSAGE_TIMER_MINUTES, DB_KEY_AFK_TIMER_MINUTES, DB_KEY_STT_ENABLED, DB_KEY_STT_ENGINE, DB_KEY_VOSK_MODEL_PATH, DB_KEY_GARMIN_AUTO_JOIN_ENABLED, DB_KEY_GARMIN_AUTO_JOIN_CHANNELS, DB_KEY_GARMIN_RECORD_SECONDS, DB_KEY_GARMIN_MAX_RECORDING_DURATION, DB_KEY_GARMIN_STT_OUTPUT_ENABLED, DB_KEY_LOG_LEVEL, DB_KEY_DISCORD_LOG_LEVEL, DB_KEY_CLEANUP_ALIGNED_RECORDINGS_HOURS, DB_KEY_CLEANUP_GARMIN_OUTPUT_HOURS
+from config_loader import save_setting, DB_KEY_APP_TESTING_MODE, DB_KEY_HIDDEN_CHANNELS, DB_KEY_JOIN_LOGS_ID, DB_KEY_BOT_LOGS_ID, DB_KEY_TESTING_MODE_ID, DB_KEY_TECHSUPPORT_CHANNEL_ID, DB_KEY_AFK_CHANNEL_ID, DB_KEY_PURGE_OLDER_THAN_DAYS, DB_KEY_JOIN_MESSAGE_TIMER_ENABLED, DB_KEY_JOIN_MESSAGE_TIMER_MINUTES, DB_KEY_AFK_TIMER_MINUTES, DB_KEY_STT_ENABLED, DB_KEY_STT_ENGINE, DB_KEY_VOSK_MODEL_PATH, DB_KEY_GARMIN_AUTO_JOIN_ENABLED, DB_KEY_GARMIN_AUTO_JOIN_CHANNELS, DB_KEY_GARMIN_RECORD_SECONDS, DB_KEY_GARMIN_MAX_RECORDING_DURATION, DB_KEY_GARMIN_STT_OUTPUT_ENABLED, DB_KEY_LOG_LEVEL, DB_KEY_DISCORD_LOG_LEVEL, DB_KEY_CLEANUP_ALIGNED_RECORDINGS_HOURS, DB_KEY_CLEANUP_GARMIN_OUTPUT_HOURS
 
 
 
 async def send_log_message(msg: str, embed: Optional[Embed] = None, target_channel_ids: Optional[List[int]] = None):
     if target_channel_ids is None:
-        if cfg.BOT_AUDIT_ID:
-            target_channel_ids = [cfg.BOT_AUDIT_ID]
+        if cfg.BOT_LOGS_ID:
+            target_channel_ids = [cfg.BOT_LOGS_ID]
         else:
-            logger.error(f"send_log_message: BOT_AUDIT_ID ist nicht konfiguriert. Nachricht kann nicht gesendet werden: {msg}")
+            logger.error(f"send_log_message: BOT_LOGS_ID ist nicht konfiguriert. Nachricht kann nicht gesendet werden: {msg}")
             return
 
     if not target_channel_ids:
@@ -1247,10 +1253,10 @@ async def close_support_thread(thread: Thread, trigger_source: str, set_tag: boo
                         log_actions.append("Tag gesetzt")
                     except discord.HTTPException as e:
                         logger.error(f"Fehler beim Setzen des Tags für Thread '{thread.name}': {e}", exc_info=True)
-                        await send_log_message(f"⚠️ Fehler beim Setzen des Tags '{CLOSED_TAG_NAME}' für Thread '{thread.name}': {e.text}", target_channel_ids=[cfg.BOT_AUDIT_ID])
+                        await send_log_message(f"⚠️ Fehler beim Setzen des Tags '{CLOSED_TAG_NAME}' für Thread '{thread.name}': {e.text}", target_channel_ids=[cfg.BOT_LOGS_ID])
             else:
                 logger.warning(f"Tag '{CLOSED_TAG_NAME}' wurde im Forum '{thread.parent.name}' nicht gefunden.")
-                await send_log_message(f"⚠️ Warnung: Tag '{CLOSED_TAG_NAME}' im Forum '{thread.parent.name}' nicht gefunden für Thread '{thread.name}'.", target_channel_ids=[cfg.BOT_AUDIT_ID])
+                await send_log_message(f"⚠️ Warnung: Tag '{CLOSED_TAG_NAME}' im Forum '{thread.parent.name}' nicht gefunden für Thread '{thread.name}'.", target_channel_ids=[cfg.BOT_LOGS_ID])
 
         if actions_performed or not thread.archived:
             message_parts = ["🔒 Dieser Support-Thread wurde"]
@@ -1270,19 +1276,19 @@ async def close_support_thread(thread: Thread, trigger_source: str, set_tag: boo
         if log_actions:
             action_str = " und ".join(log_actions)
             logger.info(f"Thread '{thread.name}' wurde durch {trigger_source} {action_str}.")
-            await send_log_message(f"🧵 Thread '{thread.name}' (ID: {thread.id}) durch '{trigger_source}' {action_str}.", target_channel_ids=[cfg.BOT_AUDIT_ID])
+            await send_log_message(f"🧵 Thread '{thread.name}' (ID: {thread.id}) durch '{trigger_source}' {action_str}.", target_channel_ids=[cfg.BOT_LOGS_ID])
 
     except discord.Forbidden:
         err_msg = f"Fehler: Keine Berechtigung, den Thread '{thread.name}' zu bearbeiten (sperren/Tag/archivieren)."
         logger.error(err_msg)
-        await send_log_message(f"⚠️ {err_msg}", target_channel_ids=[cfg.BOT_AUDIT_ID])
+        await send_log_message(f"⚠️ {err_msg}", target_channel_ids=[cfg.BOT_LOGS_ID])
         try:
             await thread.send(f"Fehler: Ich habe nicht die nötigen Berechtigungen, um diesen Thread zu sperren, den Tag zu setzen oder zu archivieren. Bitte überprüfe meine Rollen und Berechtigungen im Kanal '{thread.parent.name}'.")
         except Exception:
             pass
     except Exception as e:
         logger.error(f"Generischer Fehler beim Schließen des Threads '{thread.name}': {e}", exc_info=True)
-        await send_log_message(f"⚠️ Fehler beim Schließen des Threads '{thread.name}' (ID: {thread.id}): {e}", target_channel_ids=[cfg.BOT_AUDIT_ID])
+        await send_log_message(f"⚠️ Fehler beim Schließen des Threads '{thread.name}' (ID: {thread.id}): {e}", target_channel_ids=[cfg.BOT_LOGS_ID])
 
 @bot.event
 async def on_ready():
@@ -1292,14 +1298,14 @@ async def on_ready():
     if not os.path.exists(IMAGES_FOLDER):
         os.makedirs(IMAGES_FOLDER)
         logger.info(f"Ordner '{IMAGES_FOLDER}' wurde erstellt. Bitte füge Bilder hinzu.")
-        await send_log_message(f"⚠️ Ordner '{IMAGES_FOLDER}' wurde erstellt. Bitte Bilder für den `delete`-Befehl hinzufügen.", target_channel_ids=[cfg.BOT_AUDIT_ID])
+        await send_log_message(f"⚠️ Ordner '{IMAGES_FOLDER}' wurde erstellt. Bitte Bilder für den `delete`-Befehl hinzufügen.", target_channel_ids=[cfg.BOT_LOGS_ID])
 
     threading.Thread(target=run_flask, daemon=True).start()
     logger.info("Flask-Server-Thread gestartet für Health Checks.")
 
     log_channel_names_to_check = {}
-    if cfg.LOG_CHANNEL_ID: log_channel_names_to_check[cfg.LOG_CHANNEL_ID] = "Primär-Log"
-    if cfg.BOT_AUDIT_ID: log_channel_names_to_check[cfg.BOT_AUDIT_ID] = "Audit-Log"
+    if cfg.JOIN_LOGS_ID: log_channel_names_to_check[cfg.JOIN_LOGS_ID] = "Primär-Log"
+    if cfg.BOT_LOGS_ID: log_channel_names_to_check[cfg.BOT_LOGS_ID] = "Audit-Log"
 
     for cid, cname in log_channel_names_to_check.items():
         try:
@@ -1325,19 +1331,19 @@ async def on_ready():
         else:
             await send_log_message(
                 f"✅ Bot version {BOT_VERSION} gestartet und einsatzbereit.",
-                target_channel_ids=[cfg.LOG_CHANNEL_ID, cfg.BOT_AUDIT_ID]
+                target_channel_ids=[cfg.JOIN_LOGS_ID, cfg.BOT_LOGS_ID]
             )
         sync_info_msg = f"{num_synced} Befehle global synchronisiert: {command_names}"
         await send_log_message(
             f"ℹ️ {sync_info_msg}",
-            target_channel_ids=[cfg.BOT_AUDIT_ID]
+            target_channel_ids=[cfg.BOT_LOGS_ID]
         )
 
     except Exception as e:
         logger.error(f"Fehler beim Synchronisieren der Befehle: {e}", exc_info=True)
         await send_log_message(
             f"⚠️ Bot gestartet, aber Fehler beim Synchronisieren der Befehle: {e}",
-            target_channel_ids=[cfg.LOG_CHANNEL_ID, cfg.BOT_AUDIT_ID]
+            target_channel_ids=[cfg.JOIN_LOGS_ID, cfg.BOT_LOGS_ID]
         )
 
     # Initialize garmin_manager after bot is ready
@@ -1398,13 +1404,13 @@ async def on_ready():
 
     # Re-evaluate TESTING-dependent channel IDs after loading from DB
     if cfg.TESTING:
-        logger.info(f"TESTING MODE ACTIVE (from DB or ENV): Overriding LOG_CHANNEL_ID and BOT_AUDIT_ID to {TESTING_CHANNEL_ID}.")
-        cfg.LOG_CHANNEL_ID = TESTING_CHANNEL_ID
-        cfg.BOT_AUDIT_ID = TESTING_CHANNEL_ID
+        logger.info(f"TESTING MODE ACTIVE (from DB or ENV): Overriding JOIN_LOGS_ID and BOT_LOGS_ID to {TESTING_CHANNEL_ID}.")
+        cfg.JOIN_LOGS_ID = TESTING_CHANNEL_ID
+        cfg.BOT_LOGS_ID = TESTING_CHANNEL_ID
     else:
         # If not testing, ensure the original values are loaded from the config
         cfg.load_all_settings()
-        logger.info(f"TESTING MODE INACTIVE (from DB or ENV). LOG_CHANNEL_ID: {cfg.LOG_CHANNEL_ID}, BOT_AUDIT_ID: {cfg.BOT_AUDIT_ID}.")
+        logger.info(f"TESTING MODE INACTIVE (from DB or ENV). JOIN_LOGS_ID: {cfg.JOIN_LOGS_ID}, BOT_LOGS_ID: {cfg.BOT_LOGS_ID}.")
     
     # Scan existing threads for activity before fully starting other tasks
     await scan_existing_threads() 
@@ -1415,7 +1421,7 @@ async def on_ready():
     USERS = await get_user_list()
     formatted_users = [f"***{u}***" for u in USERS]
     user_list_msg = f"👥 {len(USERS)} Nutzer online (beim Start): {', '.join(formatted_users) if USERS else 'keine'}"
-    await send_log_message(user_list_msg, target_channel_ids=[cfg.LOG_CHANNEL_ID])
+    await send_log_message(user_list_msg, target_channel_ids=[cfg.JOIN_LOGS_ID])
     logger.info(f"Sent initial user list to log channel: {user_list_msg}")
 
     # Check for existing users in monitored channels and auto-join if enabled
@@ -1443,14 +1449,14 @@ async def on_ready():
         if isinstance(tech_support_forum, discord.ForumChannel):
             closed_tag_obj_on_ready = await get_forum_tag_by_name(tech_support_forum, CLOSED_TAG_NAME)
             if not closed_tag_obj_on_ready:
-                await send_log_message(f"⚠️ WICHTIG: Der Tag '{CLOSED_TAG_NAME}' konnte im Forum '{tech_support_forum.name}' (ID: {tech_support_forum.id}) nicht gefunden werden. Die automatische Schließung per Tag funktioniert nicht korrekt.", target_channel_ids=[cfg.BOT_AUDIT_ID])
+                await send_log_message(f"⚠️ WICHTIG: Der Tag '{CLOSED_TAG_NAME}' konnte im Forum '{tech_support_forum.name}' (ID: {tech_support_forum.id}) nicht gefunden werden. Die automatische Schließung per Tag funktioniert nicht korrekt.", target_channel_ids=[cfg.BOT_LOGS_ID])
         elif tech_support_forum:
-            await send_log_message(f"⚠️ Tech-Support-Kanal {cfg.TECHSUPPORT_CHANNEL_ID} ('{tech_support_forum.name}') ist kein Forum-Kanal.", target_channel_ids=[cfg.BOT_AUDIT_ID])
+            await send_log_message(f"⚠️ Tech-Support-Kanal {cfg.TECHSUPPORT_CHANNEL_ID} ('{tech_support_forum.name}') ist kein Forum-Kanal.", target_channel_ids=[cfg.BOT_LOGS_ID])
         else:
-            await send_log_message(f"⚠️ Tech-Support-Kanal {cfg.TECHSUPPORT_CHANNEL_ID} konnte nicht gefunden werden.", target_channel_ids=[cfg.BOT_AUDIT_ID])
+            await send_log_message(f"⚠️ Tech-Support-Kanal {cfg.TECHSUPPORT_CHANNEL_ID} konnte nicht gefunden werden.", target_channel_ids=[cfg.BOT_LOGS_ID])
     except Exception as e:
         logger.error(f"Fehler bei der initialen Prüfung des Tech-Support-Forums (on_ready): {e}", exc_info=True)
-        await send_log_message(f"⚠️ Fehler bei der initialen Prüfung des Tech-Support-Forums (on_ready): {e}", target_channel_ids=[cfg.BOT_AUDIT_ID])
+        await send_log_message(f"⚠️ Fehler bei der initialen Prüfung des Tech-Support-Forums (on_ready): {e}", target_channel_ids=[cfg.BOT_LOGS_ID])
 
 
 async def get_user_list():
@@ -1496,7 +1502,7 @@ async def close(ctx: commands.Context):
     closed_tag_object = await get_forum_tag_by_name(forum_channel, CLOSED_TAG_NAME)
     if not closed_tag_object:
         await ctx.send(f"Warnung: Der Tag '{CLOSED_TAG_NAME}' wurde im Forum nicht gefunden. Der Thread wird gesperrt und archiviert, aber der Tag kann nicht gesetzt werden.", ephemeral=True)
-        await send_log_message(f"⚠️ Warnung bei Befehl `close` in Thread '{thread.name}': Tag '{CLOSED_TAG_NAME}' im Forum nicht gefunden.", target_channel_ids=[cfg.BOT_AUDIT_ID])
+        await send_log_message(f"⚠️ Warnung bei Befehl `close` in Thread '{thread.name}': Tag '{CLOSED_TAG_NAME}' im Forum nicht gefunden.", target_channel_ids=[cfg.BOT_LOGS_ID])
     
     has_closed_tag = any(tag.id == closed_tag_object.id for tag in thread.applied_tags) if closed_tag_object else False
     
@@ -1509,9 +1515,9 @@ async def close(ctx: commands.Context):
         await ctx.send("Dieser Thread ist bereits gesperrt und getaggt, wird nun zusätzlich archiviert.", ephemeral=True)
         try:
             await thread.edit(archived=True)
-            await send_log_message(f"ℹ️ Thread '{thread.name}' war gesperrt/getagged, aber nicht archiviert. Jetzt archiviert nach `close`-Befehl von {ctx.author.mention}.", target_channel_ids=[cfg.BOT_AUDIT_ID])
+            await send_log_message(f"ℹ️ Thread '{thread.name}' war gesperrt/getagged, aber nicht archiviert. Jetzt archiviert nach `close`-Befehl von {ctx.author.mention}.", target_channel_ids=[cfg.BOT_LOGS_ID])
         except Exception as e:
-            await send_log_message(f"⚠️ Fehler beim erneuten Archivieren von Thread '{thread.name}': {e}", target_channel_ids=[cfg.BOT_AUDIT_ID])
+            await send_log_message(f"⚠️ Fehler beim erneuten Archivieren von Thread '{thread.name}': {e}", target_channel_ids=[cfg.BOT_LOGS_ID])
         return
 
     trigger_name = ctx.author.mention if ctx.author else "einem unbekannten Benutzer"
@@ -1540,7 +1546,7 @@ async def delete(ctx: commands.Context, anzahl: int):
         available_images = [f for f in os.listdir(IMAGES_FOLDER) if os.path.isfile(os.path.join(IMAGES_FOLDER, f))]
         if not available_images:
             await ctx.send(f"Keine Bilder im Ordner '{IMAGES_FOLDER}' gefunden. Bitte füge welche hinzu.", ephemeral=True)
-            await send_log_message(f"⚠️ Versuchter `delete`-Befehl, aber keine Bilder in '{IMAGES_FOLDER}' durch {ctx.author.mention} in #{target_channel.name}.", target_channel_ids=[cfg.BOT_AUDIT_ID])
+            await send_log_message(f"⚠️ Versuchter `delete`-Befehl, aber keine Bilder in '{IMAGES_FOLDER}' durch {ctx.author.mention} in #{target_channel.name}.", target_channel_ids=[cfg.BOT_LOGS_ID])
             return
         chosen_image_name = random.choice(available_images)
         image_path = os.path.join(IMAGES_FOLDER, chosen_image_name)
@@ -1548,11 +1554,11 @@ async def delete(ctx: commands.Context, anzahl: int):
         image_name_for_embed = chosen_image_name
     except FileNotFoundError:
         await ctx.send(f"Fehler: Der Bilderordner '{IMAGES_FOLDER}' wurde nicht gefunden.", ephemeral=True)
-        await send_log_message(f"⚠️ Bilderordner '{IMAGES_FOLDER}' nicht gefunden bei `delete`-Befehl durch {ctx.author.mention} in #{target_channel.name}.", target_channel_ids=[cfg.BOT_AUDIT_ID])
+        await send_log_message(f"⚠️ Bilderordner '{IMAGES_FOLDER}' nicht gefunden bei `delete`-Befehl durch {ctx.author.mention} in #{target_channel.name}.", target_channel_ids=[cfg.BOT_LOGS_ID])
         return
     except Exception as e:
         await ctx.send("Ein Fehler ist bei der Bildauswahl aufgetreten.", ephemeral=True)
-        await send_log_message(f"⚠️ Fehler bei Bildauswahl für `delete` durch {ctx.author.mention} in #{target_channel.name}: {e}", target_channel_ids=[cfg.BOT_AUDIT_ID])
+        await send_log_message(f"⚠️ Fehler bei Bildauswahl für `delete` durch {ctx.author.mention} in #{target_channel.name}: {e}", target_channel_ids=[cfg.BOT_LOGS_ID])
         return
 
     embed = Embed(description="Delet this", color=discord.Color.blue())
@@ -1575,13 +1581,13 @@ async def delete(ctx: commands.Context, anzahl: int):
         err_msg_user = "Ich habe keine Berechtigung, Nachrichten oder Bilder in diesem Kanal zu senden."
         if ctx.interaction: await ctx.followup.send(err_msg_user, ephemeral=True)
         else: await ctx.send(err_msg_user, delete_after=15)
-        await send_log_message(f"⚠️ Keine Sende-Berechtigung für `delete`-Info in #{target_channel.name} (Versuch von {ctx.author.mention}).", target_channel_ids=[cfg.BOT_AUDIT_ID])
+        await send_log_message(f"⚠️ Keine Sende-Berechtigung für `delete`-Info in #{target_channel.name} (Versuch von {ctx.author.mention}).", target_channel_ids=[cfg.BOT_LOGS_ID])
         return
     except Exception as e:
         err_msg_user = f"Ein Fehler ist beim Senden der Info-Nachricht aufgetreten: {e}"
         if ctx.interaction: await ctx.followup.send(err_msg_user, ephemeral=True)
         else: await ctx.send(err_msg_user, delete_after=15)
-        await send_log_message(f"⚠️ Fehler beim Senden der `delete`-Info in #{target_channel.name} (Versuch von {ctx.author.mention}): {e}", target_channel_ids=[cfg.BOT_AUDIT_ID])
+        await send_log_message(f"⚠️ Fehler beim Senden der `delete`-Info in #{target_channel.name} (Versuch von {ctx.author.mention}): {e}", target_channel_ids=[cfg.BOT_LOGS_ID])
         return
 
     deleted_messages_count = 0
@@ -1608,23 +1614,23 @@ async def delete(ctx: commands.Context, anzahl: int):
         deleted_messages_count = len(deleted_messages)
         
         log_msg_text = f"🗑️ {deleted_messages_count} Nachrichten in Kanal #{target_channel.name} (ID: {target_channel.id}) durch {ctx.author.mention} gelöscht (nach Info-Post)."
-        await send_log_message(log_msg_text, target_channel_ids=[cfg.BOT_AUDIT_ID])
+        await send_log_message(log_msg_text, target_channel_ids=[cfg.BOT_LOGS_ID])
         logger.info(f"{deleted_messages_count} Nachrichten in #{target_channel.name} durch {ctx.author} gelöscht.")
     except discord.Forbidden:
         err_msg_user = "Ich habe keine Berechtigung, Nachrichten in diesem Kanal zu löschen."
         if ctx.interaction: await ctx.followup.send(err_msg_user, ephemeral=True)
         else: await target_channel.send(f"{ctx.author.mention}, {err_msg_user}", delete_after=15)
-        await send_log_message(f"⚠️ Keine Lösch-Berechtigung in #{target_channel.name} (Versuch von {ctx.author.mention}).", target_channel_ids=[cfg.BOT_AUDIT_ID])
+        await send_log_message(f"⚠️ Keine Lösch-Berechtigung in #{target_channel.name} (Versuch von {ctx.author.mention}).", target_channel_ids=[cfg.BOT_LOGS_ID])
     except discord.HTTPException as e:
         err_msg_user = f"Ein Fehler ist beim Löschen der Nachrichten aufgetreten: {e.text if e.text else e.status}"
         if ctx.interaction: await ctx.followup.send(err_msg_user, ephemeral=True)
         else: await target_channel.send(f"{ctx.author.mention}, {err_msg_user}", delete_after=15)
-        await send_log_message(f"⚠️ Fehler beim Löschen in #{target_channel.name} (Versuch von {ctx.author.mention}): {e}", target_channel_ids=[cfg.BOT_AUDIT_ID])
+        await send_log_message(f"⚠️ Fehler beim Löschen in #{target_channel.name} (Versuch von {ctx.author.mention}): {e}", target_channel_ids=[cfg.BOT_LOGS_ID])
     except Exception as e:
         err_msg_user = f"Ein generischer Fehler ist beim Löschen der Nachrichten aufgetreten: {e}"
         if ctx.interaction: await ctx.followup.send(err_msg_user, ephemeral=True)
         else: await target_channel.send(f"{ctx.author.mention}, {err_msg_user}", delete_after=15)
-        await send_log_message(f"⚠️ Generischer Fehler beim Löschen in #{target_channel.name} (Versuch von {ctx.author.mention}): {e}", target_channel_ids=[cfg.BOT_AUDIT_ID])
+        await send_log_message(f"⚠️ Generischer Fehler beim Löschen in #{target_channel.name} (Versuch von {ctx.author.mention}): {e}", target_channel_ids=[cfg.BOT_LOGS_ID])
 
 
 @delete.error
@@ -1640,7 +1646,7 @@ async def delete_error(ctx: commands.Context, error: commands.CommandError):
     else:
         await ctx.send(f"Ein Fehler ist im `delete`-Befehl aufgetreten: {error}", ephemeral=True)
     logger.error(f"Fehler im delete-Befehl von {ctx.author}: {error}", exc_info=True) # exc_info für Traceback
-    await send_log_message(f"⚠️ Fehler im delete-Befehl von {ctx.author} in #{ctx.channel.name if ctx.channel else 'Unbekannter Kanal'}: {error}", target_channel_ids=[cfg.BOT_AUDIT_ID])
+    await send_log_message(f"⚠️ Fehler im delete-Befehl von {ctx.author} in #{ctx.channel.name if ctx.channel else 'Unbekannter Kanal'}: {error}", target_channel_ids=[cfg.BOT_LOGS_ID])
 
 
 @bot.hybrid_command(name="users", description="Listet alle Benutzer in den sichtbaren Voice-Channels auf.")
@@ -1745,7 +1751,7 @@ async def on_message(message: discord.Message):
         if not op_user_id:
             logger.error(f"Failed to determine OP user ID for thread {thread.id}. Cannot update activity.")
             # Optionally, send an audit log message about this failure
-            # await send_log_message(f"⚠️ Failed to determine OP user ID for thread {thread.id}. Activity not tracked.", target_channel_ids=[cfg.BOT_AUDIT_ID])
+            # await send_log_message(f"⚠️ Failed to determine OP user ID for thread {thread.id}. Activity not tracked.", target_channel_ids=[cfg.BOT_LOGS_ID])
             return
 
         last_message_user_id = message.author.id
@@ -1769,7 +1775,7 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
         return
 
     # Get target channel and hidden channels
-    target = TESTING_CHANNEL_ID if getattr(cfg, 'TESTING', False) else cfg.LOG_CHANNEL_ID
+    target = TESTING_CHANNEL_ID if getattr(cfg, 'TESTING', False) else cfg.JOIN_LOGS_ID
     hidden = set(getattr(cfg, 'HIDDEN_CHANNELS', []) or [])
     
     # Determine channel states
@@ -2036,7 +2042,7 @@ async def viewlogs_error(ctx: commands.Context, error: commands.CommandError):
     else:
         await ctx.send(f"Ein Fehler ist im `viewlogs`-Befehl aufgetreten: {error}", ephemeral=True)
         logger.error(f"Fehler im viewlogs-Befehl von {ctx.author}: {error}", exc_info=True)
-        await send_log_message(f"⚠️ Fehler im viewlogs-Befehl von {ctx.author} in #{ctx.channel.name if ctx.channel else 'Unbekannter Kanal'}: {error}", target_channel_ids=[cfg.BOT_AUDIT_ID])
+        await send_log_message(f"⚠️ Fehler im viewlogs-Befehl von {ctx.author} in #{ctx.channel.name if ctx.channel else 'Unbekannter Kanal'}: {error}", target_channel_ids=[cfg.BOT_LOGS_ID])
 
 # --- Voice State Update ---
 # Global Vars for summarized join messages
@@ -2076,7 +2082,7 @@ async def move_to_afk(member: discord.Member):
             try:
                 await member.move_to(afk_channel, reason=f"Benutzer war für {afk_timer_minutes} Minuten taubgeschaltet.")
                 logger.info(f"AFK Mover: Moved {member.name} to AFK channel after {afk_timer_minutes} minutes.")
-                await send_log_message(f"😴 {member.mention} wurde in den AFK-Kanal verschoben, da er/sie für {afk_timer_minutes} Minuten taubgeschaltet war.", target_channel_ids=[cfg.BOT_AUDIT_ID])
+                await send_log_message(f"😴 {member.mention} wurde in den AFK-Kanal verschoben, da er/sie für {afk_timer_minutes} Minuten taubgeschaltet war.", target_channel_ids=[cfg.BOT_LOGS_ID])
             except discord.Forbidden:
                 logger.error(f"AFK Mover: No permission to move {member.name} to AFK channel.")
             except Exception as e:
@@ -2094,7 +2100,7 @@ async def send_global_summarized_join_message():
         USERS = await get_user_list()
         online_users = [f"***{u}***" for u in USERS]
         message = f"👥 {len(online_users)} Nutzer online: {', '.join(online_users)}"
-        target = TESTING_CHANNEL_ID if getattr(cfg, 'TESTING', False) else cfg.LOG_CHANNEL_ID
+        target = TESTING_CHANNEL_ID if getattr(cfg, 'TESTING', False) else cfg.JOIN_LOGS_ID
         await send_log_message(message, target_channel_ids=[target])
         logger.info(f"Sent global summarized join message: {len(online_users)} users online")
     except Exception as e:
@@ -2582,14 +2588,14 @@ PURGE_OLDER_THAN_DAYS = 7 # Default value, will be configurable
 
 @tasks.loop(hours=24)
 async def msg_purge_task():
-    target_ids_task_log = [cfg.BOT_AUDIT_ID] if cfg.BOT_AUDIT_ID else []
+    target_ids_task_log = [cfg.BOT_LOGS_ID] if cfg.BOT_LOGS_ID else []
 
     purge_cutoff_date = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=cfg.PURGE_OLDER_THAN_DAYS)
 
     def is_older_than_cutoff(message):
         return message.created_at < purge_cutoff_date
 
-    channels_to_purge_ids = [cfg.LOG_CHANNEL_ID, cfg.BOT_AUDIT_ID]
+    channels_to_purge_ids = [cfg.JOIN_LOGS_ID, cfg.BOT_LOGS_ID]
 
     for channel_id in channels_to_purge_ids:
         if not channel_id:
@@ -2664,7 +2670,7 @@ async def on_thread_update(before: Thread, after: Thread):
         tag_added = closed_tag_lower in after_tags_lower and closed_tag_lower not in before_tags_lower
         
         if tag_added and (not after.locked or not after.archived):
-            await send_log_message(f"ℹ️ Thread '{after.name}' (ID: {after.id}) Tag '{CLOSED_TAG_NAME}' erhalten. Schließe...", target_channel_ids=[cfg.BOT_AUDIT_ID])
+            await send_log_message(f"ℹ️ Thread '{after.name}' (ID: {after.id}) Tag '{CLOSED_TAG_NAME}' erhalten. Schließe...", target_channel_ids=[cfg.BOT_LOGS_ID])
             await close_support_thread(after, f"Tag '{CLOSED_TAG_NAME}' manuell hinzugefügt", set_tag=False)
 
 
@@ -2700,8 +2706,8 @@ async def graceful_shutdown():
     
     logger.info("Sende 'Bot wird gestoppt...' Nachricht (falls möglich).")
     stop_message_targets = []
-    if cfg.LOG_CHANNEL_ID: stop_message_targets.append(cfg.LOG_CHANNEL_ID)
-    if cfg.BOT_AUDIT_ID: stop_message_targets.append(cfg.BOT_AUDIT_ID)
+    if cfg.JOIN_LOGS_ID: stop_message_targets.append(cfg.JOIN_LOGS_ID)
+    if cfg.BOT_LOGS_ID: stop_message_targets.append(cfg.BOT_LOGS_ID)
     
     if stop_message_targets:
         try:

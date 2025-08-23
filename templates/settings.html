@@ -536,16 +536,23 @@
                         <input type="text" name="hidden_channels" id="hidden_channels" value="{{ current_settings.get('HIDDEN_CHANNELS', '') }}">
                     </div>
 
-                    <!-- Log Channel ID -->
+                    <!-- Join Logs Channel ID -->
                     <div class="form-group">
-                        <label for="log_channel_id">Log Channel ID</label>
-                        <input type="text" name="log_channel_id" id="log_channel_id" value="{{ current_settings.get('LOG_CHANNEL_ID', '') }}">
+                        <label for="join_logs_id">Join Logs Channel ID</label>
+                        <input type="text" name="join_logs_id" id="join_logs_id" value="{{ current_settings.get('JOIN_LOGS_ID', '') }}">
                     </div>
                     
-                    <!-- Bot Audit ID -->
+                    <!-- Bot Logs Channel ID -->
                     <div class="form-group">
-                        <label for="bot_audit_id">Bot Audit ID</label>
-                        <input type="text" name="bot_audit_id" id="bot_audit_id" value="{{ current_settings.get('BOT_AUDIT_ID', '') }}">
+                        <label for="bot_logs_id">Bot Logs Channel ID</label>
+                        <input type="text" name="bot_logs_id" id="bot_logs_id" value="{{ current_settings.get('BOT_LOGS_ID', '') }}">
+                    </div>
+
+                    <!-- Testing Mode Channel ID -->
+                    <div class="form-group">
+                        <label for="testing_mode_id">Testing Mode Channel ID</label>
+                        <input type="text" name="testing_mode_id" id="testing_mode_id" value="{{ current_settings.get('TESTING_MODE_ID', '') }}">
+                        <p class="note">Channel ID for testing mode operations. Leave empty to disable.</p>
                     </div>
 
                     <!-- Tech Support Channel ID -->
