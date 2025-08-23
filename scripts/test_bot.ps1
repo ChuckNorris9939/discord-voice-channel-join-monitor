@@ -89,7 +89,7 @@ if (!(Test-Path ".env")) {
 }
 
 # Check if database exists and initialize if needed
-if (!(Test-Path "config\user_log.db")) {
+if (!(Test-Path "data\user_log.db")) {
     Write-Host "Initializing database..." -ForegroundColor Yellow
     python -c "import config_loader; config_loader.load_all_settings()" 2>$null
     if ($LASTEXITCODE -eq 0) {

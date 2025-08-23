@@ -126,23 +126,23 @@ This guide outlines the steps to manually test the thread inactivity monitoring 
 ## Testing Configurable Database Path
 
 1.  **Initial Startup:**
-    *   Before starting the bot for the first time with this change, ensure there is no `config` directory and no `user_log.db` in the root or `config` directory.
+    *   Before starting the bot for the first time with this change, ensure there is no `config` directory and no `user_log.db` in the root or `data` directory.
     *   Start the bot.
     *   **Expected:**
         *   A `config` directory is created in the bot's root directory.
-        *   The `user_log.db` file is created inside the `config` directory.
+        *   The `user_log.db` file is created inside the `data` directory.
         *   The bot operates normally, logging to the console that it's using/created the DB in the `config` directory (check for logs like "Ensured configuration directory 'config' exists." and database connection messages referencing the path).
 2.  **Data Persistence:**
     *   Perform some actions that would write to the database (e.g., trigger user join/leave for `user_joins`, let a support thread go through an inactivity cycle for `inactive_threads`, change a setting on the `/settings` page for `bot_settings`).
     *   Stop the bot.
     *   Restart the bot.
-    *   **Expected:** The bot should load the previous data from `/config/user_log.db`. Verify this by checking logs, the `/settings` page (settings should persist), or other relevant bot behavior (e.g., `viewlogs` command).
+    *   **Expected:** The bot should load the previous data from `/data/user_log.db`. Verify this by checking logs, the `/settings` page (settings should persist), or other relevant bot behavior (e.g., `viewlogs` command).
 3.  **Existing Database (Migration Test - Manual):**
     *   If you have an existing `user_log.db` in the root directory from a previous version:
-        *   Manually create a `config` directory.
-        *   Manually move the old `user_log.db` into the `config` directory.
+        *   Manually create a `data` directory.
+        *   Manually move the old `user_log.db` into the `data` directory.
         *   Start the new version of the bot.
-        *   **Expected:** The bot should pick up and use the existing database from `/config/user_log.db` seamlessly. All previous data should be intact and usable.
+        *   **Expected:** The bot should pick up and use the existing database from `/data/user_log.db` seamlessly. All previous data should be intact and usable.
 
 ---
 

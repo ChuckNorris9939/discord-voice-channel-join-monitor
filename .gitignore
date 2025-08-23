@@ -1,12 +1,11 @@
 .env
-config/
 data/
 __pycache__/
 *.pyc
-assets/models/
+data/assets/models/
 *.zip
 venv/
-assets/models/
+data/assets/models/
 discord/
 ffmpeg-master-latest-win64-gpl/
 opus/

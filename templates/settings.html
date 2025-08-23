@@ -444,11 +444,11 @@
                                     <option value="{{ model_path }}" {% if current_settings.get('VOSK_MODEL_PATH') == model_path %}selected{% endif %}>{{ model_path }}</option>
                                 {% endfor %}
                             {% else %}
-                                <option value="assets/models/vosk-model-de-0.21/" {% if current_settings.get('VOSK_MODEL_PATH') == 'assets/models/vosk-model-de-0.21/' %}selected{% endif %}>assets/models/vosk-model-de-0.21/ (default)</option>
+                                <option value="data/assets/models/vosk-model-small-de-0.15/" {% if current_settings.get('VOSK_MODEL_PATH') == 'data/assets/models/vosk-model-small-de-0.15/' %}selected{% endif %}>data/assets/models/vosk-model-small-de-0.15/ (default)</option>
                             {% endif %}
                         </select>
                         {% if not vosk_models %}
-                            <p class="note">No Vosk models found in assets/models/ directory. Please add models to enable this feature.</p>
+                            <p class="note">No Vosk models found in data/assets/models/ directory. Please add models to enable this feature.</p>
                         {% endif %}
                     </div>
                     <!-- Garmin Auto Join Enabled -->

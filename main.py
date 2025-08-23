@@ -32,9 +32,9 @@ except Exception as e:
 BOT_VERSION = "2.0.0"
 # Get the directory where this script is located
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG_DIR = os.path.join(SCRIPT_DIR, "config")
+DATA_DIR = os.path.join(SCRIPT_DIR, "data")
 DATABASE_NAME = "user_log.db"
-DATABASE_PATH = os.path.join(CONFIG_DIR, DATABASE_NAME)
+DATABASE_PATH = os.path.join(DATA_DIR, DATABASE_NAME)
 GARMIN_OUTPUT_DIR = os.path.join(SCRIPT_DIR, "data", "garmin-output")
 LOGS_DIR = os.path.join(SCRIPT_DIR, "data", "logs")
 
@@ -326,7 +326,7 @@ def settings_route():
             # Handle Garmin Recorder Settings
             save_setting(DB_KEY_STT_ENABLED, request.form.get('stt_enabled', 'true'))
             save_setting(DB_KEY_STT_ENGINE, request.form.get('stt_engine', 'google'))
-            save_setting(DB_KEY_VOSK_MODEL_PATH, request.form.get('vosk_model_path', 'assets/models/vosk-model-de-0.21/'))
+            save_setting(DB_KEY_VOSK_MODEL_PATH, request.form.get('vosk_model_path', 'data/assets/models/vosk-model-small-de-0.15/'))
             save_setting(DB_KEY_GARMIN_AUTO_JOIN_ENABLED, request.form.get('garmin_auto_join_enabled', 'true'))
             save_setting(DB_KEY_GARMIN_AUTO_JOIN_CHANNELS, request.form.get('garmin_auto_join_channels', '1080202313211326584,571755941725208616,492036470681632778'))
             save_setting(DB_KEY_GARMIN_RECORD_SECONDS, request.form.get('garmin_record_seconds', '600'))
@@ -373,10 +373,27 @@ def settings_route():
         current_dir = os.getcwd()
         logger.debug(f"Flask server working directory: {current_dir}")
         
-        vosk_model_dir = Path(os.path.join(SCRIPT_DIR, "assets", "models"))
-        logger.debug(f"Looking for vosk-model directory: {vosk_model_dir.absolute()}")
-        logger.debug(f"Directory exists: {vosk_model_dir.exists()}")
-        logger.debug(f"Is directory: {vosk_model_dir.is_dir()}")
+        # Try multiple approaches to find the models directory
+        possible_paths = [
+            Path(os.path.join(SCRIPT_DIR, "data", "assets", "models")),
+            Path("data/assets/models"),
+            Path(os.path.join(os.getcwd(), "data", "assets", "models"))
+        ]
+        
+        vosk_model_dir = None
+        for path in possible_paths:
+            logger.debug(f"Trying path: {path.absolute()}")
+            if path.exists() and path.is_dir():
+                vosk_model_dir = path
+                logger.debug(f"Found vosk-model directory: {vosk_model_dir.absolute()}")
+                break
+        
+        if not vosk_model_dir:
+            logger.warning("data/assets/models directory not found in any of the expected locations")
+            logger.debug(f"SCRIPT_DIR: {SCRIPT_DIR}")
+            logger.debug(f"Current working directory: {os.getcwd()}")
+            logger.debug(f"Tried paths: {[str(p.absolute()) for p in possible_paths]}")
+            return render_template('settings.html', current_settings=current_settings_display, message=message, error=error, vosk_models=[])
         
         if vosk_model_dir.exists() and vosk_model_dir.is_dir():
             # Check if there are subdirectories (like vosk-model-de-0.21, vosk-model-en, etc.)
@@ -404,9 +421,9 @@ def settings_route():
             logger.debug(f"Final sorted list: {vosk_models}")
             logger.info(f"Found {len(vosk_models)} Vosk models: {vosk_models}")
         else:
-            logger.warning("assets/models directory not found")
+            logger.warning("data/assets/models directory not found")
     except Exception as e:
-        logger.error(f"Error scanning assets/models directory: {e}", exc_info=True)
+        logger.error(f"Error scanning data/assets/models directory: {e}", exc_info=True)
 
     current_settings_display = {}
     
@@ -787,7 +804,7 @@ garmin_manager = None
 
 # --------- User Log Database Initialization Function ---------
 def init_user_log_db():
-    os.makedirs(CONFIG_DIR, exist_ok=True)
+    # No need to create config directory anymore since we moved to data/
     is_test_db = DATABASE_PATH == ':memory:'
     if not is_test_db:
         logger.info(f"Attempting to initialize database at: {DATABASE_PATH}")
@@ -1314,9 +1331,9 @@ async def on_ready():
         msg_purge_task.start()
         logger.info("msg_purge_task gestartet.")
 
-    # Ensure configuration directory exists before initializing DB or loading settings
-    os.makedirs(CONFIG_DIR, exist_ok=True)
-    logger.info(f"Ensured configuration directory '{CONFIG_DIR}' exists.")
+    # Ensure data directory exists before initializing DB or loading settings
+    os.makedirs(DATA_DIR, exist_ok=True)
+    logger.info(f"Ensured data directory '{DATA_DIR}' exists.")
 
     init_user_log_db() # Ensures DB tables are ready
 

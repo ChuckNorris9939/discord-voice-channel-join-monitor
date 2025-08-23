@@ -9,8 +9,8 @@ services:
     ports:
       - 8008:8080
     volumes:
-      - ./assets/images/:/images/
-      - ./config/:/app/config/
-      - ./assets/models/:/app/vosk-model/
+      - ./data/assets/images/:/images/
+      - ./data/:/app/data/
+      - ./data/assets/models/:/app/vosk-model/
       - ./data/garmin-output/:/app/garmin-output/
 

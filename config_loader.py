@@ -8,9 +8,9 @@ logger = logging.getLogger("discord_bot.config")
 
 # --- Database Path ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG_DIR = os.path.join(SCRIPT_DIR, "config")
+DATA_DIR = os.path.join(SCRIPT_DIR, "data")
 DATABASE_NAME = "user_log.db"
-DATABASE_PATH = os.path.join(CONFIG_DIR, DATABASE_NAME)
+DATABASE_PATH = os.path.join(DATA_DIR, DATABASE_NAME)
 
 # --------- Helper Functions for bot_settings Table ---------
 def get_setting(setting_name: str, default_value: Optional[str] = None) -> Optional[str]:
@@ -171,7 +171,7 @@ def load_all_settings():
     STT_ENABLED = stt_enabled_str.lower() == 'true'
 
     STT_ENGINE = get_setting(DB_KEY_STT_ENGINE, os.environ.get('STT_ENGINE', 'google'))
-    VOSK_MODEL_PATH = get_setting(DB_KEY_VOSK_MODEL_PATH, os.environ.get('VOSK_MODEL_PATH', 'assets/models'))
+    VOSK_MODEL_PATH = get_setting(DB_KEY_VOSK_MODEL_PATH, os.environ.get('VOSK_MODEL_PATH', 'data/assets/models'))
 
     garmin_auto_join_enabled_str = get_setting(DB_KEY_GARMIN_AUTO_JOIN_ENABLED, os.environ.get('GARMIN_AUTO_JOIN_ENABLED', 'false'))
     GARMIN_AUTO_JOIN_ENABLED = garmin_auto_join_enabled_str.lower() == 'true'

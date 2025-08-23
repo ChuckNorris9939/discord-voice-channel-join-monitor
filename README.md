@@ -59,7 +59,7 @@ When testing mode is active:
 
 This bot includes a feature to log user voice channel join events.
 When a user joins a visible voice channel, the following information is recorded in an SQLite database file named `user_log.db`:
-- The SQLite database (`user_log.db`) is stored within a `config/` directory, which is automatically created in the bot's root folder if it doesn't exist.
+- The SQLite database (`user_log.db`) is stored within a `data/` directory, which is automatically created in the bot's root folder if it doesn't exist.
 - User ID
 - Username
 - Voice Channel ID
