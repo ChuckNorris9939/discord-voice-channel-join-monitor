@@ -1221,10 +1221,10 @@ async def close_support_thread(thread: Thread, trigger_source: str, set_tag: boo
                         log_actions.append("Tag gesetzt")
                     except discord.HTTPException as e:
                         logger.error(f"Fehler beim Setzen des Tags für Thread '{thread.name}': {e}", exc_info=True)
-                        await send_log_message(f"⚠️ Fehler beim Setzen des Tags '{CLOSED_TAG_NAME}' für Thread '{thread.name}': {e.text}", target_channel_ids=[BOT_AUDIT_ID])
+                        await send_log_message(f"⚠️ Fehler beim Setzen des Tags '{CLOSED_TAG_NAME}' für Thread '{thread.name}': {e.text}", target_channel_ids=[cfg.BOT_AUDIT_ID])
             else:
                 logger.warning(f"Tag '{CLOSED_TAG_NAME}' wurde im Forum '{thread.parent.name}' nicht gefunden.")
-                await send_log_message(f"⚠️ Warnung: Tag '{CLOSED_TAG_NAME}' im Forum '{thread.parent.name}' nicht gefunden für Thread '{thread.name}'.", target_channel_ids=[BOT_AUDIT_ID])
+                await send_log_message(f"⚠️ Warnung: Tag '{CLOSED_TAG_NAME}' im Forum '{thread.parent.name}' nicht gefunden für Thread '{thread.name}'.", target_channel_ids=[cfg.BOT_AUDIT_ID])
 
         if actions_performed or not thread.archived:
             message_parts = ["🔒 Dieser Support-Thread wurde"]
@@ -1244,19 +1244,19 @@ async def close_support_thread(thread: Thread, trigger_source: str, set_tag: boo
         if log_actions:
             action_str = " und ".join(log_actions)
             logger.info(f"Thread '{thread.name}' wurde durch {trigger_source} {action_str}.")
-            await send_log_message(f"🧵 Thread '{thread.name}' (ID: {thread.id}) durch '{trigger_source}' {action_str}.", target_channel_ids=[BOT_AUDIT_ID])
+            await send_log_message(f"🧵 Thread '{thread.name}' (ID: {thread.id}) durch '{trigger_source}' {action_str}.", target_channel_ids=[cfg.BOT_AUDIT_ID])
 
     except discord.Forbidden:
         err_msg = f"Fehler: Keine Berechtigung, den Thread '{thread.name}' zu bearbeiten (sperren/Tag/archivieren)."
         logger.error(err_msg)
-        await send_log_message(f"⚠️ {err_msg}", target_channel_ids=[BOT_AUDIT_ID])
+        await send_log_message(f"⚠️ {err_msg}", target_channel_ids=[cfg.BOT_AUDIT_ID])
         try:
             await thread.send(f"Fehler: Ich habe nicht die nötigen Berechtigungen, um diesen Thread zu sperren, den Tag zu setzen oder zu archivieren. Bitte überprüfe meine Rollen und Berechtigungen im Kanal '{thread.parent.name}'.")
         except Exception:
             pass
     except Exception as e:
         logger.error(f"Generischer Fehler beim Schließen des Threads '{thread.name}': {e}", exc_info=True)
-        await send_log_message(f"⚠️ Fehler beim Schließen des Threads '{thread.name}' (ID: {thread.id}): {e}", target_channel_ids=[BOT_AUDIT_ID])
+        await send_log_message(f"⚠️ Fehler beim Schließen des Threads '{thread.name}' (ID: {thread.id}): {e}", target_channel_ids=[cfg.BOT_AUDIT_ID])
 
 @bot.event
 async def on_ready():
@@ -1478,7 +1478,7 @@ async def close(ctx: commands.Context):
     closed_tag_object = await get_forum_tag_by_name(forum_channel, CLOSED_TAG_NAME)
     if not closed_tag_object:
         await ctx.send(f"Warnung: Der Tag '{CLOSED_TAG_NAME}' wurde im Forum nicht gefunden. Der Thread wird gesperrt und archiviert, aber der Tag kann nicht gesetzt werden.", ephemeral=True)
-        await send_log_message(f"⚠️ Warnung bei Befehl `close` in Thread '{thread.name}': Tag '{CLOSED_TAG_NAME}' im Forum nicht gefunden.", target_channel_ids=[BOT_AUDIT_ID])
+        await send_log_message(f"⚠️ Warnung bei Befehl `close` in Thread '{thread.name}': Tag '{CLOSED_TAG_NAME}' im Forum nicht gefunden.", target_channel_ids=[cfg.BOT_AUDIT_ID])
     
     has_closed_tag = any(tag.id == closed_tag_object.id for tag in thread.applied_tags) if closed_tag_object else False
     
@@ -1491,9 +1491,9 @@ async def close(ctx: commands.Context):
         await ctx.send("Dieser Thread ist bereits gesperrt und getaggt, wird nun zusätzlich archiviert.", ephemeral=True)
         try:
             await thread.edit(archived=True)
-            await send_log_message(f"ℹ️ Thread '{thread.name}' war gesperrt/getagged, aber nicht archiviert. Jetzt archiviert nach `close`-Befehl von {ctx.author.mention}.", target_channel_ids=[BOT_AUDIT_ID])
+            await send_log_message(f"ℹ️ Thread '{thread.name}' war gesperrt/getagged, aber nicht archiviert. Jetzt archiviert nach `close`-Befehl von {ctx.author.mention}.", target_channel_ids=[cfg.BOT_AUDIT_ID])
         except Exception as e:
-            await send_log_message(f"⚠️ Fehler beim erneuten Archivieren von Thread '{thread.name}': {e}", target_channel_ids=[BOT_AUDIT_ID])
+            await send_log_message(f"⚠️ Fehler beim erneuten Archivieren von Thread '{thread.name}': {e}", target_channel_ids=[cfg.BOT_AUDIT_ID])
         return
 
     trigger_name = ctx.author.mention if ctx.author else "einem unbekannten Benutzer"
@@ -1522,7 +1522,7 @@ async def delete(ctx: commands.Context, anzahl: int):
         available_images = [f for f in os.listdir(IMAGES_FOLDER) if os.path.isfile(os.path.join(IMAGES_FOLDER, f))]
         if not available_images:
             await ctx.send(f"Keine Bilder im Ordner '{IMAGES_FOLDER}' gefunden. Bitte füge welche hinzu.", ephemeral=True)
-            await send_log_message(f"⚠️ Versuchter `delete`-Befehl, aber keine Bilder in '{IMAGES_FOLDER}' durch {ctx.author.mention} in #{target_channel.name}.", target_channel_ids=[BOT_AUDIT_ID])
+            await send_log_message(f"⚠️ Versuchter `delete`-Befehl, aber keine Bilder in '{IMAGES_FOLDER}' durch {ctx.author.mention} in #{target_channel.name}.", target_channel_ids=[cfg.BOT_AUDIT_ID])
             return
         chosen_image_name = random.choice(available_images)
         image_path = os.path.join(IMAGES_FOLDER, chosen_image_name)
@@ -1530,11 +1530,11 @@ async def delete(ctx: commands.Context, anzahl: int):
         image_name_for_embed = chosen_image_name
     except FileNotFoundError:
         await ctx.send(f"Fehler: Der Bilderordner '{IMAGES_FOLDER}' wurde nicht gefunden.", ephemeral=True)
-        await send_log_message(f"⚠️ Bilderordner '{IMAGES_FOLDER}' nicht gefunden bei `delete`-Befehl durch {ctx.author.mention} in #{target_channel.name}.", target_channel_ids=[BOT_AUDIT_ID])
+        await send_log_message(f"⚠️ Bilderordner '{IMAGES_FOLDER}' nicht gefunden bei `delete`-Befehl durch {ctx.author.mention} in #{target_channel.name}.", target_channel_ids=[cfg.BOT_AUDIT_ID])
         return
     except Exception as e:
         await ctx.send("Ein Fehler ist bei der Bildauswahl aufgetreten.", ephemeral=True)
-        await send_log_message(f"⚠️ Fehler bei Bildauswahl für `delete` durch {ctx.author.mention} in #{target_channel.name}: {e}", target_channel_ids=[BOT_AUDIT_ID])
+        await send_log_message(f"⚠️ Fehler bei Bildauswahl für `delete` durch {ctx.author.mention} in #{target_channel.name}: {e}", target_channel_ids=[cfg.BOT_AUDIT_ID])
         return
 
     embed = Embed(description="Delet this", color=discord.Color.blue())
@@ -1557,13 +1557,13 @@ async def delete(ctx: commands.Context, anzahl: int):
         err_msg_user = "Ich habe keine Berechtigung, Nachrichten oder Bilder in diesem Kanal zu senden."
         if ctx.interaction: await ctx.followup.send(err_msg_user, ephemeral=True)
         else: await ctx.send(err_msg_user, delete_after=15)
-        await send_log_message(f"⚠️ Keine Sende-Berechtigung für `delete`-Info in #{target_channel.name} (Versuch von {ctx.author.mention}).", target_channel_ids=[BOT_AUDIT_ID])
+        await send_log_message(f"⚠️ Keine Sende-Berechtigung für `delete`-Info in #{target_channel.name} (Versuch von {ctx.author.mention}).", target_channel_ids=[cfg.BOT_AUDIT_ID])
         return
     except Exception as e:
         err_msg_user = f"Ein Fehler ist beim Senden der Info-Nachricht aufgetreten: {e}"
         if ctx.interaction: await ctx.followup.send(err_msg_user, ephemeral=True)
         else: await ctx.send(err_msg_user, delete_after=15)
-        await send_log_message(f"⚠️ Fehler beim Senden der `delete`-Info in #{target_channel.name} (Versuch von {ctx.author.mention}): {e}", target_channel_ids=[BOT_AUDIT_ID])
+        await send_log_message(f"⚠️ Fehler beim Senden der `delete`-Info in #{target_channel.name} (Versuch von {ctx.author.mention}): {e}", target_channel_ids=[cfg.BOT_AUDIT_ID])
         return
 
     deleted_messages_count = 0
@@ -1590,23 +1590,23 @@ async def delete(ctx: commands.Context, anzahl: int):
         deleted_messages_count = len(deleted_messages)
         
         log_msg_text = f"🗑️ {deleted_messages_count} Nachrichten in Kanal #{target_channel.name} (ID: {target_channel.id}) durch {ctx.author.mention} gelöscht (nach Info-Post)."
-        await send_log_message(log_msg_text, target_channel_ids=[BOT_AUDIT_ID])
+        await send_log_message(log_msg_text, target_channel_ids=[cfg.BOT_AUDIT_ID])
         logger.info(f"{deleted_messages_count} Nachrichten in #{target_channel.name} durch {ctx.author} gelöscht.")
     except discord.Forbidden:
         err_msg_user = "Ich habe keine Berechtigung, Nachrichten in diesem Kanal zu löschen."
         if ctx.interaction: await ctx.followup.send(err_msg_user, ephemeral=True)
         else: await target_channel.send(f"{ctx.author.mention}, {err_msg_user}", delete_after=15)
-        await send_log_message(f"⚠️ Keine Lösch-Berechtigung in #{target_channel.name} (Versuch von {ctx.author.mention}).", target_channel_ids=[BOT_AUDIT_ID])
+        await send_log_message(f"⚠️ Keine Lösch-Berechtigung in #{target_channel.name} (Versuch von {ctx.author.mention}).", target_channel_ids=[cfg.BOT_AUDIT_ID])
     except discord.HTTPException as e:
         err_msg_user = f"Ein Fehler ist beim Löschen der Nachrichten aufgetreten: {e.text if e.text else e.status}"
         if ctx.interaction: await ctx.followup.send(err_msg_user, ephemeral=True)
         else: await target_channel.send(f"{ctx.author.mention}, {err_msg_user}", delete_after=15)
-        await send_log_message(f"⚠️ Fehler beim Löschen in #{target_channel.name} (Versuch von {ctx.author.mention}): {e}", target_channel_ids=[BOT_AUDIT_ID])
+        await send_log_message(f"⚠️ Fehler beim Löschen in #{target_channel.name} (Versuch von {ctx.author.mention}): {e}", target_channel_ids=[cfg.BOT_AUDIT_ID])
     except Exception as e:
         err_msg_user = f"Ein generischer Fehler ist beim Löschen der Nachrichten aufgetreten: {e}"
         if ctx.interaction: await ctx.followup.send(err_msg_user, ephemeral=True)
         else: await target_channel.send(f"{ctx.author.mention}, {err_msg_user}", delete_after=15)
-        await send_log_message(f"⚠️ Generischer Fehler beim Löschen in #{target_channel.name} (Versuch von {ctx.author.mention}): {e}", target_channel_ids=[BOT_AUDIT_ID])
+        await send_log_message(f"⚠️ Generischer Fehler beim Löschen in #{target_channel.name} (Versuch von {ctx.author.mention}): {e}", target_channel_ids=[cfg.BOT_AUDIT_ID])
 
 
 @delete.error
@@ -1622,7 +1622,7 @@ async def delete_error(ctx: commands.Context, error: commands.CommandError):
     else:
         await ctx.send(f"Ein Fehler ist im `delete`-Befehl aufgetreten: {error}", ephemeral=True)
     logger.error(f"Fehler im delete-Befehl von {ctx.author}: {error}", exc_info=True) # exc_info für Traceback
-    await send_log_message(f"⚠️ Fehler im delete-Befehl von {ctx.author} in #{ctx.channel.name if ctx.channel else 'Unbekannter Kanal'}: {error}", target_channel_ids=[BOT_AUDIT_ID])
+    await send_log_message(f"⚠️ Fehler im delete-Befehl von {ctx.author} in #{ctx.channel.name if ctx.channel else 'Unbekannter Kanal'}: {error}", target_channel_ids=[cfg.BOT_AUDIT_ID])
 
 
 @bot.hybrid_command(name="users", description="Listet alle Benutzer in den sichtbaren Voice-Channels auf.")
@@ -1727,7 +1727,7 @@ async def on_message(message: discord.Message):
         if not op_user_id:
             logger.error(f"Failed to determine OP user ID for thread {thread.id}. Cannot update activity.")
             # Optionally, send an audit log message about this failure
-            # await send_log_message(f"⚠️ Failed to determine OP user ID for thread {thread.id}. Activity not tracked.", target_channel_ids=[BOT_AUDIT_ID])
+            # await send_log_message(f"⚠️ Failed to determine OP user ID for thread {thread.id}. Activity not tracked.", target_channel_ids=[cfg.BOT_AUDIT_ID])
             return
 
         last_message_user_id = message.author.id
@@ -1955,7 +1955,7 @@ async def viewlogs_error(ctx: commands.Context, error: commands.CommandError):
     else:
         await ctx.send(f"Ein Fehler ist im `viewlogs`-Befehl aufgetreten: {error}", ephemeral=True)
         logger.error(f"Fehler im viewlogs-Befehl von {ctx.author}: {error}", exc_info=True)
-        await send_log_message(f"⚠️ Fehler im viewlogs-Befehl von {ctx.author} in #{ctx.channel.name if ctx.channel else 'Unbekannter Kanal'}: {error}", target_channel_ids=[BOT_AUDIT_ID])
+        await send_log_message(f"⚠️ Fehler im viewlogs-Befehl von {ctx.author} in #{ctx.channel.name if ctx.channel else 'Unbekannter Kanal'}: {error}", target_channel_ids=[cfg.BOT_AUDIT_ID])
 
 # --- Voice State Update ---
 # Global Vars for summarized join messages
@@ -2013,7 +2013,7 @@ async def send_global_summarized_join_message():
         USERS = await get_user_list()
         online_users = [f"***{u}***" for u in USERS]
         message = f"👥 {len(online_users)} Nutzer online: {', '.join(online_users)}"
-        target = TESTING_CHANNEL_ID if getattr(cfg, 'TESTING', False) else LOG_CHANNEL_ID
+        target = TESTING_CHANNEL_ID if getattr(cfg, 'TESTING', False) else cfg.LOG_CHANNEL_ID
         await send_log_message(message, target_channel_ids=[target])
         logger.info(f"Sent global summarized join message: {len(online_users)} users online")
     except Exception as e:
@@ -2583,7 +2583,7 @@ async def on_thread_update(before: Thread, after: Thread):
         tag_added = closed_tag_lower in after_tags_lower and closed_tag_lower not in before_tags_lower
         
         if tag_added and (not after.locked or not after.archived):
-            await send_log_message(f"ℹ️ Thread '{after.name}' (ID: {after.id}) Tag '{CLOSED_TAG_NAME}' erhalten. Schließe...", target_channel_ids=[BOT_AUDIT_ID])
+            await send_log_message(f"ℹ️ Thread '{after.name}' (ID: {after.id}) Tag '{CLOSED_TAG_NAME}' erhalten. Schließe...", target_channel_ids=[cfg.BOT_AUDIT_ID])
             await close_support_thread(after, f"Tag '{CLOSED_TAG_NAME}' manuell hinzugefügt", set_tag=False)
 
 
@@ -2619,8 +2619,8 @@ async def graceful_shutdown():
     
     logger.info("Sende 'Bot wird gestoppt...' Nachricht (falls möglich).")
     stop_message_targets = []
-    if LOG_CHANNEL_ID: stop_message_targets.append(LOG_CHANNEL_ID)
-    if BOT_AUDIT_ID: stop_message_targets.append(BOT_AUDIT_ID)
+    if cfg.LOG_CHANNEL_ID: stop_message_targets.append(cfg.LOG_CHANNEL_ID)
+    if cfg.BOT_AUDIT_ID: stop_message_targets.append(cfg.BOT_AUDIT_ID)
     
     if stop_message_targets:
         try:

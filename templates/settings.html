@@ -375,18 +375,6 @@
                             <option value="false" {% if current_settings.get('APP_TESTING_MODE') == 'false' %}selected{% endif %}>False</option>
                         </select>
                     </div>
-                    <!-- Join Message Timer -->
-                    <div class="form-group">
-                        <label for="join_message_timer_enabled">Join Message Timer Enabled</label>
-                        <select name="join_message_timer_enabled" id="join_message_timer_enabled">
-                            <option value="true" {% if current_settings.get('JOIN_MESSAGE_TIMER_ENABLED') == 'true' %}selected{% endif %}>True</option>
-                            <option value="false" {% if current_settings.get('JOIN_MESSAGE_TIMER_ENABLED') == 'false' %}selected{% endif %}>False</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label for="join_message_timer_minutes">Join Message Timer (Minutes)</label>
-                        <input type="number" name="join_message_timer_minutes" id="join_message_timer_minutes" value="{{ current_settings.get('JOIN_MESSAGE_TIMER_MINUTES', '7') }}" min="1">
-                    </div>
 
                     <!-- Log Level -->
                     <div class="form-group">
