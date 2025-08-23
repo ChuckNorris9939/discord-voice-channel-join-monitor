@@ -91,11 +91,11 @@ def cleanup_old_logs():
                 if file_time < cutoff_time:
                     try:
                         os.remove(file_path)
-                        print(f"Removed old log file: {filename}")
+                        logger.info(f"Removed old log file: {filename}")
                     except OSError as e:
-                        print(f"Error removing old log file {filename}: {e}")
+                        logger.warning(f"Error removing old log file {filename}: {e}")
     except Exception as e:
-        print(f"Error during log cleanup: {e}")
+        logger.warning(f"Error during log cleanup: {e}")
 
 # Initialize logging
 setup_logging()
