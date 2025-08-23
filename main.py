@@ -2143,7 +2143,7 @@ def _start_or_reset_global_join_summary_timer():
 # Global variable for garmin_manager - will be initialized in on_ready
 garmin_manager = None
 
-@bot.hybrid_command(name="garmin_start", description="Starts the Garmin voice recording.")
+@bot.hybrid_command(name="garmin-start", description="Starts the Garmin voice recording.")
 @commands.guild_only()
 async def start_garmin(ctx: commands.Context):
     if garmin_manager is None:
@@ -2156,7 +2156,7 @@ async def start_garmin(ctx: commands.Context):
     else:
         await ctx.send("You need to be in a voice channel to start the Garmin voice recording.")
 
-@bot.hybrid_command(name="garmin_stop", description="Stops the Garmin voice recording.")
+@bot.hybrid_command(name="garmin-stop", description="Stops the Garmin voice recording.")
 @commands.guild_only()
 async def stop_garmin(ctx: commands.Context):
     if garmin_manager is None:
@@ -2166,7 +2166,7 @@ async def stop_garmin(ctx: commands.Context):
     await garmin_manager.leave_channel()
     await ctx.send("Garmin voice recording stopped.")
 
-@bot.hybrid_command(name="garmin_save", description="Saves the Garmin voice recording.")
+@bot.hybrid_command(name="garmin-save", description="Saves the Garmin voice recording.")
 @commands.guild_only()
 async def save_garmin(ctx: commands.Context):
     if garmin_manager is None:
@@ -2181,14 +2181,14 @@ async def save_garmin(ctx: commands.Context):
             await ctx.send("✅ Garmin voice recording saved successfully.")
         else:
             if not health_data["connected"]:
-                await ctx.send("❌ Not connected to any voice channel. Join a channel first with `!!garmin_start`")
+                await ctx.send("❌ Not connected to any voice channel. Join a channel first with `!!garmin-start`")
             else:
-                await ctx.send("❌ No audio data to save. Start recording first with `!!garmin_start`")
+                await ctx.send("❌ No audio data to save. Start recording first with `!!garmin-start`")
     except Exception as e:
         logger.error(f"Error in garmin_save command: {e}", exc_info=True)
         await ctx.send("❌ Error saving recording. Check logs for details.")
 
-@bot.hybrid_command(name="garmin_health", description="Shows the health status of the Garmin voice recording system.")
+@bot.hybrid_command(name="garmin-health", description="Shows the health status of the Garmin voice recording system.")
 @commands.guild_only()
 async def garmin_health(ctx: commands.Context):
     if garmin_manager is None:
@@ -2253,7 +2253,7 @@ async def garmin_health(ctx: commands.Context):
     
     await ctx.send(embed=embed)
 
-@bot.hybrid_command(name="garmin_autojoin", description="Manage Garmin auto-join feature: status, enable, disable")
+@bot.hybrid_command(name="garmin-autojoin", description="Manage Garmin auto-join feature: status, enable, disable")
 @commands.guild_only()
 async def garmin_autojoin(ctx: commands.Context, action: str = "status"):
     """
