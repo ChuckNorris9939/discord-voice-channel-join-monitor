@@ -83,6 +83,9 @@ def cleanup_old_logs():
         current_time = time.time()
         cutoff_time = current_time - (7 * 24 * 60 * 60)  # 7 days in seconds
         
+        # Get the root logger since it's already configured at this point
+        cleanup_logger = logging.getLogger()
+        
         for filename in os.listdir(LOGS_DIR):
             if filename.endswith('.log'):
                 file_path = os.path.join(LOGS_DIR, filename)
@@ -91,11 +94,12 @@ def cleanup_old_logs():
                 if file_time < cutoff_time:
                     try:
                         os.remove(file_path)
-                        logger.info(f"Removed old log file: {filename}")
+                        cleanup_logger.info(f"Removed old log file: {filename}")
                     except OSError as e:
-                        logger.warning(f"Error removing old log file {filename}: {e}")
+                        cleanup_logger.warning(f"Error removing old log file {filename}: {e}")
     except Exception as e:
-        logger.warning(f"Error during log cleanup: {e}")
+        # Use print as fallback in case logging completely fails
+        print(f"Error during log cleanup: {e}")
 
 # Initialize logging
 setup_logging()
