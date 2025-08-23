@@ -113,8 +113,12 @@ CLEANUP_GARMIN_OUTPUT_HOURS = 72
 JOIN_LOGS_ID = 0
 BOT_LOGS_ID = 0
 
+# Store original DB values to prevent overwriting
+ORIGINAL_JOIN_LOGS_ID = 0
+ORIGINAL_BOT_LOGS_ID = 0
+
 def load_all_settings():
-    global AFK_TIMER_MINUTES, TESTING, BOT_LOGS_ID, GARMIN_AUTO_JOIN_CHANNELS, GARMIN_AUTO_JOIN_ENABLED, GARMIN_MAX_RECORDING_DURATION, GARMIN_RECORD_SECONDS, GARMIN_STT_OUTPUT_ENABLED, HIDDEN_CHANNELS, JOIN_MESSAGE_TIMER_ENABLED, JOIN_MESSAGE_TIMER_MINUTES, JOIN_LOGS_ID, LOG_LEVEL, DISCORD_LOG_LEVEL, PURGE_OLDER_THAN_DAYS, STT_ENABLED, STT_ENGINE, TECHSUPPORT_CHANNEL_ID, TESTING_CHANNEL_ID, VOSK_MODEL_PATH, AFK_CHANNEL_ID, CLEANUP_ALIGNED_RECORDINGS_HOURS, CLEANUP_GARMIN_OUTPUT_HOURS
+    global AFK_TIMER_MINUTES, TESTING, BOT_LOGS_ID, GARMIN_AUTO_JOIN_CHANNELS, GARMIN_AUTO_JOIN_ENABLED, GARMIN_MAX_RECORDING_DURATION, GARMIN_RECORD_SECONDS, GARMIN_STT_OUTPUT_ENABLED, HIDDEN_CHANNELS, JOIN_MESSAGE_TIMER_ENABLED, JOIN_MESSAGE_TIMER_MINUTES, JOIN_LOGS_ID, LOG_LEVEL, DISCORD_LOG_LEVEL, PURGE_OLDER_THAN_DAYS, STT_ENABLED, STT_ENGINE, TECHSUPPORT_CHANNEL_ID, TESTING_CHANNEL_ID, VOSK_MODEL_PATH, AFK_CHANNEL_ID, CLEANUP_ALIGNED_RECORDINGS_HOURS, CLEANUP_GARMIN_OUTPUT_HOURS, ORIGINAL_JOIN_LOGS_ID, ORIGINAL_BOT_LOGS_ID
     
     logger.info("Loading dynamic settings...")
 
@@ -156,6 +160,10 @@ def load_all_settings():
     TECHSUPPORT_CHANNEL_ID = load_channel_id(DB_KEY_TECHSUPPORT_CHANNEL_ID, DEFAULT_TECHSUPPORT_CHANNEL_ID)
     TESTING_CHANNEL_ID = load_channel_id(DB_KEY_TESTING_CHANNEL_ID, DEFAULT_TESTING_CHANNEL_ID)
     AFK_CHANNEL_ID = load_channel_id(DB_KEY_AFK_CHANNEL_ID, 0)
+
+    # Store original DB values to prevent overwriting
+    ORIGINAL_JOIN_LOGS_ID = JOIN_LOGS_ID
+    ORIGINAL_BOT_LOGS_ID = BOT_LOGS_ID
 
     # --- PURGE_OLDER_THAN_DAYS ---
     purge_days_str = get_setting(DB_KEY_PURGE_OLDER_THAN_DAYS, '7')
@@ -247,6 +255,32 @@ def apply_discord_log_level():
     discord_voice_logger.setLevel(DISCORD_LOG_LEVEL.upper())
     
     logger.info(f"Applied discord.* loggers to {DISCORD_LOG_LEVEL.upper()}")
+
+def enable_testing_mode():
+    """Enable testing mode by temporarily redirecting logs to testing channel."""
+    global JOIN_LOGS_ID, BOT_LOGS_ID
+    
+    if TESTING and TESTING_CHANNEL_ID:
+        logger.info(f"Enabling testing mode: Redirecting logs to testing channel {TESTING_CHANNEL_ID}")
+        JOIN_LOGS_ID = TESTING_CHANNEL_ID
+        BOT_LOGS_ID = TESTING_CHANNEL_ID
+        return True
+    return False
+
+def disable_testing_mode():
+    """Disable testing mode by restoring original DB values."""
+    global JOIN_LOGS_ID, BOT_LOGS_ID
+    
+    logger.info(f"Disabling testing mode: Restoring original DB values (JOIN_LOGS_ID: {ORIGINAL_JOIN_LOGS_ID}, BOT_LOGS_ID: {ORIGINAL_BOT_LOGS_ID})")
+    JOIN_LOGS_ID = ORIGINAL_JOIN_LOGS_ID
+    BOT_LOGS_ID = ORIGINAL_BOT_LOGS_ID
+
+def get_current_log_channels():
+    """Get current log channel IDs (either testing or original DB values)."""
+    if TESTING and TESTING_CHANNEL_ID:
+        return TESTING_CHANNEL_ID, TESTING_CHANNEL_ID
+    else:
+        return ORIGINAL_JOIN_LOGS_ID, ORIGINAL_BOT_LOGS_ID
 
 # --- Initial load ---
 load_all_settings()

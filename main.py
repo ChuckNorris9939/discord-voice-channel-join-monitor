@@ -363,11 +363,10 @@ def settings_route():
             cfg.apply_discord_log_level()
             
             if cfg.TESTING:
-                logger.info(f"Settings Route - TESTING MODE ACTIVE: Overriding JOIN_LOGS_ID and BOT_LOGS_ID to {cfg.TESTING_CHANNEL_ID}.")
-                cfg.JOIN_LOGS_ID = cfg.TESTING_CHANNEL_ID
-                cfg.BOT_LOGS_ID = cfg.TESTING_CHANNEL_ID
+                logger.info(f"Settings Route - TESTING MODE ACTIVE: Redirecting logs to testing channel {cfg.TESTING_CHANNEL_ID}.")
+                cfg.enable_testing_mode()
             else:
-                logger.info(f"Settings Route - TESTING MODE INACTIVE. JOIN_LOGS_ID: {cfg.JOIN_LOGS_ID}, BOT_LOGS_ID: {cfg.BOT_LOGS_ID}.")
+                logger.info(f"Settings Route - TESTING MODE INACTIVE. JOIN_LOGS_ID: {cfg.ORIGINAL_JOIN_LOGS_ID}, BOT_LOGS_ID: {cfg.ORIGINAL_BOT_LOGS_ID}.")
 
             message = "Settings saved successfully. Note: Some changes may require a bot restart to take full effect."
 
@@ -444,8 +443,8 @@ def settings_route():
 
     current_settings_display['APP_TESTING_MODE'] = str(cfg.TESTING).lower()
     current_settings_display['HIDDEN_CHANNELS'] = ','.join(map(str, cfg.HIDDEN_CHANNELS)) if cfg.HIDDEN_CHANNELS else ''
-    current_settings_display['JOIN_LOGS_ID'] = str(cfg.JOIN_LOGS_ID) if cfg.JOIN_LOGS_ID is not None else ''
-    current_settings_display['BOT_LOGS_ID'] = str(cfg.BOT_LOGS_ID) if cfg.BOT_LOGS_ID is not None else ''
+    current_settings_display['JOIN_LOGS_ID'] = str(cfg.ORIGINAL_JOIN_LOGS_ID) if cfg.ORIGINAL_JOIN_LOGS_ID is not None else ''
+    current_settings_display['BOT_LOGS_ID'] = str(cfg.ORIGINAL_BOT_LOGS_ID) if cfg.ORIGINAL_BOT_LOGS_ID is not None else ''
     current_settings_display['TECHSUPPORT_CHANNEL_ID'] = str(cfg.TECHSUPPORT_CHANNEL_ID) if cfg.TECHSUPPORT_CHANNEL_ID is not None else ''
     current_settings_display['TESTING_CHANNEL_ID'] = str(cfg.TESTING_CHANNEL_ID) if cfg.TESTING_CHANNEL_ID is not None else ''
     current_settings_display['AFK_CHANNEL_ID'] = str(cfg.AFK_CHANNEL_ID) if cfg.AFK_CHANNEL_ID is not None else ''
@@ -1400,13 +1399,12 @@ async def on_ready():
 
     # Re-evaluate TESTING-dependent channel IDs after loading from DB
     if cfg.TESTING:
-        logger.info(f"TESTING MODE ACTIVE (from DB or ENV): Overriding JOIN_LOGS_ID and BOT_LOGS_ID to {cfg.TESTING_CHANNEL_ID}.")
-        cfg.JOIN_LOGS_ID = cfg.TESTING_CHANNEL_ID
-        cfg.BOT_LOGS_ID = cfg.TESTING_CHANNEL_ID
+        logger.info(f"TESTING MODE ACTIVE (from DB or ENV): Redirecting logs to testing channel {cfg.TESTING_CHANNEL_ID}.")
+        cfg.enable_testing_mode()
     else:
         # If not testing, ensure the original values are loaded from the config
         cfg.load_all_settings()
-        logger.info(f"TESTING MODE INACTIVE (from DB or ENV). JOIN_LOGS_ID: {cfg.JOIN_LOGS_ID}, BOT_LOGS_ID: {cfg.BOT_LOGS_ID}.")
+        logger.info(f"TESTING MODE INACTIVE (from DB or ENV). JOIN_LOGS_ID: {cfg.ORIGINAL_JOIN_LOGS_ID}, BOT_LOGS_ID: {cfg.ORIGINAL_BOT_LOGS_ID}.")
     
     # Scan existing threads for activity before fully starting other tasks
     await scan_existing_threads() 
