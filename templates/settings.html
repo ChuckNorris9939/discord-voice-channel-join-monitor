@@ -548,11 +548,11 @@
                         <input type="text" name="bot_logs_id" id="bot_logs_id" value="{{ current_settings.get('BOT_LOGS_ID', '') }}">
                     </div>
 
-                    <!-- Testing Mode Channel ID -->
+                    <!-- Testing Channel ID -->
                     <div class="form-group">
-                        <label for="testing_mode_id">Testing Mode Channel ID</label>
-                        <input type="text" name="testing_mode_id" id="testing_mode_id" value="{{ current_settings.get('TESTING_MODE_ID', '') }}">
-                        <p class="note">Channel ID for testing mode operations. Leave empty to disable.</p>
+                        <label for="testing_channel_id">Testing Channel ID</label>
+                        <input type="text" name="testing_channel_id" id="testing_channel_id" value="{{ current_settings.get('TESTING_CHANNEL_ID', '') }}">
+                        <p class="note">Channel ID used when testing mode is active. This channel will receive all bot logs and join logs during testing.</p>
                     </div>
 
                     <!-- Tech Support Channel ID -->

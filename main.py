@@ -297,15 +297,15 @@ def settings_route():
             save_setting(DB_KEY_BOT_LOGS_ID, bot_logs_id_str if bot_logs_id_str else "None")
             logger.info(f"Saved {DB_KEY_BOT_LOGS_ID}: {bot_logs_id_str}")
 
-            # Handle TESTING_MODE_ID
-            testing_mode_id_str = request.form.get('testing_mode_id', '')
-            save_setting(DB_KEY_TESTING_MODE_ID, testing_mode_id_str if testing_mode_id_str else "None")
-            logger.info(f"Saved {DB_KEY_TESTING_MODE_ID}: {testing_mode_id_str}")
-
             # Handle TECHSUPPORT_CHANNEL_ID
             techsupport_channel_id_str = request.form.get('techsupport_channel_id', '')
             save_setting(DB_KEY_TECHSUPPORT_CHANNEL_ID, techsupport_channel_id_str if techsupport_channel_id_str else "None")
             logger.info(f"Saved {DB_KEY_TECHSUPPORT_CHANNEL_ID}: {techsupport_channel_id_str}")
+
+            # Handle TESTING_CHANNEL_ID
+            testing_channel_id_str = request.form.get('testing_channel_id', '')
+            save_setting(DB_KEY_TESTING_CHANNEL_ID, testing_channel_id_str if testing_channel_id_str else "None")
+            logger.info(f"Saved {DB_KEY_TESTING_CHANNEL_ID}: {testing_channel_id_str}")
 
             # Handle AFK_CHANNEL_ID
             afk_channel_id_str = request.form.get('afk_channel_id', '')
@@ -363,9 +363,9 @@ def settings_route():
             cfg.apply_discord_log_level()
             
             if cfg.TESTING:
-                logger.info(f"Settings Route - TESTING MODE ACTIVE: Overriding JOIN_LOGS_ID and BOT_LOGS_ID to {TESTING_CHANNEL_ID}.")
-                cfg.JOIN_LOGS_ID = TESTING_CHANNEL_ID
-                cfg.BOT_LOGS_ID = TESTING_CHANNEL_ID
+                logger.info(f"Settings Route - TESTING MODE ACTIVE: Overriding JOIN_LOGS_ID and BOT_LOGS_ID to {cfg.TESTING_CHANNEL_ID}.")
+                cfg.JOIN_LOGS_ID = cfg.TESTING_CHANNEL_ID
+                cfg.BOT_LOGS_ID = cfg.TESTING_CHANNEL_ID
             else:
                 logger.info(f"Settings Route - TESTING MODE INACTIVE. JOIN_LOGS_ID: {cfg.JOIN_LOGS_ID}, BOT_LOGS_ID: {cfg.BOT_LOGS_ID}.")
 
@@ -446,8 +446,8 @@ def settings_route():
     current_settings_display['HIDDEN_CHANNELS'] = ','.join(map(str, cfg.HIDDEN_CHANNELS)) if cfg.HIDDEN_CHANNELS else ''
     current_settings_display['JOIN_LOGS_ID'] = str(cfg.JOIN_LOGS_ID) if cfg.JOIN_LOGS_ID is not None else ''
     current_settings_display['BOT_LOGS_ID'] = str(cfg.BOT_LOGS_ID) if cfg.BOT_LOGS_ID is not None else ''
-    current_settings_display['TESTING_MODE_ID'] = str(cfg.TESTING_MODE_ID) if cfg.TESTING_MODE_ID is not None else ''
     current_settings_display['TECHSUPPORT_CHANNEL_ID'] = str(cfg.TECHSUPPORT_CHANNEL_ID) if cfg.TECHSUPPORT_CHANNEL_ID is not None else ''
+    current_settings_display['TESTING_CHANNEL_ID'] = str(cfg.TESTING_CHANNEL_ID) if cfg.TESTING_CHANNEL_ID is not None else ''
     current_settings_display['AFK_CHANNEL_ID'] = str(cfg.AFK_CHANNEL_ID) if cfg.AFK_CHANNEL_ID is not None else ''
     current_settings_display['PURGE_OLDER_THAN_DAYS'] = str(cfg.PURGE_OLDER_THAN_DAYS)
     current_settings_display['JOIN_MESSAGE_TIMER_ENABLED'] = str(cfg.JOIN_MESSAGE_TIMER_ENABLED).lower()
@@ -793,11 +793,7 @@ bot = commands.Bot(command_prefix="!!", intents=intents)
 
 # Konfiguration
 DISCORD_SERVER_ID = 374159356717039616
-TECHSUPPORT_CHANNEL_ID = 1139952610883928134
 CLOSED_TAG_NAME = "🔒 CLOSED"
-
-# Testing Mode Configuration
-TESTING_CHANNEL_ID = 1376227809474908253 # User-provided ID for testing channel
 
 # Global variables to be populated by config_loader
 TESTING = False
@@ -990,27 +986,27 @@ def get_thread_activity(thread_id: int) -> Optional[sqlite3.Row]:
 
 async def scan_existing_threads():
     logger.info("Starting scan of existing tech support threads...")
-    if not TECHSUPPORT_CHANNEL_ID:
+    if not cfg.TECHSUPPORT_CHANNEL_ID:
         logger.error("TECHSUPPORT_CHANNEL_ID is not configured. Cannot scan existing threads.")
         return
 
     try:
-        tech_forum_channel = bot.get_channel(TECHSUPPORT_CHANNEL_ID)
+        tech_forum_channel = bot.get_channel(cfg.TECHSUPPORT_CHANNEL_ID)
         if not tech_forum_channel:
             try:
-                tech_forum_channel = await bot.fetch_channel(TECHSUPPORT_CHANNEL_ID)
+                tech_forum_channel = await bot.fetch_channel(cfg.TECHSUPPORT_CHANNEL_ID)
             except discord.NotFound:
-                logger.error(f"Tech support forum channel (ID: {TECHSUPPORT_CHANNEL_ID}) not found.")
+                logger.error(f"Tech support forum channel (ID: {cfg.TECHSUPPORT_CHANNEL_ID}) not found.")
                 return
             except discord.Forbidden:
-                logger.error(f"Forbidden to fetch tech support forum channel (ID: {TECHSUPPORT_CHANNEL_ID}).")
+                logger.error(f"Forbidden to fetch tech support forum channel (ID: {cfg.TECHSUPPORT_CHANNEL_ID}).")
                 return
             except Exception as e:
-                logger.error(f"Error fetching tech support forum channel (ID: {TECHSUPPORT_CHANNEL_ID}): {e}", exc_info=True)
+                logger.error(f"Error fetching tech support forum channel (ID: {cfg.TECHSUPPORT_CHANNEL_ID}): {e}", exc_info=True)
                 return
         
         if not isinstance(tech_forum_channel, discord.ForumChannel):
-            logger.error(f"Channel with ID {TECHSUPPORT_CHANNEL_ID} is not a ForumChannel. Cannot scan threads.")
+            logger.error(f"Channel with ID {cfg.TECHSUPPORT_CHANNEL_ID} is not a ForumChannel. Cannot scan threads.")
             return
 
         logger.info(f"Successfully fetched tech support forum: '{tech_forum_channel.name}' (ID: {tech_forum_channel.id})")
@@ -1174,7 +1170,7 @@ def update_thread_reminder_sent(thread_id: int, timestamp_iso: str):
 
 # --------- Helper Functions for bot_settings Table ---------
 import config_loader as cfg
-from config_loader import save_setting, DB_KEY_APP_TESTING_MODE, DB_KEY_HIDDEN_CHANNELS, DB_KEY_JOIN_LOGS_ID, DB_KEY_BOT_LOGS_ID, DB_KEY_TESTING_MODE_ID, DB_KEY_TECHSUPPORT_CHANNEL_ID, DB_KEY_AFK_CHANNEL_ID, DB_KEY_PURGE_OLDER_THAN_DAYS, DB_KEY_JOIN_MESSAGE_TIMER_ENABLED, DB_KEY_JOIN_MESSAGE_TIMER_MINUTES, DB_KEY_AFK_TIMER_MINUTES, DB_KEY_STT_ENABLED, DB_KEY_STT_ENGINE, DB_KEY_VOSK_MODEL_PATH, DB_KEY_GARMIN_AUTO_JOIN_ENABLED, DB_KEY_GARMIN_AUTO_JOIN_CHANNELS, DB_KEY_GARMIN_RECORD_SECONDS, DB_KEY_GARMIN_MAX_RECORDING_DURATION, DB_KEY_GARMIN_STT_OUTPUT_ENABLED, DB_KEY_LOG_LEVEL, DB_KEY_DISCORD_LOG_LEVEL, DB_KEY_CLEANUP_ALIGNED_RECORDINGS_HOURS, DB_KEY_CLEANUP_GARMIN_OUTPUT_HOURS
+from config_loader import save_setting, DB_KEY_APP_TESTING_MODE, DB_KEY_HIDDEN_CHANNELS, DB_KEY_JOIN_LOGS_ID, DB_KEY_BOT_LOGS_ID, DB_KEY_TECHSUPPORT_CHANNEL_ID, DB_KEY_TESTING_CHANNEL_ID, DB_KEY_AFK_CHANNEL_ID, DB_KEY_PURGE_OLDER_THAN_DAYS, DB_KEY_JOIN_MESSAGE_TIMER_ENABLED, DB_KEY_JOIN_MESSAGE_TIMER_MINUTES, DB_KEY_AFK_TIMER_MINUTES, DB_KEY_STT_ENABLED, DB_KEY_STT_ENGINE, DB_KEY_VOSK_MODEL_PATH, DB_KEY_GARMIN_AUTO_JOIN_ENABLED, DB_KEY_GARMIN_AUTO_JOIN_CHANNELS, DB_KEY_GARMIN_RECORD_SECONDS, DB_KEY_GARMIN_MAX_RECORDING_DURATION, DB_KEY_GARMIN_STT_OUTPUT_ENABLED, DB_KEY_LOG_LEVEL, DB_KEY_DISCORD_LOG_LEVEL, DB_KEY_CLEANUP_ALIGNED_RECORDINGS_HOURS, DB_KEY_CLEANUP_GARMIN_OUTPUT_HOURS
 
 
 
@@ -1326,7 +1322,7 @@ async def on_ready():
         if cfg.TESTING:
             await send_log_message(
                 f"✅ Bot version {BOT_VERSION} gestartet und einsatzbereit.",
-                target_channel_ids=[TESTING_CHANNEL_ID]
+                target_channel_ids=[cfg.TESTING_CHANNEL_ID]
             )
         else:
             await send_log_message(
@@ -1404,9 +1400,9 @@ async def on_ready():
 
     # Re-evaluate TESTING-dependent channel IDs after loading from DB
     if cfg.TESTING:
-        logger.info(f"TESTING MODE ACTIVE (from DB or ENV): Overriding JOIN_LOGS_ID and BOT_LOGS_ID to {TESTING_CHANNEL_ID}.")
-        cfg.JOIN_LOGS_ID = TESTING_CHANNEL_ID
-        cfg.BOT_LOGS_ID = TESTING_CHANNEL_ID
+        logger.info(f"TESTING MODE ACTIVE (from DB or ENV): Overriding JOIN_LOGS_ID and BOT_LOGS_ID to {cfg.TESTING_CHANNEL_ID}.")
+        cfg.JOIN_LOGS_ID = cfg.TESTING_CHANNEL_ID
+        cfg.BOT_LOGS_ID = cfg.TESTING_CHANNEL_ID
     else:
         # If not testing, ensure the original values are loaded from the config
         cfg.load_all_settings()
@@ -1775,7 +1771,7 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
         return
 
     # Get target channel and hidden channels
-    target = TESTING_CHANNEL_ID if getattr(cfg, 'TESTING', False) else cfg.JOIN_LOGS_ID
+    target = cfg.TESTING_CHANNEL_ID if getattr(cfg, 'TESTING', False) else cfg.JOIN_LOGS_ID
     hidden = set(getattr(cfg, 'HIDDEN_CHANNELS', []) or [])
     
     # Determine channel states
@@ -2100,7 +2096,7 @@ async def send_global_summarized_join_message():
         USERS = await get_user_list()
         online_users = [f"***{u}***" for u in USERS]
         message = f"👥 {len(online_users)} Nutzer online: {', '.join(online_users)}"
-        target = TESTING_CHANNEL_ID if getattr(cfg, 'TESTING', False) else cfg.JOIN_LOGS_ID
+        target = cfg.TESTING_CHANNEL_ID if getattr(cfg, 'TESTING', False) else cfg.JOIN_LOGS_ID
         await send_log_message(message, target_channel_ids=[target])
         logger.info(f"Sent global summarized join message: {len(online_users)} users online")
     except Exception as e:
@@ -2410,17 +2406,17 @@ async def check_inactive_threads_task():
         return
 
     tech_support_forum = None
-    if TECHSUPPORT_CHANNEL_ID:
+    if cfg.TECHSUPPORT_CHANNEL_ID:
         try:
-            tech_support_forum = bot.get_channel(TECHSUPPORT_CHANNEL_ID) or await bot.fetch_channel(TECHSUPPORT_CHANNEL_ID)
+            tech_support_forum = bot.get_channel(cfg.TECHSUPPORT_CHANNEL_ID) or await bot.fetch_channel(cfg.TECHSUPPORT_CHANNEL_ID)
             if not isinstance(tech_support_forum, discord.ForumChannel):
-                logger.error(f"TECHSUPPORT_CHANNEL_ID {TECHSUPPORT_CHANNEL_ID} is not a ForumChannel. Cannot proceed with inactivity check.")
+                logger.error(f"TECHSUPPORT_CHANNEL_ID {cfg.TECHSUPPORT_CHANNEL_ID} is not a ForumChannel. Cannot proceed with inactivity check.")
                 tech_support_forum = None # Ensure it's None if not a forum
         except (discord.NotFound, discord.Forbidden) as e:
-            logger.error(f"Could not fetch Tech Support Forum (ID: {TECHSUPPORT_CHANNEL_ID}): {e}. Cannot proceed with inactivity check.")
+            logger.error(f"Could not fetch Tech Support Forum (ID: {cfg.TECHSUPPORT_CHANNEL_ID}): {e}. Cannot proceed with inactivity check.")
             tech_support_forum = None # Ensure it's None
         except Exception as e:
-            logger.error(f"Unexpected error fetching Tech Support Forum (ID: {TECHSUPPORT_CHANNEL_ID}): {e}", exc_info=True)
+            logger.error(f"Unexpected error fetching Tech Support Forum (ID: {cfg.TECHSUPPORT_CHANNEL_ID}): {e}", exc_info=True)
             tech_support_forum = None # Ensure it's None
 
 
@@ -2660,7 +2656,7 @@ async def periodic_cleanup_task():
 async def on_thread_update(before: Thread, after: Thread):
     if after.guild.id != DISCORD_SERVER_ID: return
     parent = after.parent
-    if parent and parent.id == TECHSUPPORT_CHANNEL_ID:
+    if parent and parent.id == cfg.TECHSUPPORT_CHANNEL_ID:
         if not isinstance(parent, discord.ForumChannel): return 
         
         before_tags_lower = {tag.name.lower() for tag in before.applied_tags}
