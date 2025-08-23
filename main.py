@@ -682,8 +682,33 @@ def garmin_save_route():
             health_data = garmin_manager.get_recording_health()
             
             if health_data["connected"] and health_data["buffer_size"] > 0:
+                # Get recording info before saving
+                recording_info = garmin_manager.get_recording_info()
+                
+                # Save the recording
                 garmin_manager.save_recording()
-                return {"success": True, "message": "Garmin recording saved successfully"}
+                
+                # Get updated info after saving
+                updated_info = garmin_manager.get_recording_info()
+                
+                # Prepare response with detailed information
+                response_data = {
+                    "success": True, 
+                    "message": "Garmin recording saved successfully"
+                }
+                
+                # Add filename and duration if available
+                if updated_info and "last_saved_filename" in updated_info:
+                    response_data["filename"] = updated_info["last_saved_filename"]
+                
+                if recording_info and "recording_duration" in recording_info:
+                    duration_seconds = recording_info["recording_duration"]
+                    if duration_seconds > 0:
+                        minutes = int(duration_seconds // 60)
+                        seconds = int(duration_seconds % 60)
+                        response_data["duration"] = f"{minutes}m {seconds}s"
+                
+                return response_data
             else:
                 if not health_data["connected"]:
                     return {"success": False, "error": "Not connected to any voice channel"}

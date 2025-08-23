@@ -1095,8 +1095,19 @@ class GarminVoiceManager:
             # If aligned recording is active, finalize it
             if self.aligned_sink:
                 try:
+                    # Get the filename before cleanup
+                    aligned_filename = getattr(self.aligned_sink, 'current_filename', None)
+                    if not aligned_filename:
+                        # Generate a filename based on timestamp
+                        timestamp = time.strftime('%d.%m.%y_%H-%M-%S', time.localtime())
+                        aligned_filename = f"aligned_recording_{timestamp}.mp3"
+                    
                     self.aligned_sink.cleanup()
                     logger.info("✅ Aligned recording saved and finalized")
+                    
+                    # Track last saved file info
+                    self.last_saved_filename = aligned_filename
+                    self.last_saved_timestamp = time.time()
                     
                     # Reset the sink for continued recording
                     self.aligned_sink = AlignedPerUserSink(ALIGNED_RECORDINGS_DIR, garmin_manager=self)
@@ -1174,6 +1185,10 @@ class GarminVoiceManager:
                             mixed_segment.export(mixed_path, format="mp3")
                             duration_s = len(mixed_segment) / 1000.0
                             logger.info(f"Saved mixed recording: {mixed_path} ({duration_s:.1f}s, {len(active_users)} users)")
+                            
+                            # Track last saved file info
+                            self.last_saved_filename = mixed_filename
+                            self.last_saved_timestamp = time.time()
                         else:
                             logger.warning("No mixed audio generated")
                             
@@ -1336,4 +1351,38 @@ class GarminVoiceManager:
             "aligned_users": aligned_active_users,
             "aligned_session_samples": aligned_session_samples,
             "aligned_session_duration_ms": aligned_session_duration_ms
+        }
+    
+    def get_recording_info(self) -> dict:
+        """Get detailed recording information including last saved file details."""
+        current_time = time.time()
+        recording_duration = current_time - self.recording_start_time if self.is_connected() else 0
+        
+        # Get buffer information
+        with self._buffers_lock:
+            active_users = len(self.user_buffers)
+            total_buffer_size = 0
+            
+            for buffer in self.user_buffers.values():
+                segment = buffer.get_audio_segment()
+                if segment:
+                    duration_s = len(segment) / 1000.0
+                    total_buffer_size += int(duration_s * SAMPLERATE * CHANNELS * BYTES_PER_SAMPLE)
+        
+        # Get aligned recording info
+        aligned_info = {}
+        if self.aligned_sink:
+            aligned_info = {
+                "aligned_active_users": len(self.aligned_sink.user_writers),
+                "aligned_session_samples": self.aligned_sink.total_session_samples,
+                "aligned_session_duration_ms": (current_time - self.aligned_sink.session_start_time) * 1000 if self.aligned_sink.session_start_time else 0
+            }
+        
+        return {
+            "recording_duration": recording_duration,
+            "buffer_size": total_buffer_size,
+            "active_users": active_users,
+            "last_saved_filename": getattr(self, 'last_saved_filename', None),
+            "last_saved_timestamp": getattr(self, 'last_saved_timestamp', None),
+            **aligned_info
         }
