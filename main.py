@@ -898,6 +898,28 @@ def log_voice_event(user_id: int, username: str, channel_id: int, channel_name: 
         if conn:
             conn.close()
 
+# --------- Helper Functions for Garmin Voice Management ---------
+async def find_monitored_channel_with_users(exclude_channel_id: Optional[int] = None) -> Optional[discord.VoiceChannel]:
+    """Find a monitored voice channel that has non-bot users, optionally excluding a specific channel."""
+    if not cfg.GARMIN_AUTO_JOIN_ENABLED or not cfg.GARMIN_AUTO_JOIN_CHANNELS:
+        return None
+    
+    guild = bot.get_guild(DISCORD_SERVER_ID)
+    if not guild:
+        return None
+    
+    for channel_id in cfg.GARMIN_AUTO_JOIN_CHANNELS:
+        if exclude_channel_id and channel_id == exclude_channel_id:
+            continue
+        
+        channel = guild.get_channel(channel_id)
+        if channel and isinstance(channel, discord.VoiceChannel):
+            non_bot_users = [m for m in channel.members if not m.bot]
+            if non_bot_users:
+                return channel
+    
+    return None
+
 # --------- Helper Functions for inactive_threads Table ---------
 def add_or_update_thread_activity(thread_id: int, guild_id: int, last_activity_timestamp_iso: str, op_user_id: int, last_message_user_id: int):
     conn = None
@@ -1395,28 +1417,20 @@ async def on_ready():
     # Check for existing users in monitored channels and auto-join if enabled
     if cfg.GARMIN_AUTO_JOIN_ENABLED:
         logger.info(f"Auto-join enabled. Checking monitored channels: {cfg.GARMIN_AUTO_JOIN_CHANNELS}")
-        guild = bot.get_guild(DISCORD_SERVER_ID)
-        if guild:
-            for channel_id in cfg.GARMIN_AUTO_JOIN_CHANNELS:
-                channel = guild.get_channel(channel_id)
-                if channel and isinstance(channel, discord.VoiceChannel):
-                    # Check if there are non-bot users in the channel
-                    non_bot_users = [member for member in channel.members if not member.bot]
-                    if non_bot_users:
-                        logger.info(f"Found {len(non_bot_users)} users in monitored channel {channel.name} (ID: {channel_id}), auto-joining")
-                        try:
-                            if garmin_manager is not None:
-                                await garmin_manager.join_channel(channel)
-                                logger.info(f"Successfully auto-joined channel {channel.name} on startup")
-                                break  # Only join the first channel with users
-                            else:
-                                logger.warning("Garmin manager not available for auto-join")
-                        except Exception as e:
-                            logger.error(f"Failed to auto-join channel {channel.name} on startup: {e}")
-                    else:
-                        logger.info(f"No users found in monitored channel {channel.name} (ID: {channel_id})")
+        if garmin_manager is not None:
+            alternative_channel = await find_monitored_channel_with_users()
+            if alternative_channel:
+                non_bot_users = [member for member in alternative_channel.members if not member.bot]
+                logger.info(f"Found {len(non_bot_users)} users in monitored channel {alternative_channel.name} (ID: {alternative_channel.id}), auto-joining")
+                try:
+                    await garmin_manager.join_channel(alternative_channel)
+                    logger.info(f"Successfully auto-joined channel {alternative_channel.name} on startup")
+                except Exception as e:
+                    logger.error(f"Failed to auto-join channel {alternative_channel.name} on startup: {e}")
+            else:
+                logger.info("No monitored channels with users found on startup")
         else:
-            logger.warning("Could not fetch guild for auto-join check")
+            logger.warning("Garmin manager not available for auto-join")
     else:
         logger.info("Auto-join disabled, skipping startup channel check")
 
@@ -1824,11 +1838,31 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
                 garmin_manager.vc and 
                 garmin_manager.vc.channel and 
                 garmin_manager.vc.channel.id == before.channel.id):
-                logger.info(f"All users left channel {before.channel.name}, leaving voice channel")
-                try:
-                    await garmin_manager.leave_channel()
-                except Exception as e:
-                    logger.error(f"Failed to leave channel {before.channel.name}: {e}")
+                logger.info(f"All users left channel {before.channel.name}, checking for other monitored channels with users")
+                
+                # Try to find another monitored channel with users
+                alternative_channel = await find_monitored_channel_with_users(exclude_channel_id=before.channel.id)
+                
+                if alternative_channel:
+                    logger.info(f"Found alternative channel {alternative_channel.name} with users, moving there")
+                    try:
+                        await garmin_manager.leave_channel()
+                        await garmin_manager.join_channel(alternative_channel)
+                        logger.info(f"Successfully moved from {before.channel.name} to {alternative_channel.name}")
+                    except Exception as e:
+                        logger.error(f"Failed to move to alternative channel {alternative_channel.name}: {e}")
+                        # If moving fails, leave completely
+                        try:
+                            await garmin_manager.leave_channel()
+                        except Exception as e2:
+                            logger.error(f"Failed to leave channel {before.channel.name} after failed move: {e2}")
+                else:
+                    # If no alternative channel found, leave completely
+                    logger.info(f"No alternative monitored channels with users found, leaving voice completely")
+                    try:
+                        await garmin_manager.leave_channel()
+                    except Exception as e:
+                        logger.error(f"Failed to leave channel {before.channel.name}: {e}")
             elif not remaining_users:
                 logger.debug(f"Users left channel {before.channel.name}, but bot is not in this channel - staying put")
         
@@ -1847,10 +1881,53 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
         # Schedule or reset the global summary timer
         _start_or_reset_global_join_summary_timer()
         
-        # Garmin auto-join logic for the new channel
-        if cfg.GARMIN_AUTO_JOIN_ENABLED and after.channel.id in cfg.GARMIN_AUTO_JOIN_CHANNELS and garmin_manager is not None:
-            logger.info(f"User {member.name} switched to monitored channel {after.channel.name} (ID: {after.channel.id})")
-            if not garmin_manager.is_connected():
+        # Garmin auto-join logic for channel switches
+        if cfg.GARMIN_AUTO_JOIN_ENABLED and garmin_manager is not None:
+            # Check if the bot is currently in the channel the user left
+            bot_in_left_channel = (garmin_manager.is_connected() and 
+                                  garmin_manager.vc and 
+                                  garmin_manager.vc.channel and 
+                                  garmin_manager.vc.channel.id == before.channel.id)
+            
+            # Check if the channel the user left is now empty (excluding bots)
+            left_channel_empty = not any(m for m in before.channel.members if not m.bot)
+            
+            # If bot is in the now-empty channel, it should move to the new channel
+            if bot_in_left_channel and left_channel_empty:
+                logger.info(f"User {member.name} switched from {before.channel.name} to {after.channel.name}, leaving empty channel")
+                try:
+                    await garmin_manager.leave_channel()
+                    logger.info(f"Left empty channel {before.channel.name}")
+                except Exception as e:
+                    logger.error(f"Failed to leave empty channel {before.channel.name}: {e}")
+                
+                # Now try to join the new channel if it's monitored
+                if after.channel.id in cfg.GARMIN_AUTO_JOIN_CHANNELS:
+                    max_retries = 3
+                    for attempt in range(max_retries):
+                        try:
+                            await garmin_manager.join_channel(after.channel)
+                            logger.info(f"Auto-joined channel {after.channel.name} due to user {member.name} switching")
+                            break
+                        except Exception as e:
+                            logger.error(f"Failed to auto-join channel {after.channel.name} (attempt {attempt + 1}/{max_retries}): {e}")
+                            if attempt < max_retries - 1:
+                                await asyncio.sleep(1.0)
+                            else:
+                                logger.error(f"Failed to auto-join channel {after.channel.name} after {max_retries} attempts")
+                else:
+                    logger.info(f"New channel {after.channel.name} is not monitored, staying disconnected")
+                    # Try to find another monitored channel with users
+                    alternative_channel = await find_monitored_channel_with_users()
+                    if alternative_channel:
+                        logger.info(f"Found alternative monitored channel {alternative_channel.name} with users, joining there")
+                        try:
+                            await garmin_manager.join_channel(alternative_channel)
+                            logger.info(f"Successfully joined alternative channel {alternative_channel.name}")
+                        except Exception as e:
+                            logger.error(f"Failed to join alternative channel {alternative_channel.name}: {e}")
+            elif after.channel.id in cfg.GARMIN_AUTO_JOIN_CHANNELS and not garmin_manager.is_connected():
+                # Bot is not connected, try to join the new monitored channel
                 max_retries = 3
                 for attempt in range(max_retries):
                     try:
@@ -1864,7 +1941,7 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
                         else:
                             logger.error(f"Failed to auto-join channel {after.channel.name} after {max_retries} attempts")
             else:
-                logger.info("Bot is already connected to a voice channel, skipping auto-join")
+                logger.debug(f"Bot handling for channel switch: bot_in_left_channel={bot_in_left_channel}, left_channel_empty={left_channel_empty}, after_monitored={after.channel.id in cfg.GARMIN_AUTO_JOIN_CHANNELS}")
 
     # Handle AFK timer for deafened users
     # Check if user became deafened
