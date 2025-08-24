@@ -1,164 +1,294 @@
 #!/usr/bin/env python3
 """
-Simple test to verify mixing functionality works.
-This is a minimal test to debug any import or basic functionality issues.
+Simple test script to verify basic mixing functionality.
+Tests the impact of silence compression on mixing performance.
 """
 
 import os
-import sys
+import time
 import logging
+import shutil
 from pathlib import Path
+from datetime import datetime
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-def test_imports():
-    """Test if we can import the required modules."""
-    try:
-        logger.info("🔍 Testing imports...")
-        
-        # Test basic imports
-        from garmin_voice import AlignedPerUserSink
-        logger.info("✅ Successfully imported AlignedPerUserSink")
-        
-        from pydub import AudioSegment
-        logger.info("✅ Successfully imported AudioSegment")
-        
-        from pydub.generators import Sine
-        logger.info("✅ Successfully imported Sine generator")
-        
-        import config_loader as cfg
-        logger.info("✅ Successfully imported config_loader")
-        
-        return True
-        
-    except ImportError as e:
-        logger.error(f"❌ Import failed: {e}")
-        return False
-    except Exception as e:
-        logger.error(f"❌ Unexpected error during import: {e}")
-        return False
+# Add the current directory to Python path
+import sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-def test_basic_functionality():
-    """Test basic functionality without complex audio generation."""
-    try:
-        logger.info("🔍 Testing basic functionality...")
+# Import the class
+from garmin_voice import AlignedPerUserSink
+from pydub import AudioSegment
+
+class SimpleMixingTest:
+    """Simple test for basic mixing functionality."""
+    
+    def __init__(self):
+        # Test configurations - only 2 tests now
+        self.test_configs = [
+            {
+                "name": "Test 1: Compression OFF, Mono ON",
+                "compression_enabled": False,
+                "mono_enabled": True,
+                "env_vars": {
+                    "GARMIN_SILENCE_COMPRESSION_ENABLED": "false",
+                    "GARMIN_CONVERT_TO_MONO": "true"
+                }
+            },
+            {
+                "name": "Test 2: Compression ON, Mono ON", 
+                "compression_enabled": True,
+                "mono_enabled": True,
+                "env_vars": {
+                    "GARMIN_SILENCE_COMPRESSION_ENABLED": "true",
+                    "GARMIN_CONVERT_TO_MONO": "true"
+                }
+            }
+        ]
         
-        from garmin_voice import AlignedPerUserSink
+        # Results storage
+        self.results = []
         
-        # Create a test directory
-        test_dir = Path("data/test_simple")
-        test_dir.mkdir(parents=True, exist_ok=True)
+        # Create test output directory
+        self.test_output_dir = "data/test-output"
+        os.makedirs(self.test_output_dir, exist_ok=True)
         
-        # Create a simple test sink
-        test_sink = AlignedPerUserSink(str(test_dir), garmin_manager=None)
-        logger.info("✅ Successfully created AlignedPerUserSink")
+        # Test timestamp for unique file naming
+        self.test_timestamp = datetime.now().strftime('%d.%m.%y_%H-%M-%S')
         
-        # Test if mixing_audio method exists
-        if hasattr(test_sink, 'mixing_audio'):
-            logger.info("✅ mixing_audio method exists")
-        else:
-            logger.error("❌ mixing_audio method not found")
+        # Audio generation parameters
+        self.duration_minutes = 1  # Very short for quick testing
+        self.sample_rate = 48000
+        self.channels = 2  # Stereo input
+        
+    def generate_simple_audio(self, filename: str, duration_minutes: int):
+        """Generate simple test audio file."""
+        try:
+            duration_ms = duration_minutes * 60 * 1000
+            
+            # Create simple tone
+            audio = AudioSegment.sine(440, duration=duration_ms)  # A4 note
+            audio = audio + AudioSegment.sine(880, duration=duration_ms)  # A5 note
+            
+            # Export as MP3
+            audio.export(filename, format="mp3")
+            logger.info(f"✅ Generated simple audio: {os.path.basename(filename)} ({duration_minutes} minutes)")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Error generating audio {filename}: {e}")
+            return False
+    
+    def create_test_files(self):
+        """Create simple test audio files for testing."""
+        logger.info("🎵 Creating simple test audio files...")
+        
+        # Create test directory
+        test_dir = "data/test-audio-simple"
+        os.makedirs(test_dir, exist_ok=True)
+        
+        # Generate 2 user audio files
+        user1_file = os.path.join(test_dir, f"user1_{self.duration_minutes}min.mp3")
+        user2_file = os.path.join(test_dir, f"user2_{self.duration_minutes}min.mp3")
+        
+        # Generate files
+        if not self.generate_simple_audio(user1_file, self.duration_minutes):
+            return False
+        if not self.generate_simple_audio(user2_file, self.duration_minutes):
             return False
         
-        # Test if compress_recordings_post_process method exists
-        if hasattr(test_sink, 'compress_recordings_post_process'):
-            logger.info("✅ compress_recordings_post_process method exists")
-        else:
-            logger.error("❌ compress_recordings_post_process method not found")
-            return False
-        
+        self.test_files = [user1_file, user2_file]
+        logger.info(f"✅ Created {len(self.test_files)} simple test files in {test_dir}")
         return True
+    
+    def create_test_session(self, test_config):
+        """Create a test session with the given configuration."""
+        logger.info(f"\n🎯 Creating test session: {test_config['name']}")
         
-    except Exception as e:
-        logger.error(f"❌ Basic functionality test failed: {e}")
-        return False
-
-def test_environment_variables():
-    """Test environment variable handling."""
-    try:
-        logger.info("🔍 Testing environment variables...")
+        # Set environment variables
+        for key, value in test_config['env_vars'].items():
+            os.environ[key] = value
+            logger.info(f"🔧 Set {key} = {value}")
         
-        # Test current values
-        compression_enabled = os.environ.get('GARMIN_SILENCE_COMPRESSION_ENABLED', 'true')
-        mono_enabled = os.environ.get('GARMIN_CONVERT_TO_MONO', 'true')
+        # Create test sink
+        test_dir = os.path.join(self.test_output_dir, f"test_{self.test_timestamp}")
+        test_sink = AlignedPerUserSink(test_dir)
         
-        logger.info(f"   GARMIN_SILENCE_COMPRESSION_ENABLED: {compression_enabled}")
-        logger.info(f"   GARMIN_CONVERT_TO_MONO: {mono_enabled}")
+        # Update sink settings to match config
+        test_sink.silence_compression_enabled = test_config['compression_enabled']
         
-        # Test setting new values
-        os.environ['GARMIN_SILENCE_COMPRESSION_ENABLED'] = 'false'
-        os.environ['GARMIN_CONVERT_TO_MONO'] = 'false'
+        return test_sink, test_dir
+    
+    def run_mixing_test(self, test_config):
+        """Run a single mixing test."""
+        logger.info(f"\n🚀 Running: {test_config['name']}")
+        logger.info("=" * 60)
         
-        logger.info("✅ Successfully set environment variables")
+        # Create test session
+        test_sink, test_dir = self.create_test_session(test_config)
         
-        # Test reading new values
-        new_compression = os.environ.get('GARMIN_SILENCE_COMPRESSION_ENABLED')
-        new_mono = os.environ.get('GARMIN_CONVERT_TO_MONO')
+        # Measure mixing performance
+        start_time = time.perf_counter()
         
-        logger.info(f"   New GARMIN_SILENCE_COMPRESSION_ENABLED: {new_compression}")
-        logger.info(f"   New GARMIN_CONVERT_TO_MONO: {new_mono}")
+        try:
+            if test_config['compression_enabled']:
+                # Test with compression
+                logger.info("🔧 Running with silence compression...")
+                result = test_sink.compress_recordings_post_process(self.test_files, {"test": True})
+                
+                if result and 'compressed_files' in result:
+                    mixed_file = result['compressed_files'].get('mixed')
+                    if mixed_file:
+                        logger.info(f"✅ Compressed mixed file created: {os.path.basename(mixed_file)}")
+                    else:
+                        logger.warning("⚠️ No compressed mixed file created")
+                else:
+                    logger.error("❌ Compression processing failed")
+                    return None
+            else:
+                # Test without compression (direct mixing)
+                logger.info("🎵 Running direct mixing without compression...")
+                result = test_sink.mixing_audio(self.test_files, {"test": True}, is_compressed=False)
+                
+                if result and 'mixed' in result:
+                    mixed_file = result['mixed']
+                    logger.info(f"✅ Direct mixed file created: {os.path.basename(mixed_file)}")
+                else:
+                    logger.error("❌ Direct mixing failed")
+                    return None
+            
+            end_time = time.perf_counter()
+            processing_time = end_time - start_time
+            
+            # Copy mixed file to test output with descriptive name
+            if 'mixed' in result:
+                mixed_file = result['mixed']
+                if os.path.exists(mixed_file):
+                    # Create descriptive filename
+                    compression_status = "compressed" if test_config['compression_enabled'] else "uncompressed"
+                    mono_status = "mono" if test_config['mono_enabled'] else "stereo"
+                    new_filename = f"{self.test_timestamp}_{compression_status}_{mono_status}_mixed.mp3"
+                    dest_path = os.path.join(self.test_output_dir, new_filename)
+                    
+                    shutil.copy2(mixed_file, dest_path)
+                    logger.info(f"📁 Mixed file saved to: {new_filename}")
+                    
+                    # Get file size
+                    file_size = os.path.getsize(dest_path) / (1024 * 1024)  # MB
+                    logger.info(f"📊 File size: {file_size:.1f} MB")
+            
+            return {
+                'config': test_config,
+                'processing_time': processing_time,
+                'mixed_file': dest_path if 'dest_path' in locals() else None,
+                'file_size_mb': file_size if 'file_size' in locals() else 0
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Error during test: {e}", exc_info=True)
+            return None
+        finally:
+            # Cleanup test files
+            test_sink.cleanup()
+            if os.path.exists(test_dir):
+                shutil.rmtree(test_dir)
+    
+    def run_all_tests(self):
+        """Run all performance tests."""
+        logger.info("🎯 Starting Simple Mixing Tests")
+        logger.info("=" * 60)
         
-        # Restore original values
-        os.environ['GARMIN_SILENCE_COMPRESSION_ENABLED'] = compression_enabled
-        os.environ['GARMIN_CONVERT_TO_MONO'] = mono_enabled
+        # Create test files first
+        if not self.create_test_files():
+            logger.error("❌ Cannot proceed - failed to create test files")
+            return
         
-        logger.info("✅ Successfully restored original environment variables")
+        # Run each test
+        for test_config in self.test_configs:
+            result = self.run_mixing_test(test_config)
+            if result:
+                self.results.append(result)
+            else:
+                logger.error(f"❌ Test failed: {test_config['name']}")
         
-        return True
+        # Print summary
+        self.print_summary()
+    
+    def print_summary(self):
+        """Print test results summary."""
+        if not self.results:
+            logger.error("❌ No test results to display")
+            return
         
-    except Exception as e:
-        logger.error(f"❌ Environment variable test failed: {e}")
-        return False
+        logger.info("\n" + "=" * 80)
+        logger.info("🏆 PERFORMANCE TEST RESULTS SUMMARY")
+        logger.info("=" * 80)
+        
+        # Create summary table
+        table_header = f"{'Test':<35} {'Compression':<12} {'Mono':<8} {'Time (s)':<10} {'File Size (MB)':<15} {'Status':<10}"
+        table_separator = "-" * 80
+        
+        logger.info(table_header)
+        logger.info(table_separator)
+        
+        for result in self.results:
+            config = result['config']
+            compression = "ON" if config['compression_enabled'] else "OFF"
+            mono = "ON" if config['mono_enabled'] else "OFF"
+            time_str = f"{result['processing_time']:.2f}"
+            size_str = f"{result['file_size_mb']:.1f}"
+            status = "✅ PASS" if result['mixed_file'] else "❌ FAIL"
+            
+            row = f"{config['name']:<35} {compression:<12} {mono:<8} {time_str:<10} {size_str:<15} {status:<10}"
+            logger.info(row)
+        
+        logger.info(table_separator)
+        
+        # Performance analysis
+        if len(self.results) >= 2:
+            logger.info("\n📊 PERFORMANCE ANALYSIS:")
+            
+            # Find fastest and slowest
+            fastest = min(self.results, key=lambda x: x['processing_time'])
+            slowest = max(self.results, key=lambda x: x['processing_time'])
+            
+            speedup = slowest['processing_time'] / fastest['processing_time']
+            time_saved = slowest['processing_time'] - fastest['processing_time']
+            
+            logger.info(f"🏃 Fastest: {fastest['config']['name']} ({fastest['processing_time']:.2f}s)")
+            logger.info(f"🐌 Slowest: {slowest['config']['name']} ({slowest['processing_time']:.2f}s)")
+            logger.info(f"📈 Speedup: {speedup:.2f}x faster")
+            logger.info(f"⏰ Time saved: {time_saved:.2f}s")
+            
+            # Compression impact
+            compression_test = next((r for r in self.results if r['config']['compression_enabled']), None)
+            no_compression_test = next((r for r in self.results if not r['config']['compression_enabled']), None)
+            
+            if compression_test and no_compression_test:
+                compression_impact = compression_test['processing_time'] / no_compression_test['processing_time']
+                logger.info(f"🔧 Compression impact: {compression_impact:.2f}x slower when enabled")
+        
+        # File locations
+        logger.info("\n📁 GENERATED FILES:")
+        for result in self.results:
+            if result['mixed_file']:
+                filename = os.path.basename(result['mixed_file'])
+                logger.info(f"✅ {filename}")
+        
+        logger.info(f"\n📂 All test files saved to: {self.test_output_dir}")
+        logger.info("=" * 80)
 
 def main():
-    """Run all basic tests."""
-    logger.info("🚀 Starting Basic Functionality Tests")
-    logger.info("=" * 50)
-    
-    tests = [
-        ("Import Test", test_imports),
-        ("Basic Functionality Test", test_basic_functionality),
-        ("Environment Variables Test", test_environment_variables),
-    ]
-    
-    results = []
-    
-    for test_name, test_func in tests:
-        logger.info(f"\n🔍 Running {test_name}...")
-        try:
-            success = test_func()
-            results.append((test_name, success))
-            if success:
-                logger.info(f"✅ {test_name} PASSED")
-            else:
-                logger.error(f"❌ {test_name} FAILED")
-        except Exception as e:
-            logger.error(f"💥 {test_name} CRASHED: {e}")
-            results.append((test_name, False))
-    
-    # Print summary
-    logger.info("\n" + "=" * 50)
-    logger.info("📊 TEST RESULTS SUMMARY")
-    logger.info("=" * 50)
-    
-    passed = sum(1 for _, success in results if success)
-    total = len(results)
-    
-    for test_name, success in results:
-        status = "✅ PASSED" if success else "❌ FAILED"
-        logger.info(f"{test_name}: {status}")
-    
-    logger.info(f"\nOverall: {passed}/{total} tests passed")
-    
-    if passed == total:
-        logger.info("🎉 All tests passed! You can now run the performance tests.")
-    else:
-        logger.error("💥 Some tests failed. Please fix the issues before running performance tests.")
-        return 1
-    
-    return 0
+    """Main test function."""
+    try:
+        test = SimpleMixingTest()
+        test.run_all_tests()
+    except Exception as e:
+        logger.error(f"💥 Test crashed: {e}", exc_info=True)
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

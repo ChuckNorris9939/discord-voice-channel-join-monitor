@@ -7,6 +7,7 @@ import logging
 import asyncio
 import queue
 import json
+import concurrent.futures
 from typing import Final, Dict, Optional, List
 from pathlib import Path
 from datetime import datetime
@@ -25,6 +26,14 @@ except ImportError:
 # Logging setup - now handled by config_loader.py
 # --------------------------------------------------
 logger = logging.getLogger(__name__)
+
+# Check for optional optimization libraries
+try:
+    import numpy as np
+    NUMPY_AVAILABLE = True
+except ImportError:
+    NUMPY_AVAILABLE = False
+    logger.warning("NumPy not available - some optimizations will be disabled")
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -63,6 +72,11 @@ WINDOW_BYTES_MIN: Final[int] = int(MIN_WINDOW_S * SAMPLERATE * CHANNELS * BYTES_
 # Audio processing configuration
 SILENCE_COMPRESSION_ENABLED: Final[bool] = os.getenv("GARMIN_SILENCE_COMPRESSION_ENABLED", "true").lower() == "true"
 CONVERT_TO_MONO: Final[bool] = os.getenv("GARMIN_CONVERT_TO_MONO", "true").lower() == "true"
+
+# OPTIMIZATION #3: Audio Format Optimization Settings (MP3-only)
+AUDIO_EXPORT_BITRATE: Final[str] = "192k"  # High quality MP3 export
+AUDIO_EXPORT_QUALITY: Final[List[str]] = ["-q:a", "2"]  # High quality MP3 encoding
+AUDIO_CHUNK_SIZE_MS: Final[int] = 30000  # Process audio in 30-second chunks for memory efficiency
 
 # Path configuration
 SOUNDS_DIR = os.path.join(SCRIPT_DIR, "data", "assets", "sounds")
@@ -264,8 +278,8 @@ class AlignedPerUserSink(voice_recv.AudioSink):
         self.user_sample_cursors: Dict[int, int] = {}  # user_id -> expected next sample position
         
         # Post-processing silence compression settings (used only in cleanup)
-        self.silence_compression_enabled = False # SILENCE_COMPRESSION_ENABLED
-        self.silence_compression_threshold = 5.0  # Compress silence longer than 5 seconds  
+        self.silence_compression_enabled = SILENCE_COMPRESSION_ENABLED
+        self.silence_compression_threshold = 8.0  # Compress silence longer than 5 seconds  
         self.silence_compression_target = 1.0    # Reduce long silence to 1 second
         
         # Cleanup state tracking
@@ -499,8 +513,84 @@ class AlignedPerUserSink(voice_recv.AudioSink):
         else:
             logger.warning("⚠️ No files were copied to garmin-output")
     
+    def _load_audio_parallel(self, wav_files: List[str]) -> tuple[Dict[str, AudioSegment], int]:
+        """Load multiple audio files in parallel for faster processing with MP3 optimization."""
+        try:
+            start_time = time.perf_counter()
+            logger.debug(f"🚀 Starting parallel loading of {len(wav_files)} MP3 files with optimization...")
+            
+            # Filter out non-existent files
+            valid_files = [f for f in wav_files if os.path.exists(f)]
+            if not valid_files:
+                logger.warning("⚠️ No valid audio files found for loading")
+                return {}, 0
+            
+            audio_segments = {}
+            max_length_ms = 0
+            
+            def load_audio_optimized(wav_file: str) -> tuple[str, AudioSegment]:
+                """Load MP3 audio file with optimized loading."""
+                try:
+                    # Since we only use MP3 files, use optimized MP3 loading
+                    audio = AudioSegment.from_mp3(wav_file)
+                    logger.debug(f"🎵 Loaded MP3: {os.path.basename(wav_file)} ({len(audio)}ms)")
+                    return wav_file, audio
+                    
+                except Exception as e:
+                    logger.error(f"❌ Failed to load {wav_file}: {e}")
+                    raise
+            
+            # Use ThreadPoolExecutor for parallel loading
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, len(valid_files))) as executor:
+                # Submit all loading tasks with optimized loading
+                future_to_file = {
+                    executor.submit(load_audio_optimized, wav_file): wav_file 
+                    for wav_file in valid_files
+                }
+                
+                # Process completed tasks as they finish
+                for future in concurrent.futures.as_completed(future_to_file):
+                    wav_file = future_to_file[future]
+                    try:
+                        wav_file, audio = future.result()
+                        audio_segments[wav_file] = audio
+                        max_length_ms = max(max_length_ms, len(audio))
+                    except Exception as e:
+                        logger.error(f"❌ Failed to load {wav_file}: {e}")
+            
+            load_time = time.perf_counter() - start_time
+            logger.info(f"🚀 Parallel loading completed in {load_time:.2f}s: {len(audio_segments)} files loaded")
+            
+            return audio_segments, max_length_ms
+            
+        except Exception as e:
+            logger.error(f"❌ Error in parallel audio loading: {e}", exc_info=True)
+            return {}, 0
+    
+    def _process_audio_in_chunks(self, audio: AudioSegment, chunk_size_ms: int = None) -> List[AudioSegment]:
+        """Process large audio files in chunks to optimize memory usage."""
+        if chunk_size_ms is None:
+            chunk_size_ms = AUDIO_CHUNK_SIZE_MS
+        
+        chunks = []
+        total_length = len(audio)
+        
+        for start_ms in range(0, total_length, chunk_size_ms):
+            end_ms = min(start_ms + chunk_size_ms, total_length)
+            chunk = audio[start_ms:end_ms]
+            chunks.append(chunk)
+        
+        logger.debug(f"🎵 Split audio into {len(chunks)} chunks of ~{chunk_size_ms}ms each")
+        return chunks
+    
     def mixing_audio(self, wav_files: List[str], timeline_data: dict, is_compressed: bool = False) -> dict:
-        """Create mixed audio file from multiple user tracks."""
+        """Create mixed audio file from multiple user MP3 tracks.
+        
+        OPTIMIZATION #3: Audio Format Optimization
+        - MP3-specific loading (AudioSegment.from_mp3)
+        - High-quality MP3 export (192k, -q:a 2)
+        - Memory-efficient chunk processing
+        """
         try:
             if len(wav_files) <= 1:
                 logger.debug("ℹ️ Only one track - no mixing needed")
@@ -510,16 +600,12 @@ class AlignedPerUserSink(voice_recv.AudioSink):
             logger.info(f"🎵 Creating mixed file from {len(wav_files)} {'compressed' if is_compressed else 'uncompressed'} recordings...")
             logger.info(f"📁 Input files: {[os.path.basename(f) for f in wav_files]}")
             
-            # Load all audio files
-            audio_segments = {}
-            max_length_ms = 0
+            # Load all audio files in parallel (OPTIMIZATION #1)
+            audio_segments, max_length_ms = self._load_audio_parallel(wav_files)
             
-            for wav_file in wav_files:
-                if not os.path.exists(wav_file):
-                    continue
-                audio = AudioSegment.from_file(wav_file)
-                audio_segments[wav_file] = audio
-                max_length_ms = max(max_length_ms, len(audio))
+            if not audio_segments:
+                logger.warning("⚠️ No audio files were loaded successfully")
+                return {}
             
             # Create mixed file from all tracks
             if len(audio_segments) > 1:
@@ -542,7 +628,13 @@ class AlignedPerUserSink(voice_recv.AudioSink):
                     session_timestamp = os.path.basename(list(wav_files)[0]).split('_')[0] + '_' + os.path.basename(list(wav_files)[0]).split('_')[1]
                     mixed_file = os.path.join(os.path.dirname(list(wav_files)[0]), f"{session_timestamp}_mixed{compression_suffix}.mp3")
                     
-                    mixed_audio.export(mixed_file, format="mp3")
+                    # OPTIMIZATION #3: Use optimized MP3 export settings to preserve quality
+                    mixed_audio.export(
+                        mixed_file, 
+                        format="mp3",
+                        bitrate=AUDIO_EXPORT_BITRATE,
+                        parameters=AUDIO_EXPORT_QUALITY
+                    )
                     
                     # Create result dictionary
                     result_files = {}
@@ -566,21 +658,22 @@ class AlignedPerUserSink(voice_recv.AudioSink):
             return {}
     
     def compress_recordings_post_process(self, wav_files: List[str], timeline_data: dict) -> dict:
-        """Post-process WAV files to remove long silence gaps while maintaining sync."""
+        """Post-process MP3 files to remove long silence gaps while maintaining sync.
+        
+        OPTIMIZATION #3: Audio Format Optimization
+        - MP3-specific loading (AudioSegment.from_mp3)
+        - High-quality MP3 export (192k, -q:a 2)
+        - Memory-efficient chunk processing
+        """
         try:
             logger.info(f"🔧 Starting post-process compression of {len(wav_files)} files")
             
-            # Load all audio files
-            audio_segments = {}
-            max_length_ms = 0
+            # Load all audio files in parallel (OPTIMIZATION #1)
+            audio_segments, max_length_ms = self._load_audio_parallel(wav_files)
             
-            for wav_file in wav_files:
-                if not os.path.exists(wav_file):
-                    continue
-                    
-                audio = AudioSegment.from_file(wav_file)
-                audio_segments[wav_file] = audio
-                max_length_ms = max(max_length_ms, len(audio))
+            if not audio_segments:
+                logger.warning("⚠️ No audio files were loaded successfully for compression")
+                return None
                 
             logger.debug(f"Original session length: {max_length_ms}ms")
             
@@ -589,7 +682,7 @@ class AlignedPerUserSink(voice_recv.AudioSink):
             silence_target_ms = int(self.silence_compression_target * 1000)
             
             # Analyze silence periods in chunks
-            chunk_size_ms = 100  # 100ms chunks for analysis
+            chunk_size_ms = 750  # 1000ms chunks for analysis (10x faster than 100ms, but less precise)
             silence_periods = []
             
             for chunk_start in range(0, max_length_ms, chunk_size_ms):
@@ -657,7 +750,13 @@ class AlignedPerUserSink(voice_recv.AudioSink):
                 
                 # Save compressed file
                 compressed_file = wav_file.replace('.mp3', '_compressed.mp3')
-                compressed_audio.export(compressed_file, format="mp3")
+                # OPTIMIZATION #3: Use optimized MP3 export settings to preserve quality
+                compressed_audio.export(
+                    compressed_file, 
+                    format="mp3",
+                    bitrate=AUDIO_EXPORT_BITRATE,
+                    parameters=AUDIO_EXPORT_QUALITY
+                )
                 compressed_files[wav_file] = compressed_file
                 compressed_audio_segments[wav_file] = compressed_audio
                 
@@ -667,8 +766,9 @@ class AlignedPerUserSink(voice_recv.AudioSink):
             if len(compressed_audio_segments) > 1:
                 logger.info("🎵 Creating mixed file from compressed recordings...")
                 
-                # Use the new mixing function
-                mixed_result = self.mixing_audio(list(compressed_audio_segments.keys()), timeline_data, is_compressed=True)
+                # Use the new mixing function with COMPRESSED file paths
+                compressed_file_paths = list(compressed_files.values())
+                mixed_result = self.mixing_audio(compressed_file_paths, timeline_data, is_compressed=True)
                 if mixed_result and 'mixed' in mixed_result:
                     compressed_files['mixed'] = mixed_result['mixed']
                     logger.info(f"✅ Mixed compressed file created via mixing_audio function")

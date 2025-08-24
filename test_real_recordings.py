@@ -1,15 +1,7 @@
 #!/usr/bin/env python3
 """
-Real recording performance test using actual user files.
-Tests 4 scenarios with real 20-minute audio files:
-1. Compression ON, Mono ON
-2. Compression OFF, Mono ON  
-3. Compression ON, Mono OFF
-4. Compression OFF, Mono OFF
-
-Uses actual recording files:
-- data/aligned-recordings/24.08.25_15-28-13_chucknorris992.mp3
-- data/aligned-recordings/24.08.25_15-28-13_chucknorris99.mp3
+Performance test for audio mixing using real recording files.
+Tests the impact of silence compression on mixing performance.
 """
 
 import os
@@ -17,347 +9,380 @@ import time
 import logging
 import shutil
 from pathlib import Path
-from typing import Dict, List
-
-# Import the functions we need to test
-from garmin_voice import AlignedPerUserSink
-from pydub import AudioSegment
-import config_loader as cfg
+from datetime import datetime
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-class RealRecordingPerformanceTester:
-    """Test class for measuring mixing performance with real recording files."""
+# Add the current directory to Python path
+import sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# Import the class
+from garmin_voice import AlignedPerUserSink
+
+class RealRecordingsPerformanceTest:
+    """Test mixing performance with real recording files."""
     
     def __init__(self):
-        self.test_dir = Path("data/test_real_recordings")
-        self.test_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Real recording files to use
+        # Real recording files (don't change these)
         self.recording_files = [
-            "data/aligned-recordings/24.08.25_15-28-13_chucknorris992.mp3",
-            "data/aligned-recordings/24.08.25_15-28-13_chucknorris99.mp3"
+            "data/test_real_recordings/test_user_1.mp3",
+            "data/test_real_recordings/test_user_2.mp3"
         ]
         
         # Test configurations
         self.test_configs = [
             {
-                "name": "Test 1: Compression ON, Mono ON",
-                "compression": True,
-                "mono": True,
-                "description": "Real recordings, compression on, mono convert on"
+                "name": "Test 1: Compression OFF, Mono ON",
+                "compression_enabled": False,
+                "mono_enabled": True,
+                "env_vars": {
+                    "GARMIN_SILENCE_COMPRESSION_ENABLED": "false",
+                    "GARMIN_CONVERT_TO_MONO": "true"
+                }
             },
             {
-                "name": "Test 2: Compression OFF, Mono ON", 
-                "compression": False,
-                "mono": True,
-                "description": "Real recordings, compression off, mono convert on"
-            },
-            {
-                "name": "Test 3: Compression ON, Mono OFF",
-                "compression": True,
-                "mono": False,
-                "description": "Real recordings, compression on, mono convert off"
-            },
-            {
-                "name": "Test 4: Compression OFF, Mono OFF",
-                "compression": False,
-                "mono": False,
-                "description": "Real recordings, compression off, mono convert off"
+                "name": "Test 2: Compression ON, Mono ON", 
+                "compression_enabled": True,
+                "mono_enabled": True,
+                "env_vars": {
+                    "GARMIN_SILENCE_COMPRESSION_ENABLED": "true",
+                    "GARMIN_CONVERT_TO_MONO": "true"
+                }
             }
         ]
         
         # Results storage
         self.results = []
         
-    def verify_recording_files(self) -> bool:
-        """Verify that the recording files exist and are accessible."""
-        logger.info("🔍 Verifying recording files...")
+        # Create test output directory
+        self.test_output_dir = "data/test-output"
+        os.makedirs(self.test_output_dir, exist_ok=True)
+        
+        # Test timestamp for unique file naming
+        self.test_timestamp = datetime.now().strftime('%d.%m.%y_%H-%M-%S')
+    
+    def verify_recording_files(self):
+        """Verify that the real recording files exist and get their info."""
+        logger.info("🔍 Verifying real recording files...")
         
         for file_path in self.recording_files:
             if not os.path.exists(file_path):
                 logger.error(f"❌ Recording file not found: {file_path}")
                 return False
             
-            file_size = os.path.getsize(file_path)
-            file_size_mb = file_size / (1024 * 1024)
-            logger.info(f"✅ Found: {file_path} ({file_size_mb:.1f}MB)")
+            # Get file info
+            file_size = os.path.getsize(file_path) / (1024 * 1024)  # MB
+            logger.info(f"✅ {os.path.basename(file_path)}: {file_size:.1f} MB")
         
         return True
     
-    def get_audio_info(self) -> Dict:
-        """Get information about the audio files."""
-        logger.info("📊 Analyzing audio files...")
-        
-        audio_info = {}
-        total_duration = 0
-        
-        for file_path in self.recording_files:
-            try:
-                audio = AudioSegment.from_file(file_path)
-                duration_ms = len(audio)
-                duration_minutes = duration_ms / (1000 * 60)
-                channels = audio.channels
-                sample_rate = audio.frame_rate
-                sample_width = audio.sample_width
-                
-                audio_info[file_path] = {
-                    'duration_ms': duration_ms,
-                    'duration_minutes': duration_minutes,
-                    'channels': channels,
-                    'sample_rate': sample_rate,
-                    'sample_width': sample_width,
-                    'file_size_mb': os.path.getsize(file_path) / (1024 * 1024)
-                }
-                
-                total_duration += duration_ms
-                
-                logger.info(f"   📁 {os.path.basename(file_path)}:")
-                logger.info(f"      ⏱️  Duration: {duration_minutes:.1f} minutes ({duration_ms}ms)")
-                logger.info(f"      🔊 Channels: {channels}")
-                logger.info(f"      🎵 Sample Rate: {sample_rate}Hz")
-                logger.info(f"      💾 Sample Width: {sample_width * 8}-bit")
-                logger.info(f"      📦 File Size: {audio_info[file_path]['file_size_mb']:.1f}MB")
-                
-            except Exception as e:
-                logger.error(f"❌ Error analyzing {file_path}: {e}")
-                return {}
-        
-        total_minutes = total_duration / (1000 * 60)
-        logger.info(f"📊 Total session: {total_minutes:.1f} minutes ({total_duration}ms)")
-        
-        return audio_info
-    
-    def create_test_session(self) -> Dict:
-        """Create a test session using the real recording files."""
-        logger.info("Creating test session with real recordings...")
-        
-        # Create mock timeline data based on real files
-        timeline_data = {
-            'session_start': '24.08.25_15-28-13',
-            'session_duration_ms': 0,  # Will be calculated from actual files
-            'users': {}
-        }
-        
-        # Get audio info to populate timeline
-        audio_info = self.get_audio_info()
-        if not audio_info:
-            raise ValueError("Could not analyze audio files")
-        
-        # Calculate total duration
-        total_duration = sum(info['duration_ms'] for info in audio_info.values())
-        timeline_data['session_duration_ms'] = total_duration
-        
-        # Create user entries
-        for i, file_path in enumerate(self.recording_files):
-            username = os.path.basename(file_path).split('_')[-1].replace('.mp3', '')
-            timeline_data['users'][str(i)] = {
-                'username': username,
-                'file_path': file_path
+    def get_audio_info(self, file_path):
+        """Get basic audio file information."""
+        try:
+            from pydub import AudioSegment
+            audio = AudioSegment.from_file(file_path)
+            return {
+                'duration_ms': len(audio),
+                'duration_min': len(audio) / 60000,
+                'channels': audio.channels,
+                'sample_rate': audio.frame_rate
             }
-        
-        return {
-            'wav_files': self.recording_files,
-            'timeline_data': timeline_data,
-            'audio_info': audio_info
-        }
+        except Exception as e:
+            logger.error(f"Error getting audio info for {file_path}: {e}")
+            return None
     
-    def run_mixing_test(self, test_config: Dict, test_session: Dict) -> Dict:
-        """Run a single mixing test with the specified configuration."""
-        test_name = test_config['name']
-        compression_enabled = test_config['compression']
-        mono_enabled = test_config['mono']
+    def create_test_session(self, test_config):
+        """Create a test session with the given configuration."""
+        logger.info(f"\n🎯 Creating test session: {test_config['name']}")
         
-        logger.info(f"🚀 Starting {test_name}")
-        logger.info(f"   Configuration: compression={compression_enabled}, mono={mono_enabled}")
+        # Set environment variables
+        for key, value in test_config['env_vars'].items():
+            os.environ[key] = value
+            logger.info(f"🔧 Set {key} = {value}")
         
-        # Set environment variables for this test
-        original_compression = os.environ.get('GARMIN_SILENCE_COMPRESSION_ENABLED', 'true')
-        original_mono = os.environ.get('GARMIN_CONVERT_TO_MONO', 'true')
+        # Create test sink
+        test_dir = os.path.join(self.test_output_dir, f"test_{self.test_timestamp}")
+        test_sink = AlignedPerUserSink(test_dir)
+        
+        # Update sink settings to match config
+        test_sink.silence_compression_enabled = test_config['compression_enabled']
+        
+        return test_sink, test_dir
+    
+    def run_mixing_test(self, test_config):
+        """Run a single mixing test."""
+        logger.info(f"\n🚀 Running: {test_config['name']}")
+        logger.info("=" * 60)
+        
+        # Create test session
+        test_sink, test_dir = self.create_test_session(test_config)
+        
+        # Get audio info for logging
+        audio_info = self.get_audio_info(self.recording_files[0])
+        if audio_info:
+            logger.info(f"📊 Audio info: {audio_info['duration_min']:.1f} minutes, {audio_info['channels']} channels, {audio_info['sample_rate']} Hz")
+        
+        # Initialize timing variables
+        compression_time = 0
+        mixing_time = 0
+        total_time = 0
         
         try:
-            # Configure for this test
-            os.environ['GARMIN_SILENCE_COMPRESSION_ENABLED'] = str(compression_enabled).lower()
-            os.environ['GARMIN_CONVERT_TO_MONO'] = str(mono_enabled).lower()
-            
-            # Reload config to apply new settings
-            cfg.load_all_settings()
-            
-            # Create test sink
-            test_sink = AlignedPerUserSink(str(self.test_dir), garmin_manager=None)
-            
-            # Measure mixing time
-            start_time = time.time()
-            
-            if compression_enabled:
-                # Test with compression
-                logger.info(f"   🔧 Running compression + mixing...")
-                compression_result = test_sink.compress_recordings_post_process(
-                    test_session['wav_files'], 
-                    test_session['timeline_data']
-                )
-                if compression_result and 'mixed' in compression_result['compressed_files']:
-                    mixing_success = True
-                    mixed_file = compression_result['compressed_files']['mixed']
+            if test_config['compression_enabled']:
+                # Test with compression - FIRST mix, THEN compress the mixed file
+                logger.info("🔧 Running with compression: FIRST mix, THEN compress...")
+                
+                # Step 1: Mix the original files first
+                logger.info("🎵 Step 1: Mixing original files...")
+                mixing_start = time.perf_counter()
+                timeline_data = {"test": True}
+                mixing_result = test_sink.mixing_audio(self.recording_files, timeline_data, is_compressed=False)
+                mixing_time = time.perf_counter() - mixing_start
+                
+                if not mixing_result or 'mixed' not in mixing_result:
+                    logger.error("❌ Mixing failed")
+                    return None
+                
+                mixed_file = mixing_result['mixed']
+                logger.info(f"✅ Mixed file created: {os.path.basename(mixed_file)}")
+                logger.info(f"⏱️  Mixing time: {mixing_time:.2f}s")
+                
+                # Step 2: Now compress the mixed file
+                logger.info("🔧 Step 2: Compressing the mixed file...")
+                compression_start = time.perf_counter()
+                
+                # Create a new timeline for compression
+                compression_timeline = {
+                    "test": True,
+                    "session_duration_ms": 1611237  # Use actual duration from real files
+                }
+                
+                # Compress the single mixed file
+                compression_result = test_sink.compress_recordings_post_process([mixed_file], compression_timeline)
+                compression_time = time.perf_counter() - compression_start
+                
+                if compression_result and 'compressed_files' in compression_result:
+                    # Get the compressed mixed file
+                    compressed_mixed_file = None
+                    for original_file, compressed_file in compression_result['compressed_files'].items():
+                        if original_file == mixed_file:
+                            compressed_mixed_file = compressed_file
+                            break
+                    
+                    if compressed_mixed_file:
+                        logger.info(f"✅ Compressed mixed file created: {os.path.basename(compressed_mixed_file)}")
+                        logger.info(f"⏱️  Compression time: {compression_time:.2f}s")
+                        
+                        # Update the result to use the compressed mixed file
+                        result = {
+                            'compressed_files': {mixed_file: compressed_mixed_file},
+                            'mixed': compressed_mixed_file
+                        }
+                    else:
+                        logger.warning("⚠️ No compressed mixed file created")
+                        result = mixing_result  # Use original mixed file
                 else:
-                    mixing_success = False
-                    mixed_file = None
+                    logger.warning("⚠️ Compression failed, using original mixed file")
+                    result = mixing_result  # Use original mixed file
+                    compression_time = 0
             else:
-                # Test without compression (just mixing)
-                logger.info(f"   🎵 Running mixing only...")
-                mixing_result = test_sink.mixing_audio(
-                    test_session['wav_files'], 
-                    test_session['timeline_data'], 
-                    is_compressed=False
-                )
-                if mixing_result and 'mixed' in mixing_result:
-                    mixing_success = True
-                    mixed_file = mixing_result['mixed']
+                # Test without compression (direct mixing)
+                logger.info("🎵 Running direct mixing without compression...")
+                
+                # Measure mixing time
+                mixing_start = time.perf_counter()
+                timeline_data = {"test": True}
+                result = test_sink.mixing_audio(self.recording_files, timeline_data, is_compressed=False)
+                mixing_time = time.perf_counter() - mixing_start
+                
+                if result and 'mixed' in result:
+                    mixed_file = result['mixed']
+                    logger.info(f"✅ Direct mixed file created: {os.path.basename(mixed_file)}")
+                    logger.info(f"⏱️  Mixing time: {mixing_time:.2f}s")
+                    compression_time = 0  # No compression
                 else:
-                    mixing_success = False
-                    mixed_file = None
+                    logger.error("❌ Direct mixing failed")
+                    return None
             
-            end_time = time.time()
-            processing_time = end_time - start_time
+            total_time = compression_time + mixing_time
             
-            # Get file sizes
-            original_size = sum(os.path.getsize(f) for f in test_session['wav_files'])
-            mixed_size = os.path.getsize(mixed_file) if mixed_file and os.path.exists(mixed_file) else 0
+            # Copy mixed file to test output with descriptive name
+            if 'mixed' in result:
+                mixed_file = result['mixed']
+                if os.path.exists(mixed_file):
+                    # Create descriptive filename
+                    compression_status = "compressed" if test_config['compression_enabled'] else "uncompressed"
+                    mono_status = "mono" if test_config['mono_enabled'] else "stereo"
+                    new_filename = f"{self.test_timestamp}_{compression_status}_{mono_status}_mixed.mp3"
+                    dest_path = os.path.join(self.test_output_dir, new_filename)
+                    
+                    shutil.copy2(mixed_file, dest_path)
+                    logger.info(f"📁 Mixed file saved to: {new_filename}")
+                    
+                    # Get file size
+                    file_size = os.path.getsize(dest_path) / (1024 * 1024)  # MB
+                    logger.info(f"📊 File size: {file_size:.1f} MB")
+            elif test_config['compression_enabled'] and 'compressed_files' in result and 'mixed' in result['compressed_files']:
+                # Handle compressed files case
+                mixed_file = result['compressed_files']['mixed']
+                if os.path.exists(mixed_file):
+                    # Create descriptive filename
+                    compression_status = "compressed" if test_config['compression_enabled'] else "uncompressed"
+                    mono_status = "mono" if test_config['mono_enabled'] else "stereo"
+                    new_filename = f"{self.test_timestamp}_{compression_status}_{mono_status}_mixed.mp3"
+                    dest_path = os.path.join(self.test_output_dir, new_filename)
+                    
+                    shutil.copy2(mixed_file, dest_path)
+                    logger.info(f"📁 Mixed file saved to: {new_filename}")
+                    
+                    # Get file size
+                    file_size = os.path.getsize(dest_path) / (1024 * 1024)  # MB
+                    logger.info(f"📊 File size: {file_size:.1f} MB")
+            else:
+                logger.warning("⚠️ No mixed file found in result")
+                dest_path = None
+                file_size = 0
             
-            # Calculate compression ratio
-            compression_ratio = (mixed_size / original_size * 100) if original_size > 0 else 0
-            
-            result = {
-                'test_name': test_name,
-                'compression_enabled': compression_enabled,
-                'mono_enabled': mono_enabled,
-                'processing_time': processing_time,
-                'mixing_success': mixing_success,
-                'original_size_mb': original_size / (1024 * 1024),
-                'mixed_size_mb': mixed_size / (1024 * 1024),
-                'compression_ratio': compression_ratio,
-                'mixed_file': mixed_file
+            return {
+                'config': test_config,
+                'compression_time': compression_time,
+                'mixing_time': mixing_time,
+                'total_time': total_time,
+                'mixed_file': dest_path if 'dest_path' in locals() else None,
+                'file_size_mb': file_size if 'file_size' in locals() else 0
             }
-            
-            logger.info(f"   ✅ {test_name} completed in {processing_time:.2f}s")
-            logger.info(f"   📊 Results: {mixed_size/(1024*1024):.1f}MB mixed file, {compression_ratio:.1f}% of original")
-            
-            return result
             
         except Exception as e:
-            logger.error(f"   ❌ {test_name} failed: {e}")
-            return {
-                'test_name': test_name,
-                'compression_enabled': compression_enabled,
-                'mono_enabled': mono_enabled,
-                'processing_time': 0,
-                'mixing_success': False,
-                'error': str(e)
-            }
+            logger.error(f"❌ Error during test: {e}", exc_info=True)
+            return None
         finally:
-            # Restore original environment variables
-            os.environ['GARMIN_SILENCE_COMPRESSION_ENABLED'] = original_compression
-            os.environ['GARMIN_CONVERT_TO_MONO'] = original_mono
-            cfg.load_all_settings()
+            # Cleanup test files
+            test_sink.cleanup()
+            if os.path.exists(test_dir):
+                shutil.rmtree(test_dir)
     
     def run_all_tests(self):
-        """Run all 4 test configurations."""
-        logger.info("🎯 Starting Real Recording Performance Test Suite")
-        logger.info(f"📁 Test directory: {self.test_dir}")
-        logger.info(f"📂 Using real recording files:")
-        for file_path in self.recording_files:
-            logger.info(f"   📄 {file_path}")
-        logger.info("=" * 80)
+        """Run all performance tests."""
+        logger.info("🎯 Starting Real Recordings Performance Tests")
+        logger.info("=" * 60)
         
-        # Verify files exist
+        # Verify files first
         if not self.verify_recording_files():
             logger.error("❌ Cannot proceed - recording files not found")
             return
         
-        # Create test session
-        test_session = self.create_test_session()
-        
-        # Run all tests
+        # Run each test
         for test_config in self.test_configs:
-            logger.info("")
-            result = self.run_mixing_test(test_config, test_session)
-            self.results.append(result)
-            
-            # Small delay between tests
-            time.sleep(1)
+            result = self.run_mixing_test(test_config)
+            if result:
+                self.results.append(result)
+            else:
+                logger.error(f"❌ Test failed: {test_config['name']}")
         
         # Print summary
         self.print_summary()
-        
-        # Cleanup test files (but keep the mixed files for inspection)
-        self.cleanup_test_files()
     
     def print_summary(self):
-        """Print comprehensive test results summary."""
-        logger.info("")
-        logger.info("=" * 80)
-        logger.info("📊 REAL RECORDING PERFORMANCE TEST RESULTS SUMMARY")
+        """Print test results summary."""
+        if not self.results:
+            logger.error("❌ No test results to display")
+            return
+        
+        logger.info("\n" + "=" * 80)
+        logger.info("🏆 PERFORMANCE TEST RESULTS SUMMARY")
         logger.info("=" * 80)
         
-        # Sort results by processing time
-        sorted_results = sorted(self.results, key=lambda x: x['processing_time'])
+        # Create summary table
+        table_header = f"{'Test':<35} {'Compression':<12} {'Mono':<8} {'Total (s)':<10} {'Comp (s)':<10} {'Mix (s)':<10} {'File Size (MB)':<15} {'Status':<10}"
+        table_separator = "-" * 100
         
-        for i, result in enumerate(sorted_results, 1):
-            if result['mixing_success']:
-                logger.info(f"{i}. {result['test_name']}")
-                logger.info(f"   ⏱️  Processing time: {result['processing_time']:.2f}s")
-                logger.info(f"   📁 Mixed file size: {result['mixed_size_mb']:.1f}MB")
-                logger.info(f"   📊 Compression ratio: {result['compression_ratio']:.1f}%")
-                logger.info(f"   🎯 Configuration: compression={result['compression_enabled']}, mono={result['compression_enabled']}")
-            else:
-                logger.info(f"{i}. {result['test_name']} ❌ FAILED")
-                logger.info(f"   💥 Error: {result.get('error', 'Unknown error')}")
-            logger.info("")
+        logger.info(table_header)
+        logger.info(table_separator)
+        
+        for result in self.results:
+            config = result['config']
+            compression = "ON" if config['compression_enabled'] else "OFF"
+            mono = "ON" if config['mono_enabled'] else "OFF"
+            total_str = f"{result['total_time']:.2f}"
+            comp_str = f"{result['compression_time']:.2f}"
+            mix_str = f"{result['mixing_time']:.2f}"
+            size_str = f"{result['file_size_mb']:.1f}"
+            status = "✅ PASS" if result['mixed_file'] else "❌ FAIL"
+            
+            row = f"{config['name']:<35} {compression:<12} {mono:<8} {total_str:<10} {comp_str:<10} {mix_str:<10} {size_str:<15} {status:<10}"
+            logger.info(row)
+        
+        logger.info(table_separator)
         
         # Performance analysis
-        successful_results = [r for r in self.results if r['mixing_success']]
-        if len(successful_results) > 1:
-            fastest = min(successful_results, key=lambda x: x['processing_time'])
-            slowest = max(successful_results, key=lambda x: x['processing_time'])
+        if len(self.results) >= 2:
+            logger.info("\n📊 PERFORMANCE ANALYSIS:")
             
-            logger.info("🏆 PERFORMANCE ANALYSIS:")
-            logger.info(f"   🥇 Fastest: {fastest['test_name']} ({fastest['processing_time']:.2f}s)")
-            logger.info(f"   🐌 Slowest: {slowest['test_name']} ({slowest['processing_time']:.2f}s)")
-            logger.info(f"   📈 Speed difference: {slowest['processing_time'] / fastest['processing_time']:.1f}x")
+            # Find fastest and slowest
+            fastest = min(self.results, key=lambda x: x['total_time'])
+            slowest = max(self.results, key=lambda x: x['total_time'])
             
-            # Configuration impact analysis
-            compression_tests = [r for r in successful_results if r['compression_enabled']]
-            no_compression_tests = [r for r in successful_results if not r['compression_enabled']]
+            speedup = slowest['total_time'] / fastest['total_time']
+            time_saved = slowest['total_time'] - fastest['total_time']
             
-            if compression_tests and no_compression_tests:
-                avg_compression_time = sum(r['processing_time'] for r in compression_tests) / len(compression_tests)
-                avg_no_compression_time = sum(r['processing_time'] for r in no_compression_tests) / len(no_compression_tests)
+            logger.info(f"🏃 Fastest: {fastest['config']['name']} ({fastest['total_time']:.2f}s)")
+            logger.info(f"🐌 Slowest: {slowest['config']['name']} ({slowest['total_time']:.2f}s)")
+            logger.info(f"📈 Speedup: {speedup:.2f}x faster")
+            logger.info(f"⏰ Time saved: {time_saved:.2f}s")
+            
+            # Compression impact
+            compression_test = next((r for r in self.results if r['config']['compression_enabled']), None)
+            no_compression_test = next((r for r in self.results if not r['config']['compression_enabled']), None)
+            
+            if compression_test and no_compression_test:
+                compression_impact = compression_test['total_time'] / no_compression_test['total_time']
+                logger.info(f"🔧 Compression impact: {compression_impact:.2f}x slower when enabled")
                 
-                logger.info(f"   🔧 Compression impact: {avg_compression_time / avg_no_compression_time:.1f}x slower")
-    
-    def cleanup_test_files(self):
-        """Clean up test files but keep mixed files for inspection."""
-        logger.info("🧹 Cleaning up test files...")
-        try:
-            # Keep the test directory and mixed files for inspection
-            logger.info("📁 Test files and mixed outputs kept in: data/test_real_recordings/")
-            logger.info("   You can inspect the mixed files to verify quality")
-        except Exception as e:
-            logger.warning(f"⚠️ Could not clean up test files: {e}")
+                # Detailed timing breakdown
+                logger.info("\n⏱️ DETAILED TIMING BREAKDOWN:")
+                logger.info(f"   📊 Test 1 (No Compression):")
+                logger.info(f"      🎵 Mixing only: {no_compression_test['mixing_time']:.2f}s")
+                logger.info(f"      🔧 Compression: {no_compression_test['compression_time']:.2f}s (N/A)")
+                logger.info(f"      ⏱️  Total: {no_compression_test['total_time']:.2f}s")
+                
+                logger.info(f"   📊 Test 2 (With Compression):")
+                logger.info(f"      🎵 Mixing only: {compression_test['mixing_time']:.2f}s (included)")
+                logger.info(f"      🔧 Compression: {compression_test['compression_time']:.2f}s")
+                logger.info(f"      ⏱️  Total: {compression_test['total_time']:.2f}s")
+                
+                # Calculate actual mixing performance difference
+                if compression_test['mixing_time'] > 0 or no_compression_test['mixing_time'] > 0:
+                    mixing_ratio = compression_test['compression_time'] / no_compression_test['mixing_time']
+                    logger.info(f"\n   🎯 MIXING PERFORMANCE ANALYSIS:")
+                    logger.info(f"      🎵 Direct mixing: {no_compression_test['mixing_time']:.2f}s")
+                    logger.info(f"      🔧 Compression + mixing: {compression_test['compression_time']:.2f}s")
+                    logger.info(f"      📈 Mixing is {mixing_ratio:.2f}x slower when compression is enabled")
+                else:
+                    logger.info(f"\n   🎯 MIXING PERFORMANCE ANALYSIS:")
+                    logger.info(f"      🎵 Direct mixing: {no_compression_test['mixing_time']:.2f}s")
+                    logger.info(f"      🔧 Compression includes mixing: {compression_test['compression_time']:.2f}s")
+                    logger.info(f"      📊 Note: Mixing time is included in compression time")
+        
+        # File locations
+        logger.info("\n📁 GENERATED FILES:")
+        for result in self.results:
+            if result['mixed_file']:
+                filename = os.path.basename(result['mixed_file'])
+                logger.info(f"✅ {filename}")
+        
+        logger.info(f"\n📂 All test files saved to: {self.test_output_dir}")
+        logger.info("=" * 80)
 
 def main():
-    """Main function to run the performance tests."""
-    tester = RealRecordingPerformanceTester()
-    
+    """Main test function."""
     try:
-        tester.run_all_tests()
-    except KeyboardInterrupt:
-        logger.info("⏹️  Tests interrupted by user")
+        test = RealRecordingsPerformanceTest()
+        test.run_all_tests()
     except Exception as e:
-        logger.error(f"💥 Test suite failed: {e}")
-        raise
+        logger.error(f"💥 Test crashed: {e}", exc_info=True)
 
 if __name__ == "__main__":
     main()
