@@ -2188,8 +2188,144 @@ async def stop_garmin(ctx: commands.Context):
         await ctx.send("❌ Garmin voice system is not available. Please contact an administrator.")
         return
     
-    await garmin_manager.leave_channel()
-    await ctx.send("Garmin voice recording stopped.")
+    try:
+        health_data = garmin_manager.get_recording_health()
+        
+        if not health_data["connected"]:
+            await ctx.send("❌ Not connected to any voice channel. Nothing to stop.")
+            return
+        
+        # Track start time for performance monitoring
+        start_time = time.time()
+        
+        # Try to use defer for slash commands, fallback to regular send
+        try:
+            await ctx.defer()
+            # This is a slash command - use followup
+            status_message = await ctx.followup.send("⏳ **Stopping Garmin recording...**\n\n🔄 Disconnecting from voice channel...")
+        except:
+            # This is a regular command or defer failed - use regular send
+            status_message = await ctx.send("⏳ **Stopping Garmin recording...**\n\n🔄 Disconnecting from voice channel...")
+        
+        try:
+            # Update status with progress steps
+            progress_steps = [
+                "⏳ **Stopping Garmin recording...**\n\n🔄 Disconnecting from voice channel...",
+                "⏳ **Stopping Garmin recording...**\n\n✅ Disconnected from voice channel\n🔄 Stopping audio processing...",
+                "⏳ **Stopping Garmin recording...**\n\n✅ Disconnected from voice channel\n✅ Stopped audio processing\n💾 Finalizing recording buffers...",
+                "⏳ **Stopping Garmin recording...**\n\n✅ Disconnected from voice channel\n✅ Stopped audio processing\n✅ Finalized recording buffers\n🔒 Cleaning up resources..."
+            ]
+            
+            # Show progress steps
+            for i, step in enumerate(progress_steps):
+                # Add progress bar
+                progress_bar = "█" * (i + 1) + "░" * (len(progress_steps) - i - 1)
+                progress_percent = ((i + 1) / len(progress_steps) * 100)
+                
+                # Calculate estimated time remaining
+                remaining_steps = len(progress_steps) - i - 1
+                estimated_seconds = remaining_steps * 0.5
+                time_estimate = f"⏱️ Est. {estimated_seconds:.1f}s remaining"
+                
+                step_with_progress = step + f"\n\n📊 Progress: [{progress_bar}] {progress_percent:.0f}%\n{time_estimate}"
+                
+                await status_message.edit(content=step_with_progress)
+                if i < len(progress_steps) - 1:  # Don't sleep after the last step
+                    await asyncio.sleep(0.5)  # Show each step for 500ms
+            
+            # Actually stop the recording in a thread to avoid blocking
+            loop = asyncio.get_event_loop()
+            
+            # Add timeout for the stop operation (max 30 seconds)
+            try:
+                await asyncio.wait_for(
+                    garmin_manager.leave_channel(),
+                    timeout=30.0
+                )
+            except asyncio.TimeoutError:
+                # Handle timeout gracefully
+                timeout_message = "⏰ **Stop operation timed out**\n\n⚠️ The stop operation is taking longer than expected.\n🔄 This might happen with very long recordings.\n💡 The recording should still stop - check the status.\n\n**Status:** Stopping continues in background..."
+                await status_message.edit(content=timeout_message)
+                return
+            
+            # Small delay to show the final progress step
+            await asyncio.sleep(0.3)
+            
+            # Calculate total time taken
+            total_time = time.time() - start_time
+            
+            # Prepare completion message
+            completion_text = "✅ **Garmin recording stopped successfully!**\n\n"
+            
+            # Add recording duration if available
+            if health_data.get("recording_duration", 0) > 0:
+                duration_seconds = health_data["recording_duration"]
+                minutes = int(duration_seconds // 60)
+                seconds = int(duration_seconds % 60)
+                completion_text += f"⏱️ **Recording duration:** {minutes}m {seconds}s\n"
+            
+            # Add buffer info if available
+            if health_data.get("buffer_size", 0) > 0:
+                buffer_mb = health_data["buffer_size"] / (1024 * 1024)
+                completion_text += f"💾 **Buffer size:** {buffer_mb:.2f} MB\n"
+            
+            # Add total processing time
+            completion_text += f"⚡ **Stop time:** {total_time:.1f}s\n"
+            
+            completion_text += "\n🎉 **Recording stopped!**"
+            
+            # Update the message with completion info
+            await status_message.edit(content=completion_text)
+            
+            # Log the successful stop operation with timing
+            logger.info(f"✅ Discord command stop completed successfully in {total_time:.1f}s")
+            
+        except Exception as e:
+            logger.error(f"Error during stop_recording in command: {e}", exc_info=True)
+            
+            # Calculate time taken even for errors
+            error_time = time.time() - start_time
+            
+            # Create a more helpful error message
+            error_text = f"❌ **Error stopping recording**\n\n"
+            error_text += "⚠️ An error occurred during the stop operation.\n"
+            error_text += "🔍 Check the logs for technical details.\n\n"
+            
+            # Add specific error information
+            if "connection" in str(e).lower() or "channel" in str(e).lower():
+                error_text += "🔌 **Possible cause:** Connection or channel issues\n"
+                error_text += "💡 **Solution:** Check voice channel status\n"
+            elif "audio" in str(e).lower() or "processing" in str(e).lower():
+                error_text += "🎵 **Possible cause:** Audio processing issues\n"
+                error_text += "💡 **Solution:** Check audio system status\n"
+            else:
+                error_text += f"🔧 **Error details:** {str(e)}\n"
+                error_text += "💡 **Solution:** Check logs and try again\n"
+            
+            error_text += f"\n⏱️ **Time taken:** {error_time:.1f}s\n"
+            error_text += "🔄 **You can try the stop command again.**"
+            
+            await status_message.edit(content=error_text)
+            
+    except Exception as e:
+        logger.error(f"Error in garmin_stop command: {e}", exc_info=True)
+        
+        # Send error message using appropriate method
+        try:
+            if ctx.interaction:
+                # For slash commands, try followup if already deferred, otherwise respond
+                try:
+                    await ctx.followup.send("❌ Error stopping recording. Check logs for details.")
+                except:
+                    try:
+                        await ctx.send("❌ Error stopping recording. Check logs for details.")
+                    except:
+                        pass
+            else:
+                # For regular commands
+                await ctx.send("❌ Error stopping recording. Check logs for details.")
+        except:
+            pass
 
 @bot.hybrid_command(name="garmin-save", description="Saves the Garmin voice recording.")
 @commands.guild_only()
@@ -2422,7 +2558,10 @@ async def garmin_health(ctx: commands.Context):
     )
     
     # STT Status
-    stt_status = f"{'🟢' if health_data['stt_enabled'] else '🔴'} {health_data['stt_engine'].title()}"
+    stt_data = health_data.get('stt', {})
+    stt_enabled = stt_data.get('enabled', False)
+    stt_engine = stt_data.get('engine', 'Unknown')
+    stt_status = f"{'🟢' if stt_enabled else '🔴'} {stt_engine.title()}"
     embed.add_field(
         name="STT Status",
         value=stt_status,
