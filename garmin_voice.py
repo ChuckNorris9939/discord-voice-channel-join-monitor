@@ -8,6 +8,7 @@ import asyncio
 import queue
 import json
 import concurrent.futures
+import signal
 from typing import Final, Dict, Optional, List, Any
 from pathlib import Path
 from datetime import datetime
@@ -27,17 +28,37 @@ except ImportError:
 # --------------------------------------------------
 logger = logging.getLogger(__name__)
 
-# Check for optional optimization libraries
-try:
-    import numpy as np
-    NUMPY_AVAILABLE = True
-except ImportError:
-    NUMPY_AVAILABLE = False
-    logger.warning("NumPy not available - some optimizations will be disabled")
+# Import NumPy for advanced audio processing
+import numpy as np
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 import config_loader as cfg
+
+# Global thread pool for audio processing
+_audio_thread_pool = None
+
+def _signal_handler(signum, frame):
+    """Handle shutdown signals gracefully."""
+    global _audio_thread_pool
+    if _audio_thread_pool:
+        logger.info("🛑 Shutdown signal received, shutting down thread pool...")
+        _audio_thread_pool.shutdown(wait=False)
+        _audio_thread_pool = None
+    exit(0)
+
+def cleanup_audio_thread_pool():
+    """Cleanup function to be called when the main program exits."""
+    global _audio_thread_pool
+    if _audio_thread_pool:
+        logger.info("🧹 Cleaning up audio thread pool...")
+        _audio_thread_pool.shutdown(wait=False)
+        _audio_thread_pool = None
+        logger.info("✅ Audio thread pool cleanup complete")
+
+# Register signal handlers for clean shutdown
+signal.signal(signal.SIGINT, _signal_handler)
+signal.signal(signal.SIGTERM, _signal_handler)
 
 # ==================================================
 # Helper Functions
@@ -69,17 +90,14 @@ MIN_WINDOW_S: Final[float] = 0.7
 WINDOW_BYTES_MAX: Final[int] = int(RECOGNITION_WINDOW_S * SAMPLERATE * CHANNELS * BYTES_PER_SAMPLE)
 WINDOW_BYTES_MIN: Final[int] = int(MIN_WINDOW_S * SAMPLERATE * CHANNELS * BYTES_PER_SAMPLE)
 
-# Audio processing configuration
-SILENCE_COMPRESSION_ENABLED: Final[bool] = os.getenv("GARMIN_SILENCE_COMPRESSION_ENABLED", "true").lower() == "true"
-CONVERT_TO_MONO: Final[bool] = os.getenv("GARMIN_CONVERT_TO_MONO", "true").lower() == "true"
+# Audio processing configuration - Always enabled for optimal performance
 
 # OPTIMIZATION #3: Audio Format Optimization Settings (MP3-only)
 AUDIO_EXPORT_BITRATE: Final[str] = "192k"  # High quality MP3 export
 AUDIO_EXPORT_QUALITY: Final[List[str]] = ["-q:a", "2"]  # High quality MP3 encoding
 AUDIO_CHUNK_SIZE_MS: Final[int] = 30000  # Process audio in 30-second chunks for memory efficiency
 
-# OPTIMIZATION #5: Advanced Silence Detection Settings
-SILENCE_DETECTION_METHOD: Final[str] = os.getenv("GARMIN_SILENCE_DETECTION_METHOD", "advanced").lower()  # "simple" or "advanced"
+# OPTIMIZATION #5: Advanced Silence Detection Settings (Default)
 SILENCE_VAD_THRESHOLD: Final[float] = float(os.getenv("GARMIN_SILENCE_VAD_THRESHOLD", "0.3"))  # Voice Activity Detection threshold (0.1-0.9)
 SILENCE_SPECTRAL_THRESHOLD: Final[float] = float(os.getenv("GARMIN_SILENCE_SPECTRAL_THRESHOLD", "0.15"))  # Spectral energy threshold
 SILENCE_MIN_DURATION_MS: Final[int] = int(os.getenv("GARMIN_SILENCE_MIN_DURATION_MS", "500"))  # Minimum silence duration to consider
@@ -192,8 +210,8 @@ class UserWavWriter:
             return
             
         try:
-            # Convert stereo to mono if enabled and needed
-            if CONVERT_TO_MONO and len(pcm_data) % 4 == 0:  # Stereo 16-bit
+            # Always convert stereo to mono for optimal performance
+            if len(pcm_data) % 4 == 0:  # Stereo 16-bit
                 mono_data = bytearray()
                 for i in range(0, len(pcm_data), 4):
                     # Take left channel (first 2 bytes)
@@ -289,9 +307,8 @@ class AlignedPerUserSink(voice_recv.AudioSink):
         self.last_frame_times: Dict[int, float] = {}  # user_id -> last frame time
         self.user_sample_cursors: Dict[int, int] = {}  # user_id -> expected next sample position
         
-        # Post-processing silence compression settings (used only in cleanup)
-        self.silence_compression_enabled = SILENCE_COMPRESSION_ENABLED
-        self.silence_compression_threshold = 8.0  # Compress silence longer than 5 seconds  
+        # Post-processing silence compression settings (always enabled for optimal performance)
+        self.silence_compression_threshold = 5.0  # Compress silence longer than 8 seconds  
         self.silence_compression_target = 1.0    # Reduce long silence to 1 second
         
         # Cleanup state tracking
@@ -552,11 +569,15 @@ class AlignedPerUserSink(voice_recv.AudioSink):
                     logger.error(f"❌ Failed to load {wav_file}: {e}")
                     raise
             
-            # Use ThreadPoolExecutor for parallel loading
-            with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, len(valid_files))) as executor:
+            # Use global thread pool for parallel loading
+            global _audio_thread_pool
+            if _audio_thread_pool is None:
+                _audio_thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+            
+            try:
                 # Submit all loading tasks with optimized loading
                 future_to_file = {
-                    executor.submit(load_audio_optimized, wav_file): wav_file 
+                    _audio_thread_pool.submit(load_audio_optimized, wav_file): wav_file 
                     for wav_file in valid_files
                 }
                 
@@ -569,6 +590,19 @@ class AlignedPerUserSink(voice_recv.AudioSink):
                         max_length_ms = max(max_length_ms, len(audio))
                     except Exception as e:
                         logger.error(f"❌ Failed to load {wav_file}: {e}")
+            except RuntimeError as e:
+                if "cannot schedule new futures after interpreter shutdown" in str(e):
+                    logger.warning("⚠️ Interpreter shutting down, using sequential loading")
+                    # Fallback to sequential loading during shutdown
+                    for wav_file in valid_files:
+                        try:
+                            wav_file, audio = load_audio_optimized(wav_file)
+                            audio_segments[wav_file] = audio
+                            max_length_ms = max(max_length_ms, len(audio))
+                        except Exception as load_error:
+                            logger.error(f"❌ Failed to load {wav_file}: {load_error}")
+                else:
+                    raise
             
             load_time = time.perf_counter() - start_time
             logger.info(f"🚀 Parallel loading completed in {load_time:.2f}s: {len(audio_segments)} files loaded")
@@ -609,116 +643,76 @@ class AlignedPerUserSink(voice_recv.AudioSink):
             total_length = len(audio)
             
             # Convert audio to numpy array for analysis
-            if NUMPY_AVAILABLE:
-                # Get audio samples as numpy array
-                samples = np.array(audio.get_array_of_samples())
-                sample_rate = audio.frame_rate
+            # Get audio samples as numpy array
+            samples = np.array(audio.get_array_of_samples())
+            sample_rate = audio.frame_rate
+            
+            logger.debug(f"🔍 Advanced silence detection: analyzing {total_length}ms audio with {len(samples)} samples")
+            
+            # Process audio in chunks for analysis
+            for chunk_start in range(0, total_length, chunk_size_ms):
+                chunk_end = min(chunk_start + chunk_size_ms, total_length)
                 
-                logger.debug(f"🔍 Advanced silence detection: analyzing {total_length}ms audio with {len(samples)} samples")
+                # Convert chunk time to sample indices
+                start_sample = int(chunk_start * sample_rate / 1000)
+                end_sample = int(chunk_end * sample_rate / 1000)
+                chunk_samples = samples[start_sample:end_sample]
                 
-                # Process audio in chunks for analysis
-                for chunk_start in range(0, total_length, chunk_size_ms):
-                    chunk_end = min(chunk_start + chunk_size_ms, total_length)
-                    
-                    # Convert chunk time to sample indices
-                    start_sample = int(chunk_start * sample_rate / 1000)
-                    end_sample = int(chunk_end * sample_rate / 1000)
-                    chunk_samples = samples[start_sample:end_sample]
-                    
-                    if len(chunk_samples) == 0:
-                        continue
-                    
-                    # Advanced silence detection using multiple methods
-                    is_silent = self._analyze_chunk_silence(chunk_samples, sample_rate)
-                    
-                    # Track silence periods
-                    if is_silent:
-                        if not silence_periods or silence_periods[-1]['end'] != chunk_start:
-                            # New silence period
-                            silence_periods.append({'start': chunk_start, 'end': chunk_end})
-                        else:
-                            # Extend current silence period
-                            silence_periods[-1]['end'] = chunk_end
+                if len(chunk_samples) == 0:
+                    continue
                 
-                logger.debug(f"🔍 Advanced detection found {len(silence_periods)} potential silence periods")
+                # Advanced silence detection using multiple methods
+                is_silent = self._analyze_chunk_silence(chunk_samples, sample_rate)
                 
-            else:
-                # Fallback to simple method if numpy not available
-                logger.warning("⚠️ NumPy not available, falling back to simple silence detection")
-                silence_periods = self._detect_silence_simple(audio, chunk_size_ms)
+                # Track silence periods
+                if is_silent:
+                    if not silence_periods or silence_periods[-1]['end'] != chunk_start:
+                        # New silence period
+                        silence_periods.append({'start': chunk_start, 'end': chunk_end})
+                    else:
+                        # Extend current silence period
+                        silence_periods[-1]['end'] = chunk_end
+            
+            logger.debug(f"🔍 Advanced detection found {len(silence_periods)} potential silence periods")
             
             return silence_periods
             
         except Exception as e:
             logger.error(f"❌ Error in advanced silence detection: {e}")
-            # Fallback to simple method
-            return self._detect_silence_simple(audio, chunk_size_ms)
+            logger.warning("🔄 Advanced silence detection failed, returning empty result")
+            return []
     
-    def _analyze_chunk_silence(self, chunk_samples: np.ndarray, sample_rate: int) -> bool:
-        """Analyze a single audio chunk for silence using multiple detection methods."""
+    def _analyze_chunk_silence(self, chunk: np.ndarray, sample_rate: int) -> bool:
+        """Analyze a single audio chunk for silence using multiple criteria."""
         try:
-            if len(chunk_samples) == 0:
-                return True
+            # 1. Voice Activity Detection (VAD) - Energy-based
+            energy = np.mean(chunk ** 2)
+            vad_silence = energy < SILENCE_VAD_THRESHOLD
             
-            # Method 1: Voice Activity Detection (VAD) - Energy-based
-            energy = np.mean(chunk_samples.astype(np.float64) ** 2)
-            energy_normalized = energy / (2**15)**2  # Normalize to 16-bit range
-            
-            # Method 2: Spectral analysis - Frequency domain energy
-            if len(chunk_samples) >= 1024:  # Need enough samples for FFT
-                # Simple FFT-based spectral analysis
-                fft = np.fft.fft(chunk_samples[:1024])
+            # 2. Spectral Analysis - Frequency domain energy
+            if len(chunk) > 0:
+                # Compute FFT and get spectral energy
+                fft = np.fft.fft(chunk)
                 spectral_energy = np.mean(np.abs(fft) ** 2)
-                spectral_normalized = spectral_energy / (len(chunk_samples) ** 2)
+                spectral_silence = spectral_energy < SILENCE_SPECTRAL_THRESHOLD
             else:
-                spectral_normalized = energy_normalized
+                spectral_silence = True
             
-            # Method 3: Zero-crossing rate (indicates speech vs silence)
-            zero_crossings = np.sum(np.diff(np.sign(chunk_samples)) != 0)
-            zero_crossing_rate = zero_crossings / len(chunk_samples)
+            # 3. Zero-crossing rate - Simple but effective
+            zero_crossings = np.sum(np.diff(np.signbit(chunk).astype(int)))
+            zero_crossing_rate = zero_crossings / len(chunk) if len(chunk) > 0 else 0
+            zcr_silence = zero_crossing_rate < 0.1  # Low zero-crossing rate indicates silence
             
-            # Combined decision logic
-            energy_threshold = SILENCE_VAD_THRESHOLD
-            spectral_threshold = SILENCE_SPECTRAL_THRESHOLD
-            zero_crossing_threshold = 0.1  # Low for silence, high for speech
+            # Combined decision: All three must indicate silence
+            is_silence = vad_silence and spectral_silence and zcr_silence
             
-            # Determine if chunk is silence
-            is_silent = (
-                energy_normalized < energy_threshold and
-                spectral_normalized < spectral_threshold and
-                zero_crossing_rate < zero_crossing_threshold
-            )
-            
-            logger.debug(f"🔍 Chunk analysis: energy={energy_normalized:.4f}, spectral={spectral_normalized:.4f}, "
-                        f"zero_crossings={zero_crossing_rate:.4f}, silent={is_silent}")
-            
-            return is_silent
+            return is_silence
             
         except Exception as e:
-            logger.error(f"❌ Error analyzing chunk: {e}")
-            return True  # Default to silence on error
+            logger.error(f"❌ Error in chunk analysis: {e}")
+            return False  # Return False (not silence) on error for safety
     
-    def _detect_silence_simple(self, audio: AudioSegment, chunk_size_ms: int) -> List[dict]:
-        """Simple silence detection using volume threshold (fallback method)."""
-        silence_periods = []
-        total_length = len(audio)
-        
-        for chunk_start in range(0, total_length, chunk_size_ms):
-            chunk_end = min(chunk_start + chunk_size_ms, total_length)
-            chunk = audio[chunk_start:chunk_end]
-            
-            # Simple volume-based detection
-            if chunk.dBFS > -60:  # Above silence threshold
-                continue
-            
-            # Track silence periods
-            if not silence_periods or silence_periods[-1]['end'] != chunk_start:
-                silence_periods.append({'start': chunk_start, 'end': chunk_end})
-            else:
-                silence_periods[-1]['end'] = chunk_end
-        
-        logger.debug(f"🔍 Simple detection found {len(silence_periods)} silence periods")
-        return silence_periods
+
     
     def mixing_audio(self, wav_files: List[str], timeline_data: dict, is_compressed: bool = False) -> dict:
         """Create mixed audio file from multiple user MP3 tracks.
@@ -824,55 +818,24 @@ class AlignedPerUserSink(voice_recv.AudioSink):
             silence_threshold_ms = int(self.silence_compression_threshold * 1000)
             silence_target_ms = int(self.silence_compression_target * 1000)
             
-            # OPTIMIZATION #5: Use advanced silence detection instead of simple volume threshold
+            # OPTIMIZATION #5: Advanced silence detection (VAD + Spectral Analysis)
             chunk_size_ms = 750  # Optimal chunk size for analysis
-            silence_periods = []
+            logger.info("🔍 Using ADVANCED silence detection (VAD + Spectral Analysis)")
             
-            if SILENCE_DETECTION_METHOD == "advanced":
-                logger.info("🔍 Using ADVANCED silence detection (VAD + Spectral Analysis)")
-                
-                # Use advanced silence detection on the first audio track as reference
-                # (all tracks should have similar silence patterns in Discord recordings)
-                reference_audio = list(audio_segments.values())[0]
-                silence_periods = self._detect_silence_advanced(reference_audio, chunk_size_ms)
-                
-                # Filter silence periods to only include those long enough to compress
-                filtered_periods = []
-                for period in silence_periods:
-                    duration_ms = period['end'] - period['start']
-                    if duration_ms >= SILENCE_MIN_DURATION_MS:
-                        filtered_periods.append(period)
-                
-                silence_periods = filtered_periods
-                logger.info(f"🔍 Advanced detection found {len(silence_periods)} silence periods (min duration: {SILENCE_MIN_DURATION_MS}ms)")
-                
-            else:
-                logger.info("🔍 Using SIMPLE silence detection (volume threshold)")
-                
-                # Fallback to simple method
-                for chunk_start in range(0, max_length_ms, chunk_size_ms):
-                    chunk_end = min(chunk_start + chunk_size_ms, max_length_ms)
-                    
-                    # Check if ANY track has audio in this chunk
-                    has_audio = False
-                    for audio in audio_segments.values():
-                        if chunk_start < len(audio):
-                            chunk = audio[chunk_start:chunk_end]
-                            # Simple volume-based detection
-                            if chunk.dBFS > -60:  # Above silence threshold
-                                has_audio = True
-                                break
-                    
-                    # Track silence periods
-                    if not has_audio:
-                        if not silence_periods or silence_periods[-1]['end'] != chunk_start:
-                            # New silence period
-                            silence_periods.append({'start': chunk_start, 'end': chunk_end})
-                        else:
-                            # Extend current silence period
-                            silence_periods[-1]['end'] = chunk_end
-                
-                logger.info(f"🔍 Simple detection found {len(silence_periods)} silence periods")
+            # Use advanced silence detection on the first audio track as reference
+            # (all tracks should have similar silence patterns in Discord recordings)
+            reference_audio = list(audio_segments.values())[0]
+            silence_periods = self._detect_silence_advanced(reference_audio, chunk_size_ms)
+            
+            # Filter silence periods to only include those long enough to compress
+            filtered_periods = []
+            for period in silence_periods:
+                duration_ms = period['end'] - period['start']
+                if duration_ms >= SILENCE_MIN_DURATION_MS:
+                    filtered_periods.append(period)
+            
+            silence_periods = filtered_periods
+            logger.info(f"🔍 Advanced detection found {len(silence_periods)} silence periods (min duration: {SILENCE_MIN_DURATION_MS}ms)")
             
             # Identify long silence periods to compress
             compressions = []
@@ -1062,9 +1025,9 @@ class AlignedPerUserSink(voice_recv.AudioSink):
                     try:
                         wav_files = [data['file_path'] for data in timeline_data['users'].values()]
                         
-                        logger.info(f"🔧 Silence compression status: enabled={self.silence_compression_enabled}, threshold={self.silence_compression_threshold}s")
+                        logger.info(f"🔧 Silence compression status: always enabled, threshold={self.silence_compression_threshold}s")
                         
-                        if len(wav_files) > 0 and self.silence_compression_enabled:
+                        if len(wav_files) > 0:
                             logger.info("🔧 Starting post-process silence compression...")
                             
                             compression_result = self.compress_recordings_post_process(wav_files, timeline_data)
@@ -1698,6 +1661,16 @@ class GarminVoiceManager:
                     logger.info("🛑 Batch processing manager shutdown complete")
                 except Exception as e:
                     logger.error(f"Error shutting down batch manager: {e}")
+            
+            # Cleanup global thread pool
+            global _audio_thread_pool
+            if _audio_thread_pool:
+                try:
+                    _audio_thread_pool.shutdown(wait=False)
+                    _audio_thread_pool = None
+                    logger.info("🛑 Audio thread pool shutdown complete")
+                except Exception as e:
+                    logger.error(f"Error shutting down thread pool: {e}")
             
             # Clear all buffers
             with self._buffers_lock:

@@ -33,19 +33,13 @@ class SimpleMixingTest:
                 "name": "Test 1: Compression OFF, Mono ON",
                 "compression_enabled": False,
                 "mono_enabled": True,
-                "env_vars": {
-                    "GARMIN_SILENCE_COMPRESSION_ENABLED": "false",
-                    "GARMIN_CONVERT_TO_MONO": "true"
-                }
+                "env_vars": {}
             },
             {
                 "name": "Test 2: Compression ON, Mono ON", 
                 "compression_enabled": True,
                 "mono_enabled": True,
-                "env_vars": {
-                    "GARMIN_SILENCE_COMPRESSION_ENABLED": "true",
-                    "GARMIN_CONVERT_TO_MONO": "true"
-                }
+                "env_vars": {}
             }
         ]
         

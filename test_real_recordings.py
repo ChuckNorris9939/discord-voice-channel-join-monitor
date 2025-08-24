@@ -38,19 +38,13 @@ class RealRecordingsPerformanceTest:
                 "name": "Test 1: Compression OFF, Mono ON",
                 "compression_enabled": False,
                 "mono_enabled": True,
-                "env_vars": {
-                    "GARMIN_SILENCE_COMPRESSION_ENABLED": "false",
-                    "GARMIN_CONVERT_TO_MONO": "true"
-                }
+                "env_vars": {}
             },
             {
                 "name": "Test 2: Compression ON, Mono ON", 
                 "compression_enabled": True,
                 "mono_enabled": True,
-                "env_vars": {
-                    "GARMIN_SILENCE_COMPRESSION_ENABLED": "true",
-                    "GARMIN_CONVERT_TO_MONO": "true"
-                }
+                "env_vars": {}
             }
         ]
         
@@ -103,18 +97,8 @@ class RealRecordingsPerformanceTest:
             os.environ[key] = value
             logger.info(f"🔧 Set {key} = {value}")
         
-        # OPTIMIZATION #5: Set advanced silence detection method for testing
-        if test_config['compression_enabled']:
-            # Test advanced silence detection
-            os.environ['GARMIN_SILENCE_DETECTION_METHOD'] = 'advanced'
-            os.environ['GARMIN_SILENCE_VAD_THRESHOLD'] = '0.3'
-            os.environ['GARMIN_SILENCE_SPECTRAL_THRESHOLD'] = '0.15'
-            os.environ['GARMIN_SILENCE_MIN_DURATION_MS'] = '500'
-            logger.info("🔧 Set GARMIN_SILENCE_DETECTION_METHOD = advanced (OPTIMIZATION #5)")
-        else:
-            # Use simple detection for non-compression tests
-            os.environ['GARMIN_SILENCE_DETECTION_METHOD'] = 'simple'
-            logger.info("🔧 Set GARMIN_SILENCE_DETECTION_METHOD = simple")
+        # OPTIMIZATION #5: Advanced silence detection is always enabled (default)
+        logger.info("🔧 Using default advanced silence detection (OPTIMIZATION #5)")
         
         # OPTIMIZATION #6: Set batch processing settings for testing
         os.environ['GARMIN_BATCH_PROCESSING_ENABLED'] = 'true'
@@ -127,8 +111,7 @@ class RealRecordingsPerformanceTest:
         test_dir = os.path.join(self.test_output_dir, f"test_{self.test_timestamp}")
         test_sink = AlignedPerUserSink(test_dir)
         
-        # Update sink settings to match config
-        test_sink.silence_compression_enabled = test_config['compression_enabled']
+        # Compression is always enabled for optimal performance
         
         return test_sink, test_dir
     
