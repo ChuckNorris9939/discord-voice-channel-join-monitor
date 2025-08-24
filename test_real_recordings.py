@@ -116,6 +116,13 @@ class RealRecordingsPerformanceTest:
             os.environ['GARMIN_SILENCE_DETECTION_METHOD'] = 'simple'
             logger.info("🔧 Set GARMIN_SILENCE_DETECTION_METHOD = simple")
         
+        # OPTIMIZATION #6: Set batch processing settings for testing
+        os.environ['GARMIN_BATCH_PROCESSING_ENABLED'] = 'true'
+        os.environ['GARMIN_MAX_CONCURRENT_SESSIONS'] = '2'
+        os.environ['GARMIN_SESSION_QUEUE_SIZE'] = '5'
+        os.environ['GARMIN_BATCH_CLEANUP_INTERVAL'] = '10'
+        logger.info("🔧 Set GARMIN_BATCH_PROCESSING_ENABLED = true (OPTIMIZATION #6)")
+        
         # Create test sink
         test_dir = os.path.join(self.test_output_dir, f"test_{self.test_timestamp}")
         test_sink = AlignedPerUserSink(test_dir)

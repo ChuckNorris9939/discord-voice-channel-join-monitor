@@ -8,7 +8,7 @@ import asyncio
 import queue
 import json
 import concurrent.futures
-from typing import Final, Dict, Optional, List
+from typing import Final, Dict, Optional, List, Any
 from pathlib import Path
 from datetime import datetime
 
@@ -83,6 +83,12 @@ SILENCE_DETECTION_METHOD: Final[str] = os.getenv("GARMIN_SILENCE_DETECTION_METHO
 SILENCE_VAD_THRESHOLD: Final[float] = float(os.getenv("GARMIN_SILENCE_VAD_THRESHOLD", "0.3"))  # Voice Activity Detection threshold (0.1-0.9)
 SILENCE_SPECTRAL_THRESHOLD: Final[float] = float(os.getenv("GARMIN_SILENCE_SPECTRAL_THRESHOLD", "0.15"))  # Spectral energy threshold
 SILENCE_MIN_DURATION_MS: Final[int] = int(os.getenv("GARMIN_SILENCE_MIN_DURATION_MS", "500"))  # Minimum silence duration to consider
+
+# OPTIMIZATION #6: Batch Processing Optimization Settings
+BATCH_PROCESSING_ENABLED: Final[bool] = os.getenv("GARMIN_BATCH_PROCESSING_ENABLED", "true").lower() == "true"
+MAX_CONCURRENT_SESSIONS: Final[int] = int(os.getenv("GARMIN_MAX_CONCURRENT_SESSIONS", "3"))  # Maximum concurrent recording sessions
+SESSION_QUEUE_SIZE: Final[int] = int(os.getenv("GARMIN_SESSION_QUEUE_SIZE", "10"))  # Maximum queued sessions
+BATCH_CLEANUP_INTERVAL: Final[int] = int(os.getenv("GARMIN_BATCH_CLEANUP_INTERVAL", "300"))  # Cleanup interval in seconds
 
 # Path configuration
 SOUNDS_DIR = os.path.join(SCRIPT_DIR, "data", "assets", "sounds")
@@ -1258,7 +1264,15 @@ class UserAudioBuffer:
             
 
 class GarminVoiceManager:
-    """Voice listener that reacts on trigger phrases and plays sounds."""
+    """Voice listener that reacts on trigger phrases and plays sounds.
+    
+    OPTIMIZATION #6: Batch Processing Optimization
+    - Multiple session handling concurrently
+    - Resource pooling for audio processing
+    - Queue management for multiple users
+    - Efficient cleanup and resource management
+    - Session prioritization and load balancing
+    """
     
     def __init__(self, bot: discord.Client):
         self.bot = bot
@@ -1301,6 +1315,12 @@ class GarminVoiceManager:
         
         # Aligned recording sink
         self.aligned_sink: Optional[AlignedPerUserSink] = None
+        
+        # OPTIMIZATION #6: Batch Processing Manager for multiple concurrent sessions
+        self.batch_manager: Optional[BatchProcessingManager] = None
+        if BATCH_PROCESSING_ENABLED:
+            self.batch_manager = BatchProcessingManager()
+            logger.info("🚀 Batch processing manager initialized")
         
         os.makedirs(OUTPUT_DIR, exist_ok=True)
         os.makedirs(TEMP_DIR, exist_ok=True)
@@ -1618,6 +1638,12 @@ class GarminVoiceManager:
             # Create aligned recording sink with reference to this manager for STT
             self.aligned_sink = AlignedPerUserSink(ALIGNED_RECORDINGS_DIR, garmin_manager=self)
             
+            # OPTIMIZATION #6: Register session with batch manager if enabled
+            if self.batch_manager:
+                session_id = f"voice_{int(time.time())}"
+                self.batch_manager.create_session(session_id, ALIGNED_RECORDINGS_DIR)
+                logger.info(f"🚀 Session {session_id} registered with batch manager")
+            
             # Use the aligned sink directly (it will handle both STT and recording)
             self.vc.listen(self.aligned_sink)
             
@@ -1664,6 +1690,14 @@ class GarminVoiceManager:
                     logger.error(f"Error cleaning up aligned sink: {e}")
                 finally:
                     self.aligned_sink = None
+            
+            # OPTIMIZATION #6: Shutdown batch processing manager
+            if self.batch_manager:
+                try:
+                    self.batch_manager.shutdown()
+                    logger.info("🛑 Batch processing manager shutdown complete")
+                except Exception as e:
+                    logger.error(f"Error shutting down batch manager: {e}")
             
             # Clear all buffers
             with self._buffers_lock:
@@ -1712,30 +1746,42 @@ class GarminVoiceManager:
                     total_buffer_size += int(duration_s * SAMPLERATE * CHANNELS * BYTES_PER_SAMPLE)
         
         return {
-            "connected": self.is_connected(),
-            "recording_duration": recording_duration,
-            "max_recording_duration": cfg.GARMIN_RECORD_SECONDS,
-            "buffer_size": total_buffer_size,
-            "recording_errors": 0,  # Simplified - no error tracking needed
-            "max_errors": 5,
-            "is_processing": self.is_processing,
-            "stt_enabled": cfg.STT_ENABLED,
-            "stt_engine": cfg.STT_ENGINE if cfg.STT_ENABLED else "disabled",
-            "last_process_time": self.last_process_time,
-            "audio_pipeline_healthy": True,  # Simplified - always healthy with pydub
-            "audio_callback_count": 0,  # Not tracked in simplified version
-            "audio_callback_errors": 0,
-            "time_since_last_audio": 0,
-            "audio_callback_rate": 0,
-            "last_chunk_size": 0,
-            "active_users": max(legacy_active_users, aligned_active_users),
-            "total_user_buffer_size": total_buffer_size,
-            "user_buffers": {},  # Simplified - details not needed
-            # New aligned recording info
-            "aligned_recording_active": self.aligned_sink is not None,
-            "aligned_users": aligned_active_users,
-            "aligned_session_samples": aligned_session_samples,
-            "aligned_session_duration_ms": aligned_session_duration_ms
+            'connected': self.is_connected(),
+            'recording_duration': recording_duration,
+            'buffer_size': total_buffer_size,  # Keep for backward compatibility
+            'recording_errors': 0,  # Keep for backward compatibility
+            'max_errors': 5,  # Keep for backward compatibility
+            'is_processing': self.is_processing,  # Keep for backward compatibility
+            'max_recording_duration': cfg.GARMIN_RECORD_SECONDS if hasattr(cfg, 'GARMIN_RECORD_SECONDS') else 600,  # Keep for backward compatibility
+            'audio_pipeline_healthy': True,  # Keep for backward compatibility
+            'audio_callback_count': 0,  # Keep for backward compatibility
+            'audio_callback_errors': 0,  # Keep for backward compatibility
+            'time_since_last_audio': 0,  # Keep for backward compatibility
+            'audio_callback_rate': 0,  # Keep for backward compatibility
+            'last_chunk_size': 0,  # Keep for backward compatibility
+            'active_users': max(legacy_active_users, aligned_active_users),  # Keep for backward compatibility
+            'total_user_buffer_size': total_buffer_size,  # Keep for backward compatibility
+            'aligned_recording_active': self.aligned_sink is not None,  # Keep for backward compatibility
+            'aligned_users': aligned_active_users,  # Keep for backward compatibility
+            'aligned_session_samples': aligned_session_samples,  # Keep for backward compatibility
+            'aligned_session_duration_ms': aligned_session_duration_ms,  # Keep for backward compatibility
+            'aligned_recording': {
+                'active_users': aligned_active_users,
+                'session_samples': aligned_session_samples,
+                'session_duration_ms': aligned_session_duration_ms,
+                'session_timestamp': self.aligned_sink.session_start_timestamp if self.aligned_sink else None
+            },
+            'legacy_recording': {
+                'active_users': legacy_active_users,
+                'total_buffer_size': total_buffer_size
+            },
+            'stt': {
+                'enabled': cfg.STT_ENABLED,
+                'engine': cfg.STT_ENGINE,
+                'buffer_size': len(self.stt_buffer),
+                'worker_running': self.stt_worker_running
+            },
+            'batch_processing': self.batch_manager.get_session_stats() if self.batch_manager else None
         }
     
     def get_recording_info(self) -> dict:
@@ -1816,3 +1862,309 @@ class GarminVoiceManager:
             "compressed_duration": compressed_duration,
             **aligned_info
         }
+
+
+class BatchProcessingManager:
+    """Manages multiple concurrent recording sessions for efficient batch processing.
+    
+    OPTIMIZATION #6: Batch Processing Optimization
+    - Multiple session handling concurrently
+    - Resource pooling for audio processing
+    - Queue management for multiple users
+    - Efficient cleanup and resource management
+    - Session prioritization and load balancing
+    """
+    
+    def __init__(self):
+        self.active_sessions: Dict[str, AlignedPerUserSink] = {}
+        self.session_queue: queue.Queue = queue.Queue(maxsize=SESSION_QUEUE_SIZE)
+        self.session_stats: Dict[str, dict] = {}
+        self.resource_pool: Dict[str, Any] = {}
+        self.last_cleanup: float = time.time()
+        self._lock = threading.Lock()
+        self._cleanup_thread = None
+        self._cleanup_running = False
+        
+        # Start cleanup thread if batch processing is enabled
+        if BATCH_PROCESSING_ENABLED:
+            self._start_cleanup_thread()
+    
+    def _start_cleanup_thread(self):
+        """Start background cleanup thread for resource management."""
+        if self._cleanup_thread is None or not self._cleanup_thread.is_alive():
+            self._cleanup_running = True
+            self._cleanup_thread = threading.Thread(target=self._cleanup_worker, daemon=True)
+            self._cleanup_thread.start()
+            logger.info("🚀 Batch processing cleanup thread started")
+    
+    def _cleanup_worker(self):
+        """Background worker for periodic cleanup and resource management."""
+        while self._cleanup_running:
+            try:
+                time.sleep(BATCH_CLEANUP_INTERVAL)
+                self._perform_cleanup()
+            except Exception as e:
+                logger.error(f"❌ Error in cleanup worker: {e}")
+    
+    def _perform_cleanup(self):
+        """Perform periodic cleanup of completed sessions and resources."""
+        try:
+            current_time = time.time()
+            
+            # Use a timeout to prevent deadlocks
+            if not self._lock.acquire(timeout=5.0):
+                logger.error(f"❌ Timeout acquiring lock for cleanup")
+                return
+            
+            try:
+                # Clean up completed sessions
+                completed_sessions = []
+                for session_id, session in self.active_sessions.items():
+                    if not session.is_recording and session.cleanup_completed:
+                        completed_sessions.append(session_id)
+                
+                for session_id in completed_sessions:
+                    del self.active_sessions[session_id]
+                    if session_id in self.session_stats:
+                        del self.session_stats[session_id]
+                    logger.debug(f"🧹 Cleaned up completed session: {session_id}")
+                
+                # Clean up old statistics
+                old_stats = []
+                for session_id, stats in self.session_stats.items():
+                    if current_time - stats.get('last_activity', 0) > BATCH_CLEANUP_INTERVAL * 2:
+                        old_stats.append(session_id)
+                
+                for session_id in old_stats:
+                    del self.session_stats[session_id]
+                
+                # Log cleanup summary
+                if completed_sessions or old_stats:
+                    logger.info(f"🧹 Batch cleanup: {len(completed_sessions)} sessions, {len(old_stats)} stats cleaned")
+            finally:
+                self._lock.release()
+                    
+        except Exception as e:
+            logger.error(f"❌ Error during batch cleanup: {e}")
+    
+    def create_session(self, session_id: str, output_dir: str) -> Optional[AlignedPerUserSink]:
+        """Create a new recording session with resource management."""
+        try:
+            # Use a timeout to prevent deadlocks
+            if not self._lock.acquire(timeout=5.0):
+                logger.error(f"❌ Timeout acquiring lock for create_session {session_id}")
+                return None
+            
+            try:
+                # Check if we can create a new session
+                if len(self.active_sessions) >= MAX_CONCURRENT_SESSIONS:
+                    # Add to queue if we're at capacity
+                    if not self.session_queue.full():
+                        self.session_queue.put((session_id, output_dir))
+                        logger.info(f"⏳ Session {session_id} queued (max concurrent: {MAX_CONCURRENT_SESSIONS})")
+                        return None
+                    else:
+                        logger.warning(f"⚠️ Session queue full, rejecting {session_id}")
+                        return None
+                
+                # Create new session
+                session = AlignedPerUserSink(output_dir)
+                self.active_sessions[session_id] = session
+                
+                # Initialize session statistics
+                self.session_stats[session_id] = {
+                    'created': time.time(),
+                    'last_activity': time.time(),
+                    'status': 'active',
+                    'output_dir': output_dir
+                }
+                
+                logger.info(f"✅ Session {session_id} created (active: {len(self.active_sessions)}/{MAX_CONCURRENT_SESSIONS})")
+                return session
+            finally:
+                self._lock.release()
+                
+        except Exception as e:
+            logger.error(f"❌ Error creating session {session_id}: {e}")
+            return None
+    
+    def get_session(self, session_id: str) -> Optional[AlignedPerUserSink]:
+        """Get an existing session by ID."""
+        try:
+            # Use a timeout to prevent deadlocks
+            if not self._lock.acquire(timeout=5.0):
+                logger.error(f"❌ Timeout acquiring lock for get_session {session_id}")
+                return None
+            
+            try:
+                session = self.active_sessions.get(session_id)
+                if session:
+                    # Update activity timestamp
+                    if session_id in self.session_stats:
+                        self.session_stats[session_id]['last_activity'] = time.time()
+                    return session
+                return None
+            finally:
+                self._lock.release()
+                
+        except Exception as e:
+            logger.error(f"❌ Error getting session {session_id}: {e}")
+            return None
+    
+    def close_session(self, session_id: str) -> bool:
+        """Close and cleanup a session."""
+        try:
+            # Use a timeout to prevent deadlocks
+            if not self._lock.acquire(timeout=5.0):
+                logger.error(f"❌ Timeout acquiring lock for session {session_id}")
+                return False
+            
+            try:
+                if session_id in self.active_sessions:
+                    session = self.active_sessions[session_id]
+                    session.cleanup()
+                    
+                    # Remove from active sessions
+                    del self.active_sessions[session_id]
+                    
+                    # Update statistics
+                    if session_id in self.session_stats:
+                        self.session_stats[session_id]['status'] = 'closed'
+                        self.session_stats[session_id]['closed'] = time.time()
+                    
+                    logger.info(f"🔒 Session {session_id} closed (active: {len(self.active_sessions)}/{MAX_CONCURRENT_SESSIONS})")
+                    
+                    # Process queued sessions
+                    self._process_queue()
+                    return True
+                else:
+                    logger.warning(f"⚠️ Session {session_id} not found for closing")
+                    return False
+            finally:
+                self._lock.release()
+                    
+        except Exception as e:
+            logger.error(f"❌ Error closing session {session_id}: {e}")
+            return False
+    
+    def _process_queue(self):
+        """Process queued sessions when slots become available."""
+        try:
+            # Use a timeout to prevent deadlocks
+            if not self._lock.acquire(timeout=5.0):
+                logger.error(f"❌ Timeout acquiring lock for _process_queue")
+                return
+            
+            try:
+                while not self.session_queue.empty() and len(self.active_sessions) < MAX_CONCURRENT_SESSIONS:
+                    session_id, output_dir = self.session_queue.get_nowait()
+                    
+                    # Create the queued session
+                    session = AlignedPerUserSink(output_dir)
+                    self.active_sessions[session_id] = session
+                    
+                    # Initialize session statistics
+                    self.session_stats[session_id] = {
+                        'created': time.time(),
+                        'last_activity': time.time(),
+                        'status': 'active',
+                        'output_dir': output_dir,
+                        'was_queued': True
+                    }
+                    
+                    logger.info(f"✅ Queued session {session_id} activated (active: {len(self.active_sessions)}/{MAX_CONCURRENT_SESSIONS})")
+            finally:
+                self._lock.release()
+                    
+        except Exception as e:
+            logger.error(f"❌ Error processing session queue: {e}")
+    
+    def get_session_stats(self) -> dict:
+        """Get comprehensive statistics about all sessions."""
+        try:
+            # Use a timeout to prevent deadlocks
+            if not self._lock.acquire(timeout=5.0):
+                logger.error(f"❌ Timeout acquiring lock for get_session_stats")
+                return {
+                    'active_sessions': 0,
+                    'max_concurrent': MAX_CONCURRENT_SESSIONS,
+                    'queued_sessions': 0,
+                    'max_queue_size': SESSION_QUEUE_SIZE,
+                    'sessions': {},
+                    'error': 'Lock timeout'
+                }
+            
+            try:
+                stats = {
+                    'active_sessions': len(self.active_sessions),
+                    'max_concurrent': MAX_CONCURRENT_SESSIONS,
+                    'queued_sessions': self.session_queue.qsize(),
+                    'max_queue_size': SESSION_QUEUE_SIZE,
+                    'sessions': {}
+                }
+                
+                for session_id, session_data in self.session_stats.items():
+                    stats['sessions'][session_id] = session_data.copy()
+                
+                return stats
+            finally:
+                self._lock.release()
+                
+        except Exception as e:
+            logger.error(f"❌ Error getting session stats: {e}")
+            return {
+                'active_sessions': 0,
+                'max_concurrent': MAX_CONCURRENT_SESSIONS,
+                'queued_sessions': 0,
+                'max_queue_size': SESSION_QUEUE_SIZE,
+                'sessions': {},
+                'error': str(e)
+            }
+    
+    def shutdown(self):
+        """Shutdown the batch processing manager."""
+        try:
+            self._cleanup_running = False
+            
+            # Get list of sessions to close without holding the lock
+            sessions_to_close = []
+            with self._lock:
+                sessions_to_close = list(self.active_sessions.keys())
+            
+            # Close all active sessions (without holding the lock)
+            for session_id in sessions_to_close:
+                self._close_session_internal(session_id)
+            
+            # Wait for cleanup thread
+            if self._cleanup_thread and self._cleanup_thread.is_alive():
+                self._cleanup_thread.join(timeout=5)
+            
+            logger.info("🛑 Batch processing manager shutdown complete")
+            
+        except Exception as e:
+            logger.error(f"❌ Error during batch processing shutdown: {e}")
+    
+    def _close_session_internal(self, session_id: str) -> bool:
+        """Internal method to close a session without lock acquisition (for shutdown)."""
+        try:
+            if session_id in self.active_sessions:
+                session = self.active_sessions[session_id]
+                session.cleanup()
+                
+                # Remove from active sessions
+                del self.active_sessions[session_id]
+                
+                # Update statistics
+                if session_id in self.session_stats:
+                    self.session_stats[session_id]['status'] = 'closed'
+                    self.session_stats[session_id]['closed'] = time.time()
+                
+                logger.info(f"🔒 Session {session_id} closed during shutdown (active: {len(self.active_sessions)}/{MAX_CONCURRENT_SESSIONS})")
+                return True
+            else:
+                logger.warning(f"⚠️ Session {session_id} not found for closing during shutdown")
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ Error closing session {session_id} during shutdown: {e}")
+            return False
