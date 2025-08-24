@@ -654,8 +654,12 @@ class AlignedPerUserSink(voice_recv.AudioSink):
             return None
     
     def cleanup(self):
-        """Cleanup: pad all writers to session end and close files."""
-        logger.info("AlignedPerUserSink cleanup: finalizing aligned recordings")
+        """Cleanup method required by voice_recv.AudioSink interface - calls finalize_session()."""
+        self.finalize_session()
+    
+    def finalize_session(self):
+        """Finalize session: pad all writers to session end and close files."""
+        logger.info("AlignedPerUserSink session finalization: finalizing aligned recordings")
         
         try:
             self.is_recording = False
@@ -1116,7 +1120,7 @@ def simulate_voice_session():
         
         # Finalize recording
         print("\\n🔄 Finalizing recordings...")
-        sink.cleanup()
+        sink.finalize_session()
         
         # Find timeline file
         timeline_files = [f for f in os.listdir(output_dir) if f.startswith("timeline_")]
@@ -1482,7 +1486,7 @@ class GarminVoiceManager:
             # If aligned recording is active, finalize it
             if self.aligned_sink:
                 try:
-                    self.aligned_sink.cleanup()
+                    self.aligned_sink.finalize_session()
                     logger.info("✅ Aligned recording saved and finalized")
                     
                     # Reset the sink for continued recording
@@ -1634,7 +1638,7 @@ class GarminVoiceManager:
                 self.vc = None
             if self.aligned_sink:
                 try:
-                    self.aligned_sink.cleanup()
+                    self.aligned_sink.finalize_session()
                 except:
                     pass
                 self.aligned_sink = None
@@ -1649,13 +1653,13 @@ class GarminVoiceManager:
         try:
             self._stop_stt_worker()
             
-            # Cleanup aligned recording
+            # Finalize aligned recording
             if self.aligned_sink:
                 try:
-                    self.aligned_sink.cleanup()
+                    self.aligned_sink.finalize_session()
                     logger.info("✅ Aligned recordings finalized")
                 except Exception as e:
-                    logger.error(f"Error cleaning up aligned sink: {e}")
+                    logger.error(f"Error finalizing aligned sink: {e}")
                 finally:
                     self.aligned_sink = None
             

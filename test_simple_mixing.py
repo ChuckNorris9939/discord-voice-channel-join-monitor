@@ -187,7 +187,7 @@ class SimpleMixingTest:
             return None
         finally:
             # Cleanup test files
-            test_sink.cleanup()
+            test_sink.finalize_session()
             if os.path.exists(test_dir):
                 shutil.rmtree(test_dir)
     

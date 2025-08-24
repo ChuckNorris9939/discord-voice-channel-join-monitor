@@ -87,7 +87,7 @@ def test_basic_functionality():
         print(f"📤 Sent {frame_count} voice frames")
         
         # Cleanup
-        sink.cleanup()
+        sink.finalize_session()
         print("✅ Cleanup completed")
         
         # Check output files

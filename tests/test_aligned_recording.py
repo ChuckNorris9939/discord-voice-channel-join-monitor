@@ -114,7 +114,7 @@ def simulate_voice_session():
         
         # Finalize recording
         print("\n🔄 Finalizing recordings...")
-        sink.cleanup()
+        sink.finalize_session()
         
         # Find timeline file
         timeline_files = [f for f in os.listdir(output_dir) if f.startswith("timeline_")]

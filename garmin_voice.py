@@ -936,10 +936,14 @@ class AlignedPerUserSink(voice_recv.AudioSink):
             return None
     
     def cleanup(self):
-        """Cleanup: pad all writers to session end and close files."""
-        # Prevent double cleanup
+        """Cleanup method required by voice_recv.AudioSink interface - calls finalize_session()."""
+        self.finalize_session()
+    
+    def finalize_session(self):
+        """Finalize session: pad all writers to session end and close files."""
+        # Prevent double finalization
         if self.cleanup_completed:
-            logger.debug(f"🔄 Cleanup already completed for session {self.session_start_timestamp}, skipping duplicate execution")
+            logger.debug(f"🔄 Session finalization already completed for session {self.session_start_timestamp}, skipping duplicate execution")
             return
             
         logger.info(f"AlignedPerUserSink cleanup: finalizing aligned recordings for session {self.session_start_timestamp}")
@@ -1019,7 +1023,7 @@ class AlignedPerUserSink(voice_recv.AudioSink):
                     
                     with open(timeline_path, 'w', encoding='utf-8') as f:
                         json.dump(timeline_data, f, indent=2, ensure_ascii=False)
-                    logger.info(f"✅ Saved timeline data: {timeline_path}")
+                    logger.debug(f"✅ Saved timeline data: {timeline_path}")
                     
                     # POST-PROCESSING: Compress silence if enabled
                     try:
@@ -1118,18 +1122,18 @@ class AlignedPerUserSink(voice_recv.AudioSink):
                 except Exception as e:
                     logger.error(f"❌ Failed to save timeline data: {e}", exc_info=True)
             
-            logger.info(f"🎯 AlignedPerUserSink cleanup completed: {len(self.user_writers)} user tracks, "
+            logger.info(f"🎯 AlignedPerUserSink session finalization completed: {len(self.user_writers)} user tracks, "
                        f"{self.total_session_samples} samples ({session_duration_ms:.1f}ms)")
             
-            # Mark cleanup as completed to prevent double execution
+            # Mark finalization as completed to prevent double execution
             self.cleanup_completed = True
-            logger.debug(f"🔒 Cleanup marked as completed for session {self.session_start_timestamp}")
+            logger.debug(f"🔒 Session finalization marked as completed for session {self.session_start_timestamp}")
                        
         except Exception as e:
-            logger.error(f"💥 Critical error in cleanup: {e}", exc_info=True)
-            # Mark cleanup as completed even on error to prevent infinite retries
+            logger.error(f"💥 Critical error in session finalization: {e}", exc_info=True)
+            # Mark finalization as completed even on error to prevent infinite retries
             self.cleanup_completed = True
-            logger.debug(f"🔒 Cleanup marked as completed (with error) for session {self.session_start_timestamp}")
+            logger.debug(f"🔒 Session finalization marked as completed (with error) for session {self.session_start_timestamp}")
 
 
 class UserAudioBuffer:
@@ -1463,8 +1467,8 @@ class GarminVoiceManager:
                     # Get the session timestamp for filename generation
                     session_timestamp = self.aligned_sink.session_start_timestamp
                     
-                    # Cleanup the sink first to get compression info
-                    self.aligned_sink.cleanup()
+                    # Finalize the sink first to get compression info
+                    self.aligned_sink.finalize_session()
                     logger.info("✅ Aligned recording saved and finalized")
                     
                     # Generate the correct filename based on session start time
@@ -1629,7 +1633,7 @@ class GarminVoiceManager:
                 self.vc = None
             if self.aligned_sink:
                 try:
-                    self.aligned_sink.cleanup()
+                    self.aligned_sink.finalize_session()
                 except:
                     pass
                 self.aligned_sink = None
@@ -1647,10 +1651,10 @@ class GarminVoiceManager:
             # Cleanup aligned recording
             if self.aligned_sink:
                 try:
-                    self.aligned_sink.cleanup()
+                    self.aligned_sink.finalize_session()
                     logger.info("✅ Aligned recordings finalized")
                 except Exception as e:
-                    logger.error(f"Error cleaning up aligned sink: {e}")
+                    logger.error(f"Error finalizing aligned sink: {e}")
                 finally:
                     self.aligned_sink = None
             
@@ -1995,7 +1999,7 @@ class BatchProcessingManager:
             try:
                 if session_id in self.active_sessions:
                     session = self.active_sessions[session_id]
-                    session.cleanup()
+                    session.finalize_session()
                     
                     # Remove from active sessions
                     del self.active_sessions[session_id]
@@ -2122,7 +2126,7 @@ class BatchProcessingManager:
         try:
             if session_id in self.active_sessions:
                 session = self.active_sessions[session_id]
-                session.cleanup()
+                session.finalize_session()
                 
                 # Remove from active sessions
                 del self.active_sessions[session_id]
