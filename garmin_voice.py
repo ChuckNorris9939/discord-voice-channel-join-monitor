@@ -60,6 +60,10 @@ MIN_WINDOW_S: Final[float] = 0.7
 WINDOW_BYTES_MAX: Final[int] = int(RECOGNITION_WINDOW_S * SAMPLERATE * CHANNELS * BYTES_PER_SAMPLE)
 WINDOW_BYTES_MIN: Final[int] = int(MIN_WINDOW_S * SAMPLERATE * CHANNELS * BYTES_PER_SAMPLE)
 
+# Audio processing configuration
+SILENCE_COMPRESSION_ENABLED: Final[bool] = os.getenv("GARMIN_SILENCE_COMPRESSION_ENABLED", "true").lower() == "true"
+CONVERT_TO_MONO: Final[bool] = os.getenv("GARMIN_CONVERT_TO_MONO", "true").lower() == "true"
+
 # Path configuration
 SOUNDS_DIR = os.path.join(SCRIPT_DIR, "data", "assets", "sounds")
 TEMP_DIR = os.path.join(SCRIPT_DIR, "data", "temp")
@@ -162,8 +166,8 @@ class UserWavWriter:
             return
             
         try:
-            # Convert stereo to mono if needed (take left channel)
-            if len(pcm_data) % 4 == 0:  # Stereo 16-bit
+            # Convert stereo to mono if enabled and needed
+            if CONVERT_TO_MONO and len(pcm_data) % 4 == 0:  # Stereo 16-bit
                 mono_data = bytearray()
                 for i in range(0, len(pcm_data), 4):
                     # Take left channel (first 2 bytes)
@@ -260,8 +264,12 @@ class AlignedPerUserSink(voice_recv.AudioSink):
         self.user_sample_cursors: Dict[int, int] = {}  # user_id -> expected next sample position
         
         # Post-processing silence compression settings (used only in cleanup)
+        self.silence_compression_enabled = False # SILENCE_COMPRESSION_ENABLED
         self.silence_compression_threshold = 5.0  # Compress silence longer than 5 seconds  
         self.silence_compression_target = 1.0    # Reduce long silence to 1 second
+        
+        # Cleanup state tracking
+        self.cleanup_completed = False
         
         os.makedirs(output_dir, exist_ok=True)
         logger.info(f"AlignedPerUserSink initialized: session_start={self.session_start_timestamp}")
@@ -396,7 +404,7 @@ class AlignedPerUserSink(voice_recv.AudioSink):
                     if gap_samples > 240000:  # More than 5 seconds
                         logger.debug(f"🔇 Gap filled for {writer.username}: {gap_samples} samples ({gap_samples/48000:.1f}s)")
     
-    def _copy_to_garmin_output(self, compressed_files: dict, timeline_data: dict):
+    def _copy_to_garmin_output(self, compressed_files: dict, timeline_data: dict, is_compressed: bool = True):
         """Copy compressed files to garmin-output directory with WebGUI naming scheme."""
         import shutil
         
@@ -422,7 +430,7 @@ class AlignedPerUserSink(voice_recv.AudioSink):
             now = datetime.now()
             webgui_timestamp = now.strftime("%d.%m.%y_%H-%M-%S")
         
-        logger.info(f"📂 Copying compressed files to garmin-output with timestamp: {webgui_timestamp}")
+        logger.info(f"📂 Copying {'compressed' if is_compressed else 'uncompressed'} files to garmin-output with timestamp: {webgui_timestamp}")
         
         copied_files = []
         
@@ -439,8 +447,9 @@ class AlignedPerUserSink(voice_recv.AudioSink):
                     # Individual user file: {dd.mm.yy_hh-mm-ss}_user_{username}.mp3
                     # Extract username from original filename
                     original_basename = os.path.basename(source_file)
-                    if '_compressed.mp3' in original_basename:
-                        # Find user ID in timeline to get username
+                    
+                    if is_compressed and '_compressed.mp3' in original_basename:
+                        # Find user ID in timeline to get username for compressed files
                         user_id = None
                         for uid, user_data in timeline_data.get('users', {}).items():
                             if user_data['file_path'] == source_file.replace('_compressed.mp3', '.mp3'):
@@ -457,8 +466,22 @@ class AlignedPerUserSink(voice_recv.AudioSink):
                                 logger.warning(f"Cannot determine username for {source_file}")
                                 continue
                     else:
-                        logger.warning(f"Unexpected filename format: {source_file}")
-                        continue
+                        # For uncompressed files, extract username from the original filename
+                        # Original filename format: dd.mm.yy_HH-MM-SS_username.mp3
+                        original_basename = os.path.basename(source_file)
+                        if '_' in original_basename:
+                            # Split by underscore and get the username part
+                            parts = original_basename.split('_')
+                            if len(parts) >= 3:
+                                # Format: dd.mm.yy_HH-MM-SS_username.mp3
+                                username = parts[-1].replace('.mp3', '')
+                                dest_filename = f"{webgui_timestamp}_user_{username}.mp3"
+                            else:
+                                logger.warning(f"Cannot determine username for uncompressed file: {source_file}")
+                                continue
+                        else:
+                            logger.warning(f"Unexpected filename format for uncompressed file: {source_file}")
+                            continue
                 
                 dest_path = os.path.join(garmin_output_dir, dest_filename)
                 
@@ -475,6 +498,72 @@ class AlignedPerUserSink(voice_recv.AudioSink):
             logger.info(f"✅ Successfully copied {len(copied_files)} files to garmin-output for WebGUI")
         else:
             logger.warning("⚠️ No files were copied to garmin-output")
+    
+    def mixing_audio(self, wav_files: List[str], timeline_data: dict, is_compressed: bool = False) -> dict:
+        """Create mixed audio file from multiple user tracks."""
+        try:
+            if len(wav_files) <= 1:
+                logger.debug("ℹ️ Only one track - no mixing needed")
+                return {}
+            
+            compression_suffix = "_compressed" if is_compressed else ""
+            logger.info(f"🎵 Creating mixed file from {len(wav_files)} {'compressed' if is_compressed else 'uncompressed'} recordings...")
+            logger.info(f"📁 Input files: {[os.path.basename(f) for f in wav_files]}")
+            
+            # Load all audio files
+            audio_segments = {}
+            max_length_ms = 0
+            
+            for wav_file in wav_files:
+                if not os.path.exists(wav_file):
+                    continue
+                audio = AudioSegment.from_file(wav_file)
+                audio_segments[wav_file] = audio
+                max_length_ms = max(max_length_ms, len(audio))
+            
+            # Create mixed file from all tracks
+            if len(audio_segments) > 1:
+                # Start with silent base track
+                mixed_audio = None
+                
+                for wav_file, audio in audio_segments.items():
+                    if mixed_audio is None:
+                        # First track becomes the base
+                        mixed_audio = audio
+                        logger.debug(f"Using {os.path.basename(wav_file)} as base track")
+                    else:
+                        # Overlay additional tracks
+                        mixed_audio = mixed_audio.overlay(audio)
+                        logger.debug(f"Overlaid {os.path.basename(wav_file)} onto mix")
+                
+                # Save mixed file
+                if mixed_audio:
+                    # Create mixed filename based on session timestamp
+                    session_timestamp = os.path.basename(list(wav_files)[0]).split('_')[0] + '_' + os.path.basename(list(wav_files)[0]).split('_')[1]
+                    mixed_file = os.path.join(os.path.dirname(list(wav_files)[0]), f"{session_timestamp}_mixed{compression_suffix}.mp3")
+                    
+                    mixed_audio.export(mixed_file, format="mp3")
+                    
+                    # Create result dictionary
+                    result_files = {}
+                    for wav_file in wav_files:
+                        result_files[wav_file] = wav_file
+                    result_files['mixed'] = mixed_file
+                    
+                    logger.info(f"✅ Mixed file created: {os.path.basename(mixed_file)} ({len(mixed_audio)}ms, {len(audio_segments)} tracks)")
+                    logger.info(f"📋 Added mixed file to result list: {os.path.basename(mixed_file)}")
+                    
+                    return result_files
+                else:
+                    logger.warning("⚠️ Failed to create mixed audio")
+                    return {}
+            else:
+                logger.debug("ℹ️ Only one track - no mixing needed")
+                return {}
+                
+        except Exception as e:
+            logger.error(f"❌ Error in mixing_audio: {e}", exc_info=True)
+            return {}
     
     def compress_recordings_post_process(self, wav_files: List[str], timeline_data: dict) -> dict:
         """Post-process WAV files to remove long silence gaps while maintaining sync."""
@@ -578,31 +667,13 @@ class AlignedPerUserSink(voice_recv.AudioSink):
             if len(compressed_audio_segments) > 1:
                 logger.info("🎵 Creating mixed file from compressed recordings...")
                 
-                # Start with silent base track
-                mixed_audio = None
-                
-                for wav_file, compressed_audio in compressed_audio_segments.items():
-                    if mixed_audio is None:
-                        # First track becomes the base
-                        mixed_audio = compressed_audio
-                        logger.debug(f"Using {os.path.basename(wav_file)} as base track")
-                    else:
-                        # Overlay additional tracks
-                        mixed_audio = mixed_audio.overlay(compressed_audio)
-                        logger.debug(f"Overlaid {os.path.basename(wav_file)} onto mix")
-                
-                # Save mixed file
-                if mixed_audio:
-                    # Create mixed filename based on session timestamp
-                    session_timestamp = os.path.basename(list(wav_files)[0]).split('_')[0] + '_' + os.path.basename(list(wav_files)[0]).split('_')[1]
-                    mixed_file = os.path.join(os.path.dirname(list(wav_files)[0]), f"{session_timestamp}_mixed_compressed.mp3")
-                    
-                    mixed_audio.export(mixed_file, format="mp3")
-                    compressed_files['mixed'] = mixed_file
-                    
-                    logger.info(f"✅ Mixed compressed file created: {os.path.basename(mixed_file)} ({len(mixed_audio)}ms, {len(compressed_audio_segments)} tracks)")
+                # Use the new mixing function
+                mixed_result = self.mixing_audio(list(compressed_audio_segments.keys()), timeline_data, is_compressed=True)
+                if mixed_result and 'mixed' in mixed_result:
+                    compressed_files['mixed'] = mixed_result['mixed']
+                    logger.info(f"✅ Mixed compressed file created via mixing_audio function")
                 else:
-                    logger.warning("⚠️ Failed to create mixed audio")
+                    logger.warning("⚠️ Failed to create mixed compressed file")
             else:
                 logger.debug("ℹ️ Only one track - no mixed file needed")
             
@@ -636,7 +707,12 @@ class AlignedPerUserSink(voice_recv.AudioSink):
     
     def cleanup(self):
         """Cleanup: pad all writers to session end and close files."""
-        logger.info("AlignedPerUserSink cleanup: finalizing aligned recordings")
+        # Prevent double cleanup
+        if self.cleanup_completed:
+            logger.debug(f"🔄 Cleanup already completed for session {self.session_start_timestamp}, skipping duplicate execution")
+            return
+            
+        logger.info(f"AlignedPerUserSink cleanup: finalizing aligned recordings for session {self.session_start_timestamp}")
         
         try:
             self.is_recording = False
@@ -679,7 +755,12 @@ class AlignedPerUserSink(voice_recv.AudioSink):
                         if current_samples < self.total_session_samples:
                             samples_to_pad = self.total_session_samples - current_samples
                             logger.debug(f"Padding {samples_to_pad} samples for {writer.username}")
-                            writer.pad_to_sample(self.total_session_samples)
+                            
+                            # Check if writer is still valid before padding
+                            if not writer.is_closed:
+                                writer.pad_to_sample(self.total_session_samples)
+                            else:
+                                logger.warning(f"Writer for {writer.username} is already closed, skipping padding")
                         
                         # Record timeline info
                         timeline_data['users'][str(user_id)] = {  # Ensure string key for JSON
@@ -714,7 +795,9 @@ class AlignedPerUserSink(voice_recv.AudioSink):
                     try:
                         wav_files = [data['file_path'] for data in timeline_data['users'].values()]
                         
-                        if len(wav_files) > 0 and self.silence_compression_threshold > 0:
+                        logger.info(f"🔧 Silence compression status: enabled={self.silence_compression_enabled}, threshold={self.silence_compression_threshold}s")
+                        
+                        if len(wav_files) > 0 and self.silence_compression_enabled:
                             logger.info("🔧 Starting post-process silence compression...")
                             
                             compression_result = self.compress_recordings_post_process(wav_files, timeline_data)
@@ -753,7 +836,7 @@ class AlignedPerUserSink(voice_recv.AudioSink):
                                 
                                 # Copy compressed files to garmin-output with WebGUI naming
                                 try:
-                                    self._copy_to_garmin_output(compression_result['compressed_files'], timeline_data)
+                                    self._copy_to_garmin_output(compression_result['compressed_files'], timeline_data, is_compressed=True)
                                 except Exception as copy_error:
                                     logger.error(f"❌ Error copying to garmin-output: {copy_error}", exc_info=True)
                                 
@@ -768,6 +851,37 @@ class AlignedPerUserSink(voice_recv.AudioSink):
                         else:
                             logger.debug("ℹ️ Skipping post-process compression (disabled or no files)")
                             
+                            # IMPORTANT: Even when compression is disabled, we need to copy files to garmin-output
+                            if len(wav_files) > 0:
+                                logger.info("📂 Copying uncompressed files to garmin-output...")
+                                try:
+                                    # Create a simple file mapping for uncompressed files
+                                    uncompressed_files = {}
+                                    for wav_file in wav_files:
+                                        # For uncompressed files, we'll copy the original files
+                                        # Use the file path as both key and value for uncompressed files
+                                        uncompressed_files[wav_file] = wav_file
+                                    
+                                    # Create mixed file from uncompressed tracks (even when compression is disabled)
+                                    if len(wav_files) > 1:
+                                        logger.info("🎵 Creating mixed file from uncompressed recordings...")
+                                        
+                                        # Use the new mixing function
+                                        mixed_result = self.mixing_audio(wav_files, timeline_data, is_compressed=False)
+                                        if mixed_result and 'mixed' in mixed_result:
+                                            uncompressed_files['mixed'] = mixed_result['mixed']
+                                            logger.info(f"✅ Mixed uncompressed file created via mixing_audio function")
+                                        else:
+                                            logger.warning("⚠️ Failed to create mixed uncompressed file")
+                                    else:
+                                        logger.debug("ℹ️ Only one track - no mixing needed")
+                                    
+                                    # Copy uncompressed files to garmin-output
+                                    self._copy_to_garmin_output(uncompressed_files, timeline_data, is_compressed=False)
+                                    logger.info("✅ Uncompressed files copied to garmin-output")
+                                except Exception as copy_error:
+                                    logger.error(f"❌ Error copying uncompressed files to garmin-output: {copy_error}", exc_info=True)
+                    
                     except Exception as comp_error:
                         logger.error(f"❌ Error in post-process compression: {comp_error}", exc_info=True)
                     
@@ -776,9 +890,16 @@ class AlignedPerUserSink(voice_recv.AudioSink):
             
             logger.info(f"🎯 AlignedPerUserSink cleanup completed: {len(self.user_writers)} user tracks, "
                        f"{self.total_session_samples} samples ({session_duration_ms:.1f}ms)")
+            
+            # Mark cleanup as completed to prevent double execution
+            self.cleanup_completed = True
+            logger.debug(f"🔒 Cleanup marked as completed for session {self.session_start_timestamp}")
                        
         except Exception as e:
             logger.error(f"💥 Critical error in cleanup: {e}", exc_info=True)
+            # Mark cleanup as completed even on error to prevent infinite retries
+            self.cleanup_completed = True
+            logger.debug(f"🔒 Cleanup marked as completed (with error) for session {self.session_start_timestamp}")
 
 
 class UserAudioBuffer:
