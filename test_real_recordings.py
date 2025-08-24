@@ -103,6 +103,19 @@ class RealRecordingsPerformanceTest:
             os.environ[key] = value
             logger.info(f"🔧 Set {key} = {value}")
         
+        # OPTIMIZATION #5: Set advanced silence detection method for testing
+        if test_config['compression_enabled']:
+            # Test advanced silence detection
+            os.environ['GARMIN_SILENCE_DETECTION_METHOD'] = 'advanced'
+            os.environ['GARMIN_SILENCE_VAD_THRESHOLD'] = '0.3'
+            os.environ['GARMIN_SILENCE_SPECTRAL_THRESHOLD'] = '0.15'
+            os.environ['GARMIN_SILENCE_MIN_DURATION_MS'] = '500'
+            logger.info("🔧 Set GARMIN_SILENCE_DETECTION_METHOD = advanced (OPTIMIZATION #5)")
+        else:
+            # Use simple detection for non-compression tests
+            os.environ['GARMIN_SILENCE_DETECTION_METHOD'] = 'simple'
+            logger.info("🔧 Set GARMIN_SILENCE_DETECTION_METHOD = simple")
+        
         # Create test sink
         test_dir = os.path.join(self.test_output_dir, f"test_{self.test_timestamp}")
         test_sink = AlignedPerUserSink(test_dir)
@@ -132,61 +145,45 @@ class RealRecordingsPerformanceTest:
         
         try:
             if test_config['compression_enabled']:
-                # Test with compression - FIRST mix, THEN compress the mixed file
-                logger.info("🔧 Running with compression: FIRST mix, THEN compress...")
+                # Test with compression - DEFAULT workflow: compress individual files, then mix
+                logger.info("🔧 Running with compression: DEFAULT workflow (compress individual files, then mix)...")
                 
-                # Step 1: Mix the original files first
-                logger.info("🎵 Step 1: Mixing original files...")
-                mixing_start = time.perf_counter()
-                timeline_data = {"test": True}
-                mixing_result = test_sink.mixing_audio(self.recording_files, timeline_data, is_compressed=False)
-                mixing_time = time.perf_counter() - mixing_start
-                
-                if not mixing_result or 'mixed' not in mixing_result:
-                    logger.error("❌ Mixing failed")
-                    return None
-                
-                mixed_file = mixing_result['mixed']
-                logger.info(f"✅ Mixed file created: {os.path.basename(mixed_file)}")
-                logger.info(f"⏱️  Mixing time: {mixing_time:.2f}s")
-                
-                # Step 2: Now compress the mixed file
-                logger.info("🔧 Step 2: Compressing the mixed file...")
+                # Step 1: Compress individual files first
+                logger.info("🔧 Step 1: Compressing individual files...")
                 compression_start = time.perf_counter()
                 
-                # Create a new timeline for compression
+                # Create timeline data for compression
                 compression_timeline = {
                     "test": True,
                     "session_duration_ms": 1611237  # Use actual duration from real files
                 }
                 
-                # Compress the single mixed file
-                compression_result = test_sink.compress_recordings_post_process([mixed_file], compression_timeline)
+                # Compress individual files (this will also create mixed file from compressed tracks)
+                compression_result = test_sink.compress_recordings_post_process(self.recording_files, compression_timeline)
                 compression_time = time.perf_counter() - compression_start
                 
                 if compression_result and 'compressed_files' in compression_result:
                     # Get the compressed mixed file
                     compressed_mixed_file = None
-                    for original_file, compressed_file in compression_result['compressed_files'].items():
-                        if original_file == mixed_file:
-                            compressed_mixed_file = compressed_file
+                    for file_type, file_path in compression_result['compressed_files'].items():
+                        if file_type == 'mixed':
+                            compressed_mixed_file = file_path
                             break
                     
                     if compressed_mixed_file:
                         logger.info(f"✅ Compressed mixed file created: {os.path.basename(compressed_mixed_file)}")
                         logger.info(f"⏱️  Compression time: {compression_time:.2f}s")
                         
-                        # Update the result to use the compressed mixed file
-                        result = {
-                            'compressed_files': {mixed_file: compressed_mixed_file},
-                            'mixed': compressed_mixed_file
-                        }
+                        # Use the compressed result
+                        result = compression_result
+                        mixing_time = 0  # Mixing is included in compression workflow
                     else:
                         logger.warning("⚠️ No compressed mixed file created")
-                        result = mixing_result  # Use original mixed file
+                        result = None
+                        compression_time = 0
                 else:
-                    logger.warning("⚠️ Compression failed, using original mixed file")
-                    result = mixing_result  # Use original mixed file
+                    logger.warning("⚠️ Compression failed")
+                    result = None
                     compression_time = 0
             else:
                 # Test without compression (direct mixing)
@@ -209,6 +206,10 @@ class RealRecordingsPerformanceTest:
             
             total_time = compression_time + mixing_time
             
+            # For default workflow, mixing is included in compression time
+            if test_config['compression_enabled']:
+                total_time = compression_time  # Mixing is included in compression workflow
+            
             # Copy mixed file to test output with descriptive name
             if 'mixed' in result:
                 mixed_file = result['mixed']
@@ -226,7 +227,7 @@ class RealRecordingsPerformanceTest:
                     file_size = os.path.getsize(dest_path) / (1024 * 1024)  # MB
                     logger.info(f"📊 File size: {file_size:.1f} MB")
             elif test_config['compression_enabled'] and 'compressed_files' in result and 'mixed' in result['compressed_files']:
-                # Handle compressed files case
+                # Handle compressed files case (default workflow)
                 mixed_file = result['compressed_files']['mixed']
                 if os.path.exists(mixed_file):
                     # Create descriptive filename
@@ -349,8 +350,8 @@ class RealRecordingsPerformanceTest:
                 logger.info(f"      ⏱️  Total: {no_compression_test['total_time']:.2f}s")
                 
                 logger.info(f"   📊 Test 2 (With Compression):")
-                logger.info(f"      🎵 Mixing only: {compression_test['mixing_time']:.2f}s (included)")
-                logger.info(f"      🔧 Compression: {compression_test['compression_time']:.2f}s")
+                logger.info(f"      🎵 Mixing included: {compression_test['mixing_time']:.2f}s (in compression)")
+                logger.info(f"      🔧 Compression + mixing: {compression_test['compression_time']:.2f}s")
                 logger.info(f"      ⏱️  Total: {compression_test['total_time']:.2f}s")
                 
                 # Calculate actual mixing performance difference
@@ -364,7 +365,7 @@ class RealRecordingsPerformanceTest:
                     logger.info(f"\n   🎯 MIXING PERFORMANCE ANALYSIS:")
                     logger.info(f"      🎵 Direct mixing: {no_compression_test['mixing_time']:.2f}s")
                     logger.info(f"      🔧 Compression includes mixing: {compression_test['compression_time']:.2f}s")
-                    logger.info(f"      📊 Note: Mixing time is included in compression time")
+                    logger.info(f"      📊 Note: Mixing time is included in compression time (default workflow)")
         
         # File locations
         logger.info("\n📁 GENERATED FILES:")
