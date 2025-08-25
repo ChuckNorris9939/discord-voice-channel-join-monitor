@@ -808,16 +808,16 @@ def cleanup_stats_route():
 
 def run_flask():
     try:
-        host = "0.0.0.0"
-        port = int(os.environ.get("PORT", 8080))
-        logger.info(f"Attempting to start Flask server (Waitress) on {host}:{port}. If you see an 'Address already in use' error, try setting the PORT environment variable to a different value.")
+    host = "0.0.0.0"
+    port = int(os.environ.get("PORT", 8080))
+    logger.info(f"Attempting to start Flask server (Waitress) on {host}:{port}. If you see an 'Address already in use' error, try setting the PORT environment variable to a different value.")
         
         # Set up isolated asyncio environment for Flask thread to prevent loop conflicts
         import asyncio
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
-        serve(app, host=host, port=port, threads=4)
+    serve(app, host=host, port=port, threads=4)
     except Exception as e:
         logger.error(f"Error starting Flask server: {e}", exc_info=True)
 
@@ -1412,7 +1412,7 @@ async def on_ready():
         
         periodic_cleanup_task.start()
         logger.info("🧹 Periodic cleanup task started")
-        
+
     except Exception as e:
         logger.error(f"❌ Failed to start background tasks: {e}", exc_info=True)
 
@@ -1476,7 +1476,7 @@ async def on_ready():
             else:
                 logger.info("ℹ️ Startup Auto-Join: No users found in monitored channels")
                 
-        except Exception as e:
+    except Exception as e:
             logger.error(f"❌ Error during startup auto-join check: {e}", exc_info=True)
 
 
@@ -3124,8 +3124,8 @@ def handle_signal(signum, frame):
     
     signal_name = signal.Signals(signum).name if isinstance(signum, int) else str(signum)
     logger.info(f"Signal {signal_name} empfangen. Leite sofortigen shutdown ein.")
-    shutdown_initiated = True
-    
+            shutdown_initiated = True
+
     # Send shutdown message IMMEDIATELY in signal handler
     try:
         if bot.is_ready():
@@ -3144,9 +3144,9 @@ def handle_signal(signum, frame):
                         )
                         logger.info("'Bot wird gestoppt...' Nachricht im Signal-Handler gesendet.")
                         await asyncio.sleep(0.5)
-                    except Exception as e:
+    except Exception as e:
                         logger.error(f"Fehler beim Senden der Signal-Shutdown-Nachricht: {e}")
-                    finally:
+    finally:
                         # Force close the bot
                         await original_close()
                 
