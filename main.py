@@ -685,8 +685,17 @@ def garmin_save_route():
                 # Get recording info before saving
                 recording_info = garmin_manager.get_recording_info()
                 
-                # Save the recording
-                garmin_manager.save_recording()
+                # Save the recording directly (synchronous call)
+                try:
+                    save_result = garmin_manager.save_recording()
+                    logger.info(f"Flask save result: {save_result}")
+                except Exception as e:
+                    logger.error(f"Error in Flask save operation: {e}")
+                    return {"success": False, "error": f"Save operation failed: {str(e)}"}
+                
+                # Check if save was successful
+                if save_result and "❌" in save_result:
+                    return {"success": False, "error": save_result}
                 
                 # Get updated info after saving
                 updated_info = garmin_manager.get_recording_info()
@@ -694,7 +703,7 @@ def garmin_save_route():
                 # Prepare response with detailed information
                 response_data = {
                     "success": True, 
-                    "message": "Garmin recording saved successfully"
+                    "message": save_result if save_result else "Garmin recording saved successfully"
                 }
                 
                 # Add filename and duration if available
@@ -1409,17 +1418,14 @@ async def on_ready():
 
     # Initialize garmin_manager after bot is ready
     global garmin_manager
-    # MIGRATION COMMENT: Garmin voice functionality temporarily disabled during py-cord migration
-    # try:
-    #     # Lazy import to avoid import errors during test discovery when voice-recv extension is unavailable
-    #     from garmin_voice import GarminVoiceManager
-    #     garmin_manager = GarminVoiceManager(bot)
-    #     logger.info("GarminVoiceManager initialized successfully")
-    # except Exception as e:
-    #     logger.error(f"Failed to initialize GarminVoiceManager: {e}", exc_info=True)
-    #     garmin_manager = None
-    garmin_manager = None  # Temporarily disabled for py-cord migration
-    logger.info("Garmin voice functionality temporarily disabled during py-cord migration")
+    try:
+        # Py-cord compatible import
+        from garmin_voice import GarminVoiceManager
+        garmin_manager = GarminVoiceManager(bot)
+        logger.info("✅ GarminVoiceManager initialized successfully with py-cord 2.6.1")
+    except Exception as e:
+        logger.error(f"❌ Failed to initialize GarminVoiceManager: {e}", exc_info=True)
+        garmin_manager = None
 
     # Start Flask server in background thread
     threading.Thread(target=run_flask, daemon=True).start()
@@ -1448,6 +1454,30 @@ async def on_ready():
             
     except Exception as e:
         logger.error(f"❌ Failed to send startup messages to Discord: {e}", exc_info=True)
+
+    # Startup Auto-Join: Check if users are already in monitored channels
+    if cfg.GARMIN_AUTO_JOIN_ENABLED and cfg.GARMIN_AUTO_JOIN_CHANNELS and garmin_manager is not None:
+        try:
+            logger.info("🔍 Checking for startup auto-join opportunities...")
+            
+            # Find a monitored channel with users
+            startup_channel = await find_monitored_channel_with_users()
+            
+            if startup_channel and not garmin_manager.is_connected():
+                logger.info(f"🚀 Startup Auto-Join: Found users in monitored channel '{startup_channel.name}', joining...")
+                try:
+                    await garmin_manager.join_channel(startup_channel)
+                    logger.info(f"✅ Startup Auto-Join successful: Joined '{startup_channel.name}'")
+                    await send_log_message(f"🎙️ **Auto-Join beim Start:** Bot ist {startup_channel.mention} beigetreten (User bereits vorhanden)")
+                except Exception as e:
+                    logger.error(f"❌ Startup Auto-Join failed for '{startup_channel.name}': {e}")
+            elif startup_channel and garmin_manager.is_connected():
+                logger.info(f"ℹ️ Startup Auto-Join: Users found in '{startup_channel.name}', but bot already connected")
+            else:
+                logger.info("ℹ️ Startup Auto-Join: No users found in monitored channels")
+                
+        except Exception as e:
+            logger.error(f"❌ Error during startup auto-join check: {e}", exc_info=True)
 
 
 async def get_user_list():
@@ -2364,10 +2394,18 @@ async def save_garmin(ctx: discord.ApplicationContext):
             
             # Add timeout for the save operation (max 5 minutes)
             try:
-                await asyncio.wait_for(
+                save_result = await asyncio.wait_for(
                     loop.run_in_executor(None, garmin_manager.save_recording),
                     timeout=300.0
                 )
+                logger.info(f"💾 Save operation result: {save_result}")
+                
+                # Check if save was successful
+                if save_result and "❌" in save_result:
+                    error_message = f"❌ **Save failed**\n\n{save_result}"
+                    await status_message.edit(content=error_message)
+                    return
+                    
             except asyncio.TimeoutError:
                 # Handle timeout gracefully
                 timeout_message = "⏰ **Save operation timed out**\n\n⚠️ The save operation is taking longer than expected.\n🔄 This might happen with very long recordings.\n💡 The recording might still be saved - check the output directory.\n\n**Status:** Processing continues in background..."
