@@ -24,16 +24,29 @@ except ImportError:
     vosk = None
 
 # --------------------------------------------------
-# Logging setup - now handled by config_loader.py
+# Logging setup - load config first to get proper log level
 # --------------------------------------------------
-logger = logging.getLogger(__name__)
-
-# Import NumPy for advanced audio processing
-import numpy as np
-
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 import config_loader as cfg
+
+# Load config first to get proper log level
+cfg.load_all_settings()
+
+# Set up logger with correct log level from config
+logger = logging.getLogger(__name__)
+# Apply log level from config if available
+if hasattr(cfg, 'LOG_LEVEL'):
+    log_level = getattr(logging, cfg.LOG_LEVEL.upper(), logging.INFO)
+    logger.setLevel(log_level)
+    # Also ensure root logger allows this level
+    root_logger = logging.getLogger()
+    if root_logger.level > log_level:
+        root_logger.setLevel(log_level)
+    logger.info(f"🔧 garmin_voice.py logger set to {cfg.LOG_LEVEL} level (numeric: {log_level})")
+
+# Import NumPy for advanced audio processing
+import numpy as np
 
 # Global thread pool for audio processing
 _audio_thread_pool = None
@@ -87,7 +100,7 @@ class LiveSTTMP3Sink(MP3Sink):
                 pass
 
 # ==================================================
-# Standard MP3Sink with STT post-processing
+# Utility Functions
 # ==================================================
 
 def _signal_handler(signum, frame):
@@ -222,8 +235,6 @@ class GarminVoiceManager:
         self._last_ok_time: float = 0.0
         self._last_stt_text: str = ""
         
-        # NOTE: Auto-save timer removed - using LiveSTTMP3Sink for real-time STT
-        
         # Vosk model (load only if available, graceful fallback)
         self.vosk_model = None
         try:
@@ -253,8 +264,34 @@ class GarminVoiceManager:
         os.makedirs(TEMP_DIR, exist_ok=True)
         os.makedirs(ALIGNED_RECORDINGS_DIR, exist_ok=True)
         
+        # Update logger level in case main.py has overridden it
+        self._update_logger_level()
+        
         logger.info("GarminVoiceManager initialized with py-cord compatibility")
     
+    def _update_logger_level(self):
+        """Update logger level from config, ensuring it works even after main.py setup."""
+        try:
+            # Reload settings to get latest LOG_LEVEL
+            cfg.load_all_settings()
+            
+            # Use the new apply_log_level function for consistent behavior
+            if hasattr(cfg, 'apply_log_level'):
+                cfg.apply_log_level()
+                logger.debug(f"🔧 Logger level updated to {cfg.LOG_LEVEL} using cfg.apply_log_level()")
+            else:
+                # Fallback to manual method
+                if hasattr(cfg, 'LOG_LEVEL'):
+                    log_level = getattr(logging, cfg.LOG_LEVEL.upper(), logging.INFO)
+                    logger.setLevel(log_level)
+                    root_logger = logging.getLogger()
+                    if root_logger.level > log_level:
+                        root_logger.setLevel(log_level)
+                    logger.debug(f"🔧 Logger level updated to {cfg.LOG_LEVEL} (fallback method)")
+                
+        except Exception as e:
+            logger.warning(f"Failed to update logger level: {e}")
+
     # ==================================================
     # STT Processing Methods (copied from garmin_voice_old.py)
     # ==================================================
@@ -285,7 +322,7 @@ class GarminVoiceManager:
                 logger.debug(f"⏰ STT timing: buffer_size={len(self.stt_buffer)}, min_required={WINDOW_BYTES_MIN}, buffer_ready={buffer_ready}, time_since_last={time_since_last:.1f}s, interval={PROCESS_INTERVAL_S}s")
                 
                 if buffer_ready and time_since_last >= PROCESS_INTERVAL_S:
-                    logger.info(f"🚀 Triggering STT processing: buffer has {len(self.stt_buffer)} bytes")
+                    logger.debug(f"🚀 Triggering STT processing: buffer has {len(self.stt_buffer)} bytes")
                     try:
                         if not self.stt_queue.full():
                             self.stt_queue.put_nowait(now)
@@ -318,8 +355,6 @@ class GarminVoiceManager:
         if self.stt_worker_thread and self.stt_worker_thread.is_alive():
             self.stt_worker_thread.join(timeout=5)
             logger.debug("STT worker thread stopped")
-    
-    # NOTE: Auto-save timer methods removed - using LiveSTTMP3Sink for real-time STT
     
     def _stt_worker(self):
         """Worker thread for STT processing."""
@@ -567,7 +602,6 @@ class GarminVoiceManager:
             if user_files:
                 logger.info(f"✅ Recording session completed: {len(user_files)} user files saved")
                 
-                # NOTE: STT post-processing removed - using LiveSTTMP3Sink for real-time STT
                 logger.info("✅ Files saved - STT processing happens in real-time via LiveSTTMP3Sink")
             else:
                 logger.warning("⚠️ Recording session completed but no files saved")

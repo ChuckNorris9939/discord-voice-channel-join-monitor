@@ -256,6 +256,24 @@ def apply_discord_log_level():
     
     logger.info(f"Applied discord.* loggers to {DISCORD_LOG_LEVEL.upper()}")
 
+def apply_log_level():
+    """Apply the current LOG_LEVEL setting to root logger and all relevant loggers."""
+    global LOG_LEVEL
+    
+    # Update root logger level
+    root_logger = logging.getLogger()
+    log_level = getattr(logging, LOG_LEVEL.upper(), logging.INFO)
+    root_logger.setLevel(log_level)
+    
+    # Update specific loggers that need the general log level
+    main_logger = logging.getLogger('__main__')
+    main_logger.setLevel(log_level)
+    
+    garmin_voice_logger = logging.getLogger('garmin_voice')
+    garmin_voice_logger.setLevel(log_level)
+    
+    logger.info(f"Applied general log level {LOG_LEVEL.upper()} to root and application loggers")
+
 def enable_testing_mode():
     """Enable testing mode by temporarily redirecting logs to testing channel."""
     global JOIN_LOGS_ID, BOT_LOGS_ID

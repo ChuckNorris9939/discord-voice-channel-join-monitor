@@ -359,8 +359,9 @@ def settings_route():
             # Reload settings into global scope
             cfg.load_all_settings()
             
-            # Apply Discord log level immediately after reloading settings
-            cfg.apply_discord_log_level()
+            # Apply log levels immediately after reloading settings
+            cfg.apply_log_level()  # Apply general LOG_LEVEL
+            cfg.apply_discord_log_level()  # Apply Discord-specific log level
             
             if cfg.TESTING:
                 logger.info(f"Settings Route - TESTING MODE ACTIVE: Redirecting logs to testing channel {cfg.TESTING_CHANNEL_ID}.")
