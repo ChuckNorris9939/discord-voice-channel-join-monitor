@@ -471,6 +471,15 @@
                         </select>
                         <p class="note">When enabled, STT (Speech-to-Text) results will be logged to the console.</p>
                     </div>
+                    <!-- Garmin Silence Compression Enabled -->
+                    <div class="form-group">
+                        <label for="garmin_silence_compression_enabled">Silence Compression Enabled</label>
+                        <select name="garmin_silence_compression_enabled" id="garmin_silence_compression_enabled">
+                            <option value="true" {% if current_settings.get('GARMIN_SILENCE_COMPRESSION_ENABLED') == 'true' %}selected{% endif %}>True</option>
+                            <option value="false" {% if current_settings.get('GARMIN_SILENCE_COMPRESSION_ENABLED') == 'false' %}selected{% endif %}>False</option>
+                        </select>
+                        <p class="note">When enabled, applies advanced silence compression to recordings. When disabled, files are simply copied to garmin-output.</p>
+                    </div>
                 </div>
 
                 <div class="category-header" onclick="toggleCategory('cleanup-category')">

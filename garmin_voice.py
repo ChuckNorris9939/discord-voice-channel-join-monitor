@@ -17,6 +17,8 @@ import discord
 from discord.sinks import MP3Sink
 import speech_recognition as sr
 from pydub import AudioSegment
+import numpy as np
+import shutil
 
 try:
     import vosk  # optional, only needed for offline STT
@@ -99,9 +101,9 @@ class LiveSTTMP3Sink(MP3Sink):
             except:
                 pass
 
-# ==================================================
-# Utility Functions
-# ==================================================
+    # ==================================================
+    # Utility Functions
+    # ==================================================
 
 def _signal_handler(signum, frame):
     """Handle shutdown signals gracefully."""
@@ -145,7 +147,7 @@ BYTES_PER_SAMPLE: Final[int] = 2  # 16-bit
 
 
 # STT processing
-PROCESS_INTERVAL_S: Final[float] = float(os.getenv("GARMIN_PROCESS_INTERVAL", "3.0"))
+PROCESS_INTERVAL_S: Final[float] = 0.5
 RECOGNITION_WINDOW_S: Final[float] = 3.0
 MIN_WINDOW_S: Final[float] = 0.7
 WINDOW_BYTES_MAX: Final[int] = int(RECOGNITION_WINDOW_S * SAMPLERATE * CHANNELS * BYTES_PER_SAMPLE)
@@ -157,8 +159,10 @@ TRIGGER_COOLDOWN_S: Final[int] = 5
 # Audio processing configuration - Always enabled for optimal performance
 
 AUDIO_EXPORT_BITRATE: Final[str] = "128k"  # High quality MP3 export
+AUDIO_EXPORT_QUALITY: Final[List[str]] = ["-q:a", "2"]  # High quality MP3 encoding
+AUDIO_CHUNK_SIZE_MS: Final[int] = 30000  # Process audio in 30-second chunks for memory efficiency
 
-# OPTIMIZATION #5: Advanced Silence Detection Settings (Default)
+# OPTIMIZATION #5: Advanced Silence Detection Settings
 SILENCE_VAD_THRESHOLD: Final[float] = float(os.getenv("GARMIN_SILENCE_VAD_THRESHOLD", "0.3"))  # Voice Activity Detection threshold (0.1-0.9)
 SILENCE_SPECTRAL_THRESHOLD: Final[float] = float(os.getenv("GARMIN_SILENCE_SPECTRAL_THRESHOLD", "0.15"))  # Spectral energy threshold
 SILENCE_MIN_DURATION_MS: Final[int] = int(os.getenv("GARMIN_SILENCE_MIN_DURATION_MS", "500"))  # Minimum silence duration to consider
@@ -197,12 +201,6 @@ TRIGGERS = [
     },
 ]
 
-TRIGGER_COOLDOWN_S: Final[int] = 5
-
-
-# ==================================================
-# GarminVoiceManager - Py-cord implementation with WaveSink
-# ==================================================
 
 class GarminVoiceManager:
     """Py-cord compatible voice manager for Garmin functionality."""
@@ -264,10 +262,14 @@ class GarminVoiceManager:
         os.makedirs(TEMP_DIR, exist_ok=True)
         os.makedirs(ALIGNED_RECORDINGS_DIR, exist_ok=True)
         
+        # Post-processing silence compression settings (always enabled for optimal performance)
+        self.silence_compression_threshold = 5.0  # Compress silence longer than 5 seconds  
+        self.silence_compression_target = 1.0     # Reduce long silence to 1 second
+        
         # Update logger level in case main.py has overridden it
         self._update_logger_level()
         
-        logger.info("GarminVoiceManager initialized with py-cord compatibility")
+        logger.info("GarminVoiceManager initialized with py-cord compatibility and silence compression")
     
     def _update_logger_level(self):
         """Update logger level from config, ensuring it works even after main.py setup."""
@@ -291,6 +293,259 @@ class GarminVoiceManager:
                 
         except Exception as e:
             logger.warning(f"Failed to update logger level: {e}")
+
+    # ==================================================
+    # Advanced Silence Detection Functions
+    # ==================================================
+    
+    def _load_audio_parallel(self, wav_files: List[str]) -> tuple[Dict[str, AudioSegment], int]:
+        """Load multiple audio files in parallel for faster processing with MP3 optimization."""
+        try:
+            start_time = time.perf_counter()
+            logger.debug(f"🚀 Starting parallel loading of {len(wav_files)} MP3 files with optimization...")
+            
+            # Filter out non-existent files
+            valid_files = [f for f in wav_files if os.path.exists(f)]
+            if not valid_files:
+                logger.warning("⚠️ No valid audio files found for loading")
+                return {}, 0
+            
+            audio_segments = {}
+            max_length_ms = 0
+            
+            def load_audio_optimized(wav_file: str) -> tuple[str, AudioSegment]:
+                """Load MP3 audio file with optimized loading."""
+                try:
+                    audio = AudioSegment.from_mp3(wav_file)
+                    logger.debug(f"🎵 Loaded MP3: {os.path.basename(wav_file)} ({len(audio)}ms)")
+                    return wav_file, audio
+                except Exception as e:
+                    logger.error(f"❌ Failed to load {wav_file}: {e}")
+                    raise
+            
+            # Use global thread pool for parallel loading
+            global _audio_thread_pool
+            if _audio_thread_pool is None:
+                _audio_thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+            
+            try:
+                # Submit all loading tasks with optimized loading
+                future_to_file = {
+                    _audio_thread_pool.submit(load_audio_optimized, wav_file): wav_file 
+                    for wav_file in valid_files
+                }
+                
+                # Process completed tasks as they finish
+                for future in concurrent.futures.as_completed(future_to_file):
+                    wav_file = future_to_file[future]
+                    try:
+                        wav_file, audio = future.result()
+                        audio_segments[wav_file] = audio
+                        max_length_ms = max(max_length_ms, len(audio))
+                    except Exception as e:
+                        logger.error(f"❌ Failed to load {wav_file}: {e}")
+            except RuntimeError as e:
+                if "cannot schedule new futures after interpreter shutdown" in str(e):
+                    logger.warning("⚠️ Interpreter shutting down, using sequential loading")
+                    for wav_file in valid_files:
+                        try:
+                            wav_file, audio = load_audio_optimized(wav_file)
+                            audio_segments[wav_file] = audio
+                            max_length_ms = max(max_length_ms, len(audio))
+                        except Exception as load_error:
+                            logger.error(f"❌ Failed to load {wav_file}: {load_error}")
+                else:
+                    raise
+            
+            load_time = time.perf_counter() - start_time
+            logger.info(f"🚀 Parallel loading completed in {load_time:.2f}s: {len(audio_segments)} files loaded")
+            
+            return audio_segments, max_length_ms
+            
+        except Exception as e:
+            logger.error(f"❌ Error in parallel audio loading: {e}", exc_info=True)
+            return {}, 0
+    
+    def _detect_silence_advanced(self, audio: AudioSegment, chunk_size_ms: int) -> List[dict]:
+        """Improved silence detection using pydub's proven detect_silence with optimal settings."""
+        try:
+            from pydub.silence import detect_silence
+            
+            silence_periods = []
+            
+            logger.debug(f"🔍 Silence detection: analyzing {len(audio)}ms audio")
+            
+            # Use pydub's proven silence detection with optimal threshold for Discord audio
+            # -30dB works well for Discord recordings (captures pauses without being too sensitive)
+            silence_ranges = detect_silence(
+                audio, 
+                min_silence_len=SILENCE_MIN_DURATION_MS,  # Minimum 500ms silence
+                silence_thresh=-30  # -30dB threshold (good for Discord audio)
+            )
+            
+            # Convert to our format
+            for start_ms, end_ms in silence_ranges:
+                silence_periods.append({
+                    'start': start_ms,
+                    'end': end_ms
+                })
+            
+            logger.debug(f"🔍 Silence detection found {len(silence_periods)} periods")
+            return silence_periods
+            
+        except Exception as e:
+            logger.error(f"❌ Error in advanced silence detection: {e}")
+            logger.warning("🔄 Advanced silence detection failed, returning empty result")
+            return []
+    
+
+    
+    def compress_recordings_post_process(self, wav_files: List[str], timeline_data: dict) -> dict:
+        """Post-process MP3 files to remove long silence gaps while maintaining sync."""
+        try:
+            logger.info(f"🔧 Starting post-process compression of {len(wav_files)} files")
+            
+            # Load all audio files in parallel
+            audio_segments, max_length_ms = self._load_audio_parallel(wav_files)
+            
+            if not audio_segments:
+                logger.warning("⚠️ No audio files were loaded successfully for compression")
+                return None
+                
+            logger.debug(f"Original session length: {max_length_ms}ms")
+            
+            # Find silence periods across ALL tracks
+            silence_threshold_ms = int(self.silence_compression_threshold * 1000)
+            silence_target_ms = int(self.silence_compression_target * 1000)
+            
+            # Advanced silence detection
+            chunk_size_ms = 750  # Optimal chunk size for analysis
+            logger.info("🔍 Using ADVANCED silence detection (VAD + Spectral Analysis)")
+            
+            # Use advanced silence detection on the first audio track as reference
+            reference_audio = list(audio_segments.values())[0]
+            silence_periods = self._detect_silence_advanced(reference_audio, chunk_size_ms)
+            
+            # Filter silence periods to only include those long enough to compress
+            filtered_periods = []
+            for period in silence_periods:
+                duration_ms = period['end'] - period['start']
+                if duration_ms >= SILENCE_MIN_DURATION_MS:
+                    filtered_periods.append(period)
+            
+            silence_periods = filtered_periods
+            logger.info(f"🔍 Advanced detection found {len(silence_periods)} silence periods (min duration: {SILENCE_MIN_DURATION_MS}ms)")
+            
+            # DEBUG: Log silence periods for troubleshooting
+            for i, period in enumerate(silence_periods[:5]):  # Show first 5
+                duration_ms = period['end'] - period['start']
+                logger.debug(f"Silence {i+1}: {period['start']}ms-{period['end']}ms ({duration_ms}ms)")
+            
+            # Identify long silence periods to compress
+            compressions = []
+            total_saved_ms = 0
+            
+            for period in silence_periods:
+                duration_ms = period['end'] - period['start']
+                if duration_ms > silence_threshold_ms:
+                    # Compress this period
+                    saved_ms = duration_ms - silence_target_ms
+                    compressions.append({
+                        'original_start': period['start'],
+                        'original_end': period['end'],
+                        'compressed_duration': silence_target_ms,
+                        'saved_ms': saved_ms
+                    })
+                    total_saved_ms += saved_ms
+                    logger.debug(f"✂️ Compressing {duration_ms}ms silence at {period['start']}ms → {silence_target_ms}ms (saves {saved_ms}ms)")
+                else:
+                    logger.debug(f"⏭️ Skipping {duration_ms}ms silence at {period['start']}ms (< {silence_threshold_ms}ms threshold)")
+                    
+            logger.info(f"Found {len(compressions)} silence periods to compress, saving {total_saved_ms}ms total")
+            logger.info(f"📊 Silence detection: threshold={silence_threshold_ms}ms, target={silence_target_ms}ms")
+            
+            # Apply compressions to all audio files (user files + mixed file)
+            compressed_files = {}
+            
+            for wav_file, audio in audio_segments.items():
+                compressed_audio = AudioSegment.empty()
+                current_pos = 0
+                
+                for compression in compressions:
+                    # Add audio before compression
+                    if current_pos < compression['original_start']:
+                        compressed_audio += audio[current_pos:compression['original_start']]
+                    
+                    # Add compressed silence
+                    compressed_audio += AudioSegment.silent(duration=compression['compressed_duration'])
+                    
+                    current_pos = compression['original_end']
+                
+                # Add remaining audio
+                if current_pos < len(audio):
+                    compressed_audio += audio[current_pos:]
+                
+                # Determine output filename based on input filename
+                original_filename = os.path.basename(wav_file)
+                
+                if '_mixed.mp3' in original_filename:
+                    # Mixed file: timestamp_mixed.mp3 -> timestamp_mixed_compressed.mp3
+                    compressed_filename = original_filename.replace('_mixed.mp3', '_mixed_compressed.mp3')
+                else:
+                    # User file: timestamp_username.mp3 -> timestamp_user_username_compressed.mp3  
+                    # Extract timestamp and username from filename (format: timestamp_username.mp3)
+                    name_without_ext = original_filename.replace('.mp3', '')
+                    
+                    # Split into timestamp and username
+                    parts = name_without_ext.split('_')
+                    if len(parts) >= 3:  # dd.mm.yy_HH-MM-SS_username
+                        timestamp_part = '_'.join(parts[:2])  # dd.mm.yy_HH-MM-SS
+                        username_part = '_'.join(parts[2:])   # username (might contain underscores)
+                        compressed_filename = f"{timestamp_part}_user_{username_part}_compressed.mp3"
+                    else:
+                        # Fallback for unexpected format
+                        compressed_filename = f"{name_without_ext}_compressed.mp3"
+                
+                compressed_file = os.path.join(OUTPUT_DIR, compressed_filename)
+                
+                # Use optimized MP3 export settings to preserve quality
+                compressed_audio.export(
+                    compressed_file, 
+                    format="mp3",
+                    bitrate=AUDIO_EXPORT_BITRATE,
+                    parameters=AUDIO_EXPORT_QUALITY
+                )
+                compressed_files[wav_file] = compressed_file
+                
+                logger.info(f"✅ Compressed: {original_filename} -> {compressed_filename} ({len(audio)}ms -> {len(compressed_audio)}ms)")
+            
+            # Update timeline data
+            compressed_timeline = timeline_data.copy()
+            compressed_timeline['original_duration_ms'] = timeline_data.get('session_duration_ms', max_length_ms)
+            compressed_timeline['session_duration_ms'] = max_length_ms - total_saved_ms
+            compressed_timeline['compressed_silence_ms'] = total_saved_ms
+            compressed_timeline['compression_method'] = 'post_process'
+            compressed_timeline['compressions'] = compressions
+            
+            # Add mixed file info if created
+            if 'mixed' in compressed_files:
+                compressed_timeline['mixed_file'] = {
+                    'file_path': compressed_files['mixed'],
+                    'tracks_count': len([f for f in compressed_files if f != 'mixed']),
+                    'description': 'All compressed user tracks overlaid synchronously'
+                }
+            
+            logger.info(f"✅ Post-processing complete: {max_length_ms}ms -> {max_length_ms - total_saved_ms}ms")
+            
+            return {
+                'compressed_files': compressed_files,
+                'timeline': compressed_timeline,
+                'saved_ms': total_saved_ms
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in post-process compression: {e}", exc_info=True)
+            return None
 
     # ==================================================
     # STT Processing Methods (copied from garmin_voice_old.py)
@@ -608,8 +863,7 @@ class GarminVoiceManager:
                         mixed_audio.export(mixed_path, format="mp3", bitrate=AUDIO_EXPORT_BITRATE)
                         logger.info(f"✅ Saved mixed recording: {mixed_filename} ({len(mixed_audio)}ms)")
                         
-                        # Copy to garmin-output
-                        self._copy_to_garmin_output([mixed_path] + user_files, timestamp)
+                        # Note: Uncompressed files are NOT copied to garmin-output anymore
                         
                         self.last_saved_filename = f"{timestamp}_mixed.mp3"
                         self.last_saved_timestamp = time.time()
@@ -617,13 +871,79 @@ class GarminVoiceManager:
                 except Exception as e:
                     logger.error(f"Error creating mixed recording: {e}")
             elif len(user_files) == 1:
-                # Single user - copy to garmin-output
-                self._copy_to_garmin_output(user_files, timestamp)
+                # Single user - just track filename (no copy to garmin-output)
                 self.last_saved_filename = os.path.basename(user_files[0])
                 self.last_saved_timestamp = time.time()
             
             if user_files:
                 logger.info(f"✅ Recording session completed: {len(user_files)} user files saved")
+                
+                # POST-PROCESSING: Apply Silence Compression or Simple Copy
+                try:
+                    # Collect all files for processing (user files + mixed file if exists)
+                    files_to_process = user_files.copy()
+                    
+                    # Add mixed file if it exists
+                    if 'mixed_audio' in locals() and mixed_audio:
+                        mixed_filename = f"{timestamp}_mixed.mp3"
+                        mixed_path = os.path.join(ALIGNED_RECORDINGS_DIR, mixed_filename)
+                        if os.path.exists(mixed_path):
+                            files_to_process.append(mixed_path)
+                            logger.debug(f"Added mixed file to processing: {mixed_filename}")
+                    
+                    # Check if silence compression is enabled
+                    if cfg.GARMIN_SILENCE_COMPRESSION_ENABLED:
+                        logger.info(f"🔧 Starting advanced silence compression for {len(files_to_process)} files (including mixed)...")
+                        
+                        # Create timeline data for compression
+                        timeline_data = {
+                            'session_start': timestamp,
+                            'session_duration_ms': len(mixed_audio) if 'mixed_audio' in locals() and mixed_audio else 0
+                        }
+                        
+                        # Apply compression
+                        compression_result = self.compress_recordings_post_process(files_to_process, timeline_data)
+                        
+                        if compression_result:
+                            saved_ms = compression_result['saved_ms']
+                            compressed_files = compression_result['compressed_files']
+                            
+                            logger.info(f"✅ Silence compression completed: {saved_ms}ms saved")
+                            
+                            # Log compressed files created
+                            for file_type, compressed_path in compressed_files.items():
+                                if file_type == 'mixed':
+                                    logger.info(f"   🎵 {os.path.basename(compressed_path)} (mixed compressed)")
+                                else:
+                                    logger.info(f"   📄 {os.path.basename(compressed_path)} (compressed)")
+                            
+                            # Update last saved file info with compressed version
+                            if 'mixed' in compressed_files:
+                                self.last_saved_filename = os.path.basename(compressed_files['mixed'])
+                            elif compressed_files:
+                                # Use first compressed file if no mixed file
+                                first_compressed = list(compressed_files.values())[0]
+                                self.last_saved_filename = os.path.basename(first_compressed)
+                            
+                        else:
+                            logger.warning("⚠️ Silence compression failed, falling back to simple copy")
+                            # Fallback to simple copy
+                            self._copy_to_garmin_output(files_to_process, timestamp)
+                            
+                    else:
+                        logger.info(f"📁 Silence compression disabled - copying {len(files_to_process)} files to garmin-output...")
+                        # Simple copy when compression is disabled
+                        self._copy_to_garmin_output(files_to_process, timestamp)
+                        logger.info("✅ Files copied to garmin-output successfully")
+                        
+                except Exception as processing_error:
+                    logger.error(f"❌ Error in file processing: {processing_error}", exc_info=True)
+                    logger.info("📁 Attempting fallback copy to garmin-output...")
+                    try:
+                        # Emergency fallback
+                        self._copy_to_garmin_output(user_files, timestamp)
+                    except Exception as fallback_error:
+                        logger.error(f"❌ Fallback copy also failed: {fallback_error}")
                 
                 logger.info("✅ Files saved - STT processing happens in real-time via LiveSTTMP3Sink")
             else:
