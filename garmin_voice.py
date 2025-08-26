@@ -38,6 +38,58 @@ import config_loader as cfg
 # Global thread pool for audio processing
 _audio_thread_pool = None
 
+# ==================================================
+# LiveSTTMP3Sink - Native py-cord Sink with real-time STT + MP3 recording
+# ==================================================
+
+class LiveSTTMP3Sink(MP3Sink):
+    """
+    Advanced hybrid sink that extends MP3Sink with real-time STT using py-cord's native write() callback.
+    Eliminates the need for auto-save timers and provides true real-time STT processing.
+    """
+    
+    def __init__(self, garmin_manager=None, **kwargs):
+        super().__init__(**kwargs)
+        self.garmin_manager = garmin_manager
+        logger.info("🎯 LiveSTTMP3Sink initialized - Real-time STT + MP3 recording")
+    
+    def write(self, data, user):
+        """
+        Override MP3Sink.write() to add live STT processing.
+        Called for every audio packet (~20ms frames) - provides real-time STT without file saving.
+        
+        Args:
+            data: Raw PCM audio data from Discord (20ms frames, 48kHz, stereo)
+            user: User ID (integer) who spoke
+        """
+        try:
+            # 1. PRESERVE: Call original MP3Sink functionality for recording
+            super().write(data, user)
+            
+            # 2. ADD: Live STT processing with raw PCM data
+            if self.garmin_manager and cfg.STT_ENABLED and data:
+                # Get user object for better logging
+                user_obj = self.garmin_manager.bot.get_user(user) if user else None
+                username = user_obj.name if user_obj else f"user_{user}"
+                
+                # Debug: Log audio data characteristics
+                logger.debug(f"🎤 LiveSTT received audio from {username}: {len(data)} bytes PCM data")
+                
+                # Process PCM data for STT (data is already in correct format!)
+                self.garmin_manager._process_stt_audio(user_obj or user, data)
+                
+        except Exception as e:
+            logger.error(f"Error in LiveSTTMP3Sink.write(): {e}")
+            # Ensure MP3 recording continues even if STT fails
+            try:
+                super().write(data, user)
+            except:
+                pass
+
+# ==================================================
+# Standard MP3Sink with STT post-processing
+# ==================================================
+
 def _signal_handler(signum, frame):
     """Handle shutdown signals gracefully."""
     global _audio_thread_pool
@@ -76,10 +128,8 @@ def sanitize_filename(name: str) -> str:
 SAMPLERATE: Final[int] = 48000  # Discord standard
 CHANNELS: Final[int] = 2  # stereo
 BYTES_PER_SAMPLE: Final[int] = 2  # 16-bit
-SAMPLE_WIDTH: Final[int] = 2  # 16-bit PCM
 
-# Buffer management
-MAX_BUFFER_DURATION_S: Final[int] = int(os.getenv("GARMIN_MAX_BUFFER_DURATION", "600"))  # 10 minutes max per user
+
 
 # STT processing
 PROCESS_INTERVAL_S: Final[float] = float(os.getenv("GARMIN_PROCESS_INTERVAL", "3.0"))
@@ -88,12 +138,12 @@ MIN_WINDOW_S: Final[float] = 0.7
 WINDOW_BYTES_MAX: Final[int] = int(RECOGNITION_WINDOW_S * SAMPLERATE * CHANNELS * BYTES_PER_SAMPLE)
 WINDOW_BYTES_MIN: Final[int] = int(MIN_WINDOW_S * SAMPLERATE * CHANNELS * BYTES_PER_SAMPLE)
 
+# Trigger phrase detection
+TRIGGER_COOLDOWN_S: Final[int] = 5
+
 # Audio processing configuration - Always enabled for optimal performance
 
-# OPTIMIZATION #3: Audio Format Optimization Settings (MP3-only)
-AUDIO_EXPORT_BITRATE: Final[str] = "192k"  # High quality MP3 export
-AUDIO_EXPORT_QUALITY: Final[List[str]] = ["-q:a", "2"]  # High quality MP3 encoding
-AUDIO_CHUNK_SIZE_MS: Final[int] = 30000  # Process audio in 30-second chunks for memory efficiency
+AUDIO_EXPORT_BITRATE: Final[str] = "128k"  # High quality MP3 export
 
 # OPTIMIZATION #5: Advanced Silence Detection Settings (Default)
 SILENCE_VAD_THRESHOLD: Final[float] = float(os.getenv("GARMIN_SILENCE_VAD_THRESHOLD", "0.3"))  # Voice Activity Detection threshold (0.1-0.9)
@@ -172,17 +222,32 @@ class GarminVoiceManager:
         self._last_ok_time: float = 0.0
         self._last_stt_text: str = ""
         
-        # Vosk model
+        # NOTE: Auto-save timer removed - using LiveSTTMP3Sink for real-time STT
+        
+        # Vosk model (load only if available, graceful fallback)
         self.vosk_model = None
-        if cfg.STT_ENGINE == "vosk":
-            if vosk is None:
-                raise RuntimeError("STT_ENGINE='vosk' but 'vosk' package missing.")
-            model_path = Path(cfg.VOSK_MODEL_PATH)
-            if not model_path.exists():
-                raise FileNotFoundError(f"Vosk model not found at '{model_path}'.")
-            logger.info("Loading Vosk model from %s …", model_path)
-            self.vosk_model = vosk.Model(str(model_path))
-            logger.info("Vosk model loaded.")
+        try:
+            if cfg.STT_ENABLED and cfg.STT_ENGINE == "vosk":
+                if vosk is None:
+                    logger.warning("STT_ENGINE='vosk' but 'vosk' package missing - disabling STT")
+                    cfg.STT_ENABLED = False
+                else:
+                    model_path = Path(cfg.VOSK_MODEL_PATH)
+                    if not model_path.exists():
+                        logger.warning(f"Vosk model not found at '{model_path}' - disabling STT")
+                        cfg.STT_ENABLED = False
+                    else:
+                        logger.info("Loading Vosk model from %s …", model_path)
+                        self.vosk_model = vosk.Model(str(model_path))
+                        logger.info("Vosk model loaded.")
+            
+            if not cfg.STT_ENABLED:
+                logger.info("🔇 STT disabled - LiveSTTMP3Sink will work as standard MP3Sink")
+                
+        except Exception as e:
+            logger.warning(f"Failed to initialize Vosk model: {e} - disabling STT")
+            cfg.STT_ENABLED = False
+            self.vosk_model = None
         
         os.makedirs(OUTPUT_DIR, exist_ok=True)
         os.makedirs(TEMP_DIR, exist_ok=True)
@@ -190,8 +255,180 @@ class GarminVoiceManager:
         
         logger.info("GarminVoiceManager initialized with py-cord compatibility")
     
+    # ==================================================
+    # STT Processing Methods (copied from garmin_voice_old.py)
+    # ==================================================
+    
+    def _process_stt_audio(self, user, pcm_data):
+        """Process PCM audio data for STT (called from HybridSTTMP3Sink)."""
+        try:
+            username = user.name if user else "unknown"
+            logger.debug(f"🔊 _process_stt_audio called: STT_ENABLED={cfg.STT_ENABLED}, PCM data size={len(pcm_data) if pcm_data else 0}, user={username}")
+            
+            if cfg.STT_ENABLED and pcm_data:
+                with self._stt_buffer_lock:
+                    old_buffer_size = len(self.stt_buffer)
+                    self.stt_buffer.extend(pcm_data)
+                    
+                    # Limit STT buffer size
+                    max_stt_buffer = WINDOW_BYTES_MAX * 2
+                    if len(self.stt_buffer) > max_stt_buffer:
+                        self.stt_buffer = self.stt_buffer[-max_stt_buffer:]
+                    
+                    logger.debug(f"🎵 STT buffer: {old_buffer_size} → {len(self.stt_buffer)} bytes")
+                
+                # Process STT if enough time has passed
+                now = time.time()
+                time_since_last = now - self.last_process_time
+                buffer_ready = len(self.stt_buffer) >= WINDOW_BYTES_MIN
+                
+                logger.debug(f"⏰ STT timing: buffer_size={len(self.stt_buffer)}, min_required={WINDOW_BYTES_MIN}, buffer_ready={buffer_ready}, time_since_last={time_since_last:.1f}s, interval={PROCESS_INTERVAL_S}s")
+                
+                if buffer_ready and time_since_last >= PROCESS_INTERVAL_S:
+                    logger.info(f"🚀 Triggering STT processing: buffer has {len(self.stt_buffer)} bytes")
+                    try:
+                        if not self.stt_queue.full():
+                            self.stt_queue.put_nowait(now)
+                            self.last_process_time = now
+                            logger.debug(f"✅ STT processing queued successfully")
+                        else:
+                            logger.warning(f"⚠️ STT queue is full, skipping processing")
+                    except queue.Full:
+                        logger.warning(f"⚠️ STT queue full exception")
+            else:
+                if not cfg.STT_ENABLED:
+                    logger.debug(f"🔇 STT disabled, skipping processing")
+                if not pcm_data:
+                    logger.debug(f"🔇 No PCM data provided, skipping processing")
+                        
+        except Exception as e:
+            logger.error(f"Error in STT audio processing: {e}")
+    
+    def _start_stt_worker(self):
+        """Start the STT worker thread."""
+        if not self.stt_worker_running:
+            self.stt_worker_running = True
+            self.stt_worker_thread = threading.Thread(target=self._stt_worker, daemon=True)
+            self.stt_worker_thread.start()
+            logger.info("🔥 STT worker thread started successfully")
+    
+    def _stop_stt_worker(self):
+        """Stop the STT worker thread."""
+        self.stt_worker_running = False
+        if self.stt_worker_thread and self.stt_worker_thread.is_alive():
+            self.stt_worker_thread.join(timeout=5)
+            logger.debug("STT worker thread stopped")
+    
+    # NOTE: Auto-save timer methods removed - using LiveSTTMP3Sink for real-time STT
+    
+    def _stt_worker(self):
+        """Worker thread for STT processing."""
+        logger.info("🎯 STT worker thread started, waiting for audio data...")
+        while self.stt_worker_running:
+            try:
+                request_time = self.stt_queue.get(timeout=1.0)
+                logger.debug(f"📥 STT worker received processing request at {request_time}")
+                self._process_stt_buffer()
+                self.stt_queue.task_done()
+                logger.debug(f"✅ STT processing completed")
+            except queue.Empty:
+                continue
+            except Exception as e:
+                logger.error(f"Error in STT worker: {e}")
+        logger.info("🛑 STT worker thread stopped")
+    
+    def _process_stt_buffer(self):
+        """Process STT buffer for trigger phrases."""
+        self.is_processing = True
+        tmp_path = None
+        try:
+            # Get a copy of the STT buffer
+            with self._stt_buffer_lock:
+                if len(self.stt_buffer) < WINDOW_BYTES_MIN:
+                    return
+                
+                window_size = min(len(self.stt_buffer), WINDOW_BYTES_MAX)
+                window = bytes(self.stt_buffer[-window_size:])
+            
+            # Speech-to-Text
+            if cfg.STT_ENGINE == "vosk":
+                import audioop
+                mono = audioop.tomono(window, BYTES_PER_SAMPLE, 0.5, 0.5)
+                pcm16k, _ = audioop.ratecv(mono, BYTES_PER_SAMPLE, 1, SAMPLERATE, 16_000, None)
+                rec = vosk.KaldiRecognizer(self.vosk_model, 16_000)
+                rec.AcceptWaveform(pcm16k)
+                text = json.loads(rec.Result()).get("text", "")
+            else:  # Google
+                import socket
+                socket.setdefaulttimeout(8)
+                tmp_path = os.path.join(TEMP_DIR, f"temp_{int(time.time()*1000)}.wav")
+                
+                with wave.open(tmp_path, "wb") as wf:
+                    wf.setnchannels(CHANNELS)
+                    wf.setsampwidth(BYTES_PER_SAMPLE)
+                    wf.setframerate(SAMPLERATE)
+                    wf.writeframes(window)
+                
+                with sr.AudioFile(tmp_path) as source:
+                    audio = self.recognizer.record(source)
+                
+                try:
+                    text = self.recognizer.recognize_google(audio, language="de-DE")
+                except sr.UnknownValueError:
+                    text = ""
+                except sr.RequestError as e:
+                    logger.error(f"Google STT request error: {e}")
+                    text = ""
+            
+            # Process recognized text
+            text = text.lower().strip()
+            if text and text != self._last_stt_text:
+                self._last_stt_text = text
+                
+                if cfg.GARMIN_STT_OUTPUT_ENABLED:
+                    logger.info(f"STT[{cfg.STT_ENGINE}]: '{text}'")
+                
+                # Check for trigger phrases
+                now = time.time()
+                for trig in TRIGGERS:
+                    phrase = trig["phrase"]
+                    matched = phrase in text or difflib.SequenceMatcher(None, phrase, text).ratio() >= trig["threshold"]
+                    
+                    if matched:
+                        self.play_sound(trig["sound"])
+                        # Check cooldown
+                        if now - self.last_trigger_time[trig["name"]] < TRIGGER_COOLDOWN_S:
+                            continue
+                        
+                        # Special logic for "save" trigger
+                        if trig["name"] == "save" and now - self._last_ok_time > 5:
+                            continue
+                        
+                        # Fire trigger
+                        self.last_trigger_time[trig["name"]] = now
+                        if trig["name"] == "ding":
+                            self._last_ok_time = now
+                        
+                        if trig["save"]:
+                            self.save_recording()
+                        break
+                        
+        except Exception as e:
+            logger.error(f"Error during STT processing: {e}")
+        finally:
+            if tmp_path and os.path.isfile(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except:
+                    pass
+            self.is_processing = False
+    
+    # ==================================================
+    # Voice Channel Management
+    # ==================================================
+    
     async def join_channel(self, channel: discord.VoiceChannel):
-        """Connect to a voice channel and start recording using py-cord."""
+        """Connect to a voice channel with HybridSTTMP3Sink for both recording and live STT."""
         try:
             # Disconnect first if already connected
             if self.is_connected():
@@ -201,17 +438,22 @@ class GarminVoiceManager:
             # Connect to the voice channel
             self.vc = await channel.connect()
             
-            # Use standard py-cord WaveSink for recording
-            self.current_sink = MP3Sink()
+            # Use LiveSTTMP3Sink for both MP3 recording AND real-time STT
+            self.current_sink = LiveSTTMP3Sink(garmin_manager=self)
             
-            # Start recording with py-cord MP3Sink (official example)
             self.vc.start_recording(
                 self.current_sink,
-                self._finished_callback,
+                self._finished_callback,  # Same callback as before
                 sync_start=True  # For more stable recording per official example
             )
             
-            logger.info(f"🔊 Joined voice channel '{channel.name}' (py-cord Recording: ON)")
+            # Start STT worker thread if STT is enabled
+            if cfg.STT_ENABLED:
+                self._start_stt_worker()
+                logger.info(f"🔊 Joined voice channel '{channel.name}' (HybridSink: MP3 Recording + Live STT[{cfg.STT_ENGINE}])")
+            else:
+                logger.info(f"🔊 Joined voice channel '{channel.name}' (HybridSink: MP3 Recording only - STT disabled)")
+            
             self.recording_start_time = time.time()
             
         except Exception as e:
@@ -324,6 +566,9 @@ class GarminVoiceManager:
             
             if user_files:
                 logger.info(f"✅ Recording session completed: {len(user_files)} user files saved")
+                
+                # NOTE: STT post-processing removed - using LiveSTTMP3Sink for real-time STT
+                logger.info("✅ Files saved - STT processing happens in real-time via LiveSTTMP3Sink")
             else:
                 logger.warning("⚠️ Recording session completed but no files saved")
             
@@ -331,13 +576,14 @@ class GarminVoiceManager:
             if self.vc and self.vc.is_connected():
                 try:
                     logger.info("🔄 Restarting recording for continuous operation...")
-                    self.current_sink = MP3Sink()
+                    # Use LiveSTTMP3Sink to preserve STT functionality after save
+                    self.current_sink = LiveSTTMP3Sink(garmin_manager=self)
                     self.vc.start_recording(
                         self.current_sink,
                         self._finished_callback,
                         sync_start=True  # For more stable recording per official example
                     )
-                    logger.info("✅ Recording restarted successfully")
+                    logger.info("✅ Recording restarted with LiveSTTMP3Sink - STT continues working")
                 except Exception as restart_error:
                     logger.error(f"❌ Failed to restart recording: {restart_error}", exc_info=True)
                 
@@ -403,14 +649,14 @@ class GarminVoiceManager:
         try:
             await asyncio.sleep(0.5)  # Small delay
             if self.vc and self.vc.is_connected():
-                # Create new sink for continued recording
-                self.current_sink = MP3Sink()
+                # Create new LiveSTTMP3Sink for continued recording (preserves STT functionality)
+                self.current_sink = LiveSTTMP3Sink(garmin_manager=self)
                 
                 self.vc.start_recording(
                     self.current_sink,
                     self._finished_callback,
                 )
-                logger.info("🔄 Recording restarted with new sink")
+                logger.info("🔄 Recording restarted with LiveSTTMP3Sink - STT continues working")
         except Exception as e:
             logger.error(f"Error restarting recording: {e}")
     
@@ -431,20 +677,27 @@ class GarminVoiceManager:
     async def leave_channel(self):
         """Disconnect from the current voice channel."""
         try:
-            # Stop recording first
+            # Stop STT worker first
+            self._stop_stt_worker()
+            
+            # Stop recording
             if self.vc and self.vc.is_connected():
                 try:
                     self.vc.stop_recording()
-                    logger.debug("Stopped recording")
+                    logger.debug("Stopped MP3 recording")
                 except Exception as e:
                     logger.debug(f"Error stopping recording: {e}")
             
-            # Clear current sink
+            # Clear sinks
             self.current_sink = None
             
             # Clear buffers
             with self._buffers_lock:
                 self.user_buffers.clear()
+            
+            # Clear STT buffer
+            with self._stt_buffer_lock:
+                self.stt_buffer.clear()
             
             if self.vc:
                 if self.vc.is_connected():
