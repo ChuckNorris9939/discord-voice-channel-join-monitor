@@ -537,18 +537,41 @@ class GarminVoiceManager:
                         
                         # Check if MP3 file has content
                         if len(mp3_content) > 128:  # MP3 header minimum
-                            # Save MP3 file directly
-                            with open(file_path, 'wb') as f:
+                            # Save MP3 file temporarily
+                            temp_file_path = file_path + ".temp"
+                            with open(temp_file_path, 'wb') as f:
                                 f.write(mp3_content)
                             
-                            # Verify the saved file with pydub
+                            # Load, trim to GARMIN_RECORD_SECONDS, and save final file
                             try:
-                                audio_segment = AudioSegment.from_mp3(file_path)
+                                audio_segment = AudioSegment.from_mp3(temp_file_path)
+                                original_duration_ms = len(audio_segment)
+                                
+                                # Calculate trim duration from GARMIN_RECORD_SECONDS
+                                max_duration_ms = cfg.GARMIN_RECORD_SECONDS * 1000  # Convert to milliseconds
+                                
+                                if original_duration_ms > max_duration_ms:
+                                    # Trim to last X seconds
+                                    start_time = original_duration_ms - max_duration_ms
+                                    audio_segment = audio_segment[start_time:]
+                                    logger.info(f"🔧 Trimmed recording for {username}: {original_duration_ms}ms → {len(audio_segment)}ms (last {cfg.GARMIN_RECORD_SECONDS}s)")
+                                else:
+                                    logger.info(f"🔧 Recording for {username} is shorter than limit: {original_duration_ms}ms (< {max_duration_ms}ms)")
+                                
+                                # Export trimmed audio
+                                audio_segment.export(file_path, format="mp3", bitrate=AUDIO_EXPORT_BITRATE)
                                 user_files.append(file_path)
                                 logger.info(f"✅ Saved user recording: {filename} ({len(audio_segment)}ms)")
                                 
+                                # Clean up temp file
+                                if os.path.exists(temp_file_path):
+                                    os.remove(temp_file_path)
+                                
                             except Exception as e:
-                                logger.error(f"MP3 validation failed for {username}: {e}")
+                                logger.error(f"MP3 processing failed for {username}: {e}")
+                                # Clean up temp file
+                                if os.path.exists(temp_file_path):
+                                    os.remove(temp_file_path)
                                 # Remove corrupted file
                                 if os.path.exists(file_path):
                                     os.remove(file_path)
