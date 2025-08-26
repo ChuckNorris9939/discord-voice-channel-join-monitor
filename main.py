@@ -808,16 +808,16 @@ def cleanup_stats_route():
 
 def run_flask():
     try:
-    host = "0.0.0.0"
-    port = int(os.environ.get("PORT", 8080))
-    logger.info(f"Attempting to start Flask server (Waitress) on {host}:{port}. If you see an 'Address already in use' error, try setting the PORT environment variable to a different value.")
+        host = "0.0.0.0"
+        port = int(os.environ.get("PORT", 8080))
+        logger.info(f"Attempting to start Flask server (Waitress) on {host}:{port}. If you see an 'Address already in use' error, try setting the PORT environment variable to a different value.")
         
         # Set up isolated asyncio environment for Flask thread to prevent loop conflicts
         import asyncio
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
-    serve(app, host=host, port=port, threads=4)
+        serve(app, host=host, port=port, threads=4)
     except Exception as e:
         logger.error(f"Error starting Flask server: {e}", exc_info=True)
 
@@ -1475,8 +1475,7 @@ async def on_ready():
                 logger.info(f"ℹ️ Startup Auto-Join: Users found in '{startup_channel.name}', but bot already connected")
             else:
                 logger.info("ℹ️ Startup Auto-Join: No users found in monitored channels")
-                
-    except Exception as e:
+        except Exception as e:
             logger.error(f"❌ Error during startup auto-join check: {e}", exc_info=True)
 
 
@@ -1815,21 +1814,14 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
                                        after.channel and not after_is_hidden and \
                                        before.channel.id != after.channel.id
     
-    # Handle join events
-    if joined_visible_channel:
-        log_voice_event(member.id, member.name, after.channel.id, after.channel.name, 'join')
-        # Send join message
-        try:
-            msg = f"➕ **{member.name}** ist {after.channel.mention} beigetreten"
-            logger.info(f"Sending immediate join message to {target}: {msg}")
-            await send_log_message(msg, target_channel_ids=[target])
-        except Exception as e:
-            logger.error(f"Failed to send immediate join message: {e}", exc_info=True)
-        
-        # Schedule or reset the global summary timer
-        _start_or_reset_global_join_summary_timer()
-        
-        # Garmin auto-join logic
+    # ============================================================================
+    # AUTO-JOIN/LEAVE LOGIC - Execute BEFORE visible channel checks
+    # This ensures auto-join works even when channels are hidden
+    # ============================================================================
+    
+    # Handle AUTO-JOIN when user joins any channel (visible or hidden)
+    if after.channel and not before.channel:
+        # User joined a channel (from nowhere)
         if cfg.GARMIN_AUTO_JOIN_ENABLED and after.channel.id in cfg.GARMIN_AUTO_JOIN_CHANNELS and garmin_manager is not None:
             logger.info(f"User {member.name} joined monitored channel {after.channel.name} (ID: {after.channel.id})")
             if not garmin_manager.is_connected():
@@ -1847,73 +1839,51 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
                             logger.error(f"Failed to auto-join channel {after.channel.name} after {max_retries} attempts")
             else:
                 logger.info("Bot is already connected to a voice channel, skipping auto-join")
-
-    # Handle leave events
-    elif left_visible_channel:
-        log_voice_event(member.id, member.name, before.channel.id, before.channel.name, 'leave')
-        # Send leave message
-        try:
-            msg = f"➖ **{member.name}** hat {before.channel.mention} verlassen"
-            logger.info(f"Sending immediate leave message to {target}: {msg}")
-            await send_log_message(msg, target_channel_ids=[target])
-        except Exception as e:
-            logger.error(f"Failed to send immediate leave message: {e}", exc_info=True)
-        
-        # Schedule or reset the global summary timer
-        _start_or_reset_global_join_summary_timer()
-        
-        # Garmin auto-leave logic
-        if cfg.GARMIN_AUTO_JOIN_ENABLED and before.channel.id in cfg.GARMIN_AUTO_JOIN_CHANNELS and garmin_manager is not None:
-            remaining_users = [m for m in before.channel.members if not m.bot]
-            if (not remaining_users and 
-                garmin_manager.is_connected() and 
-                garmin_manager.vc and 
+    
+    # Handle AUTO-LEAVE when user leaves any channel (visible or hidden)
+    elif before.channel and not after.channel:
+        # User left a channel (to nowhere - complete disconnect)
+        if cfg.GARMIN_AUTO_JOIN_ENABLED and garmin_manager is not None and garmin_manager.is_connected():
+            # Check if the user left from a channel that the bot is currently in
+            if (garmin_manager.vc and 
                 garmin_manager.vc.channel and 
                 garmin_manager.vc.channel.id == before.channel.id):
-                logger.info(f"All users left channel {before.channel.name}, checking for other monitored channels with users")
                 
-                # Try to find another monitored channel with users
-                alternative_channel = await find_monitored_channel_with_users(exclude_channel_id=before.channel.id)
+                # Count remaining users in the channel the bot is in
+                remaining_users = [m for m in before.channel.members if not m.bot]
                 
-                if alternative_channel:
-                    logger.info(f"Found alternative channel {alternative_channel.name} with users, moving there")
-                    try:
-                        await garmin_manager.leave_channel()
-                        await garmin_manager.join_channel(alternative_channel)
-                        logger.info(f"Successfully moved from {before.channel.name} to {alternative_channel.name}")
-                    except Exception as e:
-                        logger.error(f"Failed to move to alternative channel {alternative_channel.name}: {e}")
-                        # If moving fails, leave completely
+                if not remaining_users:
+                    logger.info(f"All users left channel {before.channel.name}, checking for other monitored channels with users")
+                    
+                    # Try to find another monitored channel with users
+                    alternative_channel = await find_monitored_channel_with_users(exclude_channel_id=before.channel.id)
+                    
+                    if alternative_channel:
+                        logger.info(f"Found alternative channel {alternative_channel.name} with users, moving there")
                         try:
                             await garmin_manager.leave_channel()
-                        except Exception as e2:
-                            logger.error(f"Failed to leave channel {before.channel.name} after failed move: {e2}")
-                else:
-                    # If no alternative channel found, leave completely
-                    logger.info(f"No alternative monitored channels with users found, leaving voice completely")
-                    try:
-                        await garmin_manager.leave_channel()
-                    except Exception as e:
-                        logger.error(f"Failed to leave channel {before.channel.name}: {e}")
-            elif not remaining_users:
-                logger.debug(f"Users left channel {before.channel.name}, but bot is not in this channel - staying put")
+                            await garmin_manager.join_channel(alternative_channel)
+                            logger.info(f"Successfully moved from {before.channel.name} to {alternative_channel.name}")
+                        except Exception as e:
+                            logger.error(f"Failed to move to alternative channel {alternative_channel.name}: {e}")
+                            # If moving fails, leave completely
+                            try:
+                                await garmin_manager.leave_channel()
+                            except Exception as e2:
+                                logger.error(f"Failed to leave channel {before.channel.name} after failed move: {e2}")
+                    else:
+                        # If no alternative channel found, leave completely
+                        logger.info(f"No alternative monitored channels with users found, leaving voice completely")
+                        try:
+                            await garmin_manager.leave_channel()
+                        except Exception as e:
+                            logger.error(f"Failed to leave channel {before.channel.name}: {e}")
+    
+    # Handle AUTO-FOLLOW when user switches between channels (visible or hidden)
+    elif before.channel and after.channel and before.channel.id != after.channel.id:
+        # User switched channels
         
-        # Cancel AFK timer if user left voice channel
-        if member.id in fully_deafened_users:
-            fully_deafened_users[member.id].cancel()
-            del fully_deafened_users[member.id]
-            logger.info(f"AFK Mover: Cancelled timer for {member.name} (left voice channel)")
-
-    # Handle channel switches (no message sent)
-    elif switched_between_visible_channels:
-        logger.debug(f"User {member.name} switched from {before.channel.name} to {after.channel.name} (no message sent)")
-        # Still log the event but don't send messages
-        log_voice_event(member.id, member.name, after.channel.id, after.channel.name, 'switch')
-        
-        # Schedule or reset the global summary timer
-        _start_or_reset_global_join_summary_timer()
-        
-        # Garmin auto-join logic for channel switches
+        # Execute the channel switch auto-join logic here (move from later in the function)
         if cfg.GARMIN_AUTO_JOIN_ENABLED and garmin_manager is not None:
             # Check if the bot is currently in the channel the user left
             bot_in_left_channel = (garmin_manager.is_connected() and 
@@ -1974,6 +1944,59 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
                             logger.error(f"Failed to auto-join channel {after.channel.name} after {max_retries} attempts")
             else:
                 logger.debug(f"Bot handling for channel switch: bot_in_left_channel={bot_in_left_channel}, left_channel_empty={left_channel_empty}, after_monitored={after.channel.id in cfg.GARMIN_AUTO_JOIN_CHANNELS}")
+    
+    # ============================================================================
+    # VISIBLE CHANNEL EVENT HANDLING - For logging and Discord messages only
+    # ============================================================================
+    
+    # Handle join events
+    if joined_visible_channel:
+        log_voice_event(member.id, member.name, after.channel.id, after.channel.name, 'join')
+        # Send join message
+        try:
+            msg = f"➕ **{member.name}** ist {after.channel.mention} beigetreten"
+            logger.info(f"Sending immediate join message to {target}: {msg}")
+            await send_log_message(msg, target_channel_ids=[target])
+        except Exception as e:
+            logger.error(f"Failed to send immediate join message: {e}", exc_info=True)
+        
+        # Schedule or reset the global summary timer
+        _start_or_reset_global_join_summary_timer()
+        
+        # Note: Auto-join logic has been moved to execute before visible channel checks
+
+    # Handle leave events
+    elif left_visible_channel:
+        log_voice_event(member.id, member.name, before.channel.id, before.channel.name, 'leave')
+        # Send leave message
+        try:
+            msg = f"➖ **{member.name}** hat {before.channel.mention} verlassen"
+            logger.info(f"Sending immediate leave message to {target}: {msg}")
+            await send_log_message(msg, target_channel_ids=[target])
+        except Exception as e:
+            logger.error(f"Failed to send immediate leave message: {e}", exc_info=True)
+        
+        # Schedule or reset the global summary timer
+        _start_or_reset_global_join_summary_timer()
+        
+        # Note: Auto-leave logic has been moved to execute before visible channel checks
+        
+        # Cancel AFK timer if user left voice channel
+        if member.id in fully_deafened_users:
+            fully_deafened_users[member.id].cancel()
+            del fully_deafened_users[member.id]
+            logger.info(f"AFK Mover: Cancelled timer for {member.name} (left voice channel)")
+
+    # Handle channel switches (no message sent)
+    elif switched_between_visible_channels:
+        logger.debug(f"User {member.name} switched from {before.channel.name} to {after.channel.name} (no message sent)")
+        # Still log the event but don't send messages
+        log_voice_event(member.id, member.name, after.channel.id, after.channel.name, 'switch')
+        
+        # Schedule or reset the global summary timer
+        _start_or_reset_global_join_summary_timer()
+        
+        # Note: Auto-join logic for channel switches has been moved to execute before visible channel checks
 
     # Handle AFK timer for deafened users
     # Check if user became deafened
@@ -3124,7 +3147,7 @@ def handle_signal(signum, frame):
     
     signal_name = signal.Signals(signum).name if isinstance(signum, int) else str(signum)
     logger.info(f"Signal {signal_name} empfangen. Leite sofortigen shutdown ein.")
-            shutdown_initiated = True
+    shutdown_initiated = True
 
     # Send shutdown message IMMEDIATELY in signal handler
     try:
@@ -3144,9 +3167,9 @@ def handle_signal(signum, frame):
                         )
                         logger.info("'Bot wird gestoppt...' Nachricht im Signal-Handler gesendet.")
                         await asyncio.sleep(0.5)
-    except Exception as e:
+                    except Exception as e:
                         logger.error(f"Fehler beim Senden der Signal-Shutdown-Nachricht: {e}")
-    finally:
+                    finally:
                         # Force close the bot
                         await original_close()
                 
