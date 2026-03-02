@@ -7,7 +7,19 @@ services:
     env_file:
       - ./.env
     ports:
-      - 8083:8083
+      - "8083:8083"  # Map host port 8083 to container port 8083
     volumes:
       - ./data/:/app/data/
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8083/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
 

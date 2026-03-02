@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  dc_voice_monitor:
+    build: .
+    image: dc_voice_monitor
+    restart: unless-stopped
+    container_name: discord-tanga-bot
+    env_file:
+      - ./.env
+    ports:
+      - 8083:8080  # Map host port 8083 to container port 8080
+    volumes:
+      - ./data/:/app/data/
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+
+  # External health check service (optional)
+  health_monitor:
+    image: dc_voice_monitor
+    container_name: discord-bot-health-monitor
+    command: ["python3", "health_check.py"]
+    volumes:
+      - ./data/:/app/data/
+      - /var/run/docker.sock:/var/run/docker.sock  # Access to Docker daemon
+    depends_on:
+      - dc_voice_monitor
+    restart: unless-stopped
+    environment:
+      - DOCKER_HOST=unix:///var/run/docker.sock
+    # Run health check every 2 minutes
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+        window: 300s
