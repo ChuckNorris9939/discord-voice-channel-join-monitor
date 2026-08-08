@@ -1425,7 +1425,7 @@ async def on_ready():
         # Py-cord compatible import
         from garmin_voice import GarminVoiceManager
         garmin_manager = GarminVoiceManager(bot)
-        logger.info("✅ GarminVoiceManager initialized successfully with py-cord 2.6.1")
+        logger.info(f"✅ GarminVoiceManager initialized successfully with py-cord {discord.__version__}")
     except Exception as e:
         logger.error(f"❌ Failed to initialize GarminVoiceManager: {e}", exc_info=True)
         garmin_manager = None
@@ -1434,7 +1434,7 @@ async def on_ready():
     threading.Thread(target=run_flask, daemon=True).start()
     logger.info("🌐 Flask-Server-Thread gestartet für Health Checks")
     
-    logger.info("⚡ Bot erfolgreich gestartet mit py-cord 2.6.1 - alle Features aktiviert")
+    logger.info(f"⚡ Bot erfolgreich gestartet mit py-cord {discord.__version__} - alle Features aktiviert")
     
     # Send startup message to Discord
     try:
@@ -3197,8 +3197,8 @@ if __name__ == "__main__":
         exit(1)
 
     try:
-        logger.info("🚀 Starte Bot mit py-cord 2.6.1...")
-        # MIGRATION COMMENT: Simplified startup for py-cord 2.6.1 compatibility
+        logger.info(f"🚀 Starte Bot mit py-cord {discord.__version__}...")
+        # Using bot.run() instead of asyncio.run(main()) to avoid event loop conflicts
         # Using bot.run() instead of asyncio.run(main()) to avoid event loop conflicts
         bot.run(TOKEN)
     except discord.LoginFailure:
