@@ -448,8 +448,15 @@ def download_recording(filename):
 @app.route('/settings', methods=['GET', 'POST'])
 @require_group('SETTINGS_GROUP', 'Bot Settings')
 def settings_route():
-    message = None 
-    error = None   
+    message = None
+    error = None
+
+    # Feedback after /restart_bot redirected back here.
+    restart_state = request.args.get('restart')
+    if restart_state == 'started':
+        message = "🔄 Restart initiated — the bot is shutting down and will come back up shortly."
+    elif restart_state == 'failed':
+        error = "Restart failed: the bot's event loop was not available. Check the logs."
 
     if request.method == 'POST':
         logger.info("Settings page: POST request received.")
@@ -675,23 +682,26 @@ def settings_route():
 
 @app.route('/restart_bot', methods=['POST'])
 @require_group('BOT_CONTROL_GROUP', 'Bot Restart')
-async def restart_bot_route():
-    if request.method == 'POST':
-        logger.info("Restart command received via web UI.")
-        if bot.loop:
-            logger.info("Scheduling graceful_shutdown via bot's event loop.")
-            asyncio.run_coroutine_threadsafe(graceful_shutdown(), bot.loop)
-            # Optionally, add a message to be displayed on the settings page after redirect
-            # For example, using Flask's flash messaging:
-            # flash("Bot shutdown initiated. It should restart if a process manager is active.", "info")
-        else:
-            logger.error("Bot event loop not available. Cannot schedule graceful_shutdown.")
-            # Optionally, flash an error message:
-            # flash("Error: Bot event loop not available. Cannot initiate restart.", "error")
-        
-        # Redirect back to the settings page (or home)
-        # The actual shutdown happens in the background.
-        return redirect(url_for('settings_route'))
+def restart_bot_route():
+    """Trigger a graceful shutdown; Docker's restart policy brings the bot back.
+
+    Deliberately synchronous: Flask is installed without the 'async' extra and
+    refuses to run async views, and nothing here needs awaiting anyway - Flask
+    runs in its own thread and hands the coroutine to the bot's loop.
+    """
+    logger.info("Restart command received via web UI.")
+
+    if not bot.loop or bot.loop.is_closed():
+        logger.error("Bot event loop not available. Cannot schedule graceful_shutdown.")
+        return redirect(url_for('settings_route', restart='failed'))
+
+    try:
+        asyncio.run_coroutine_threadsafe(graceful_shutdown(), bot.loop)
+        logger.info("Scheduled graceful_shutdown on the bot's event loop.")
+        return redirect(url_for('settings_route', restart='started'))
+    except Exception as e:
+        logger.error(f"Failed to schedule graceful_shutdown: {e}", exc_info=True)
+        return redirect(url_for('settings_route', restart='failed'))
 
 # Garmin Control API Routes
 def get_status_data():
@@ -3297,65 +3307,6 @@ async def on_thread_update(before: Thread, after: Thread):
             await close_support_thread(after, f"Tag '{CLOSED_TAG_NAME}' manuell hinzugefügt", set_tag=False)
 
 
-async def graceful_shutdown():
-    global shutdown_initiated
-    if shutdown_initiated:
-        return
-    shutdown_initiated = True
-    logger.info("Shutdown-Signal empfangen. Beginne graceful shutdown...")
-
-    if msg_purge_task.is_running():
-        logger.info("Stoppe msg_purge_task...")
-        msg_purge_task.cancel()
-        try:
-            # msg_purge_task.stop() ist keine Standardmethode für tasks.loop. cancel() ist korrekt.
-            # Wir warten hier nicht explizit, da cancel() den Task beim nächsten Durchlauf beendet.
-            # await msg_purge_task.stop() # Entfernt oder durch geeignetes Warten ersetzen falls nötig
-            pass # cancel() wurde gerufen, das reicht für den Shutdown-Prozess
-        except asyncio.CancelledError:
-            logger.info("msg_purge_task erfolgreich abgebrochen.")
-        except Exception as e:
-            logger.error(f"Fehler beim Stoppen von msg_purge_task: {e}", exc_info=True)
-    
-    if periodic_cleanup_task.is_running():
-        logger.info("Stoppe periodic_cleanup_task...")
-        periodic_cleanup_task.cancel()
-        try:
-            pass # cancel() wurde gerufen, das reicht für den Shutdown-Prozess
-        except asyncio.CancelledError:
-            logger.info("periodic_cleanup_task erfolgreich abgebrochen.")
-        except Exception as e:
-            logger.error(f"Fehler beim Stoppen von periodic_cleanup_task: {e}", exc_info=True)
-    
-    logger.info("Sende 'Bot wird gestoppt...' Nachricht (falls möglich).")
-    stop_message_targets = []
-    if cfg.JOIN_LOGS_ID: stop_message_targets.append(cfg.JOIN_LOGS_ID)
-    if cfg.BOT_LOGS_ID: stop_message_targets.append(cfg.BOT_LOGS_ID)
-    
-    if stop_message_targets:
-        try:
-            if bot.is_ready() or (bot.loop and bot.loop.is_running() and not bot.is_closed()):
-                await send_log_message(
-                    "⏳ Bot wird gestoppt...",
-                    target_channel_ids=list(set(stop_message_targets))
-                )
-                logger.info("'Bot wird gestoppt...' Nachricht gesendet.")
-                await asyncio.sleep(0.5) 
-            else:
-                logger.warning("Bot nicht bereit, 'Bot wird gestoppt...' Nachricht kann nicht gesendet werden.")
-        except Exception as e:
-            logger.error(f"Fehler beim Senden der 'Bot wird gestoppt...' Nachricht: {e}", exc_info=True)
-    
-    logger.info("Schließe Bot-Verbindung...")
-    if bot.loop and bot.loop.is_running() and not bot.is_closed():
-        try:
-            await bot.close()
-            logger.info("Bot-Verbindung erfolgreich geschlossen.")
-        except Exception as e:
-            logger.error(f"Fehler beim bot.close(): {e}", exc_info=True)
-    else:
-        logger.info("Bot-Verbindung war bereits geschlossen oder Loop nicht aktiv.")
-    logger.info("Graceful shutdown abgeschlossen.")
 
 
 async def graceful_shutdown():

@@ -36,17 +36,21 @@ docker build . -t dc_voice_monitor
 ### Testing
 
 ```bash
-python -m unittest tests/test_main.py
-python -m unittest tests.test_voice_stats
-python -m unittest tests/test_garmin_voice.py
-python -m unittest tests/test_web_interface.py
-python -m unittest tests/test_aligned_recording.py
-python -m unittest tests/test_aligned_implementation.py
+python -m unittest tests.test_main tests.test_voice_stats    # 32 tests, green
 
 # Audio mixing performance tests
 python test_mixing_performance.py
 python test_mixing_performance_simple.py
 ```
+
+Both suites pass. Things to know before extending them:
+
+- **`main.py` needs Python 3.10+** (`X | None` syntax), but the repo `.venv` is 3.8. Anything importing `main` therefore only runs inside the container:
+  `docker run --rm -v "$(pwd)":/app -w /app --entrypoint python dc_voice_monitor -m unittest tests.test_main`
+  `voice_stats.py` and its tests are 3.8-compatible and run in the venv directly.
+- **`tests/test_main.py` gives each test a temp database file.** A `":memory:"` database cannot be used: `main.py` opens a new connection per operation and every `":memory:"` connection is a separate empty database. The `sqlite3.connect` patch must also call a saved reference to the real function — `main.sqlite3` is the same module object as `sqlite3`, so a naive patch recurses infinitely.
+- Tests covering `on_voice_state_update` and the `/viewlogs` command were removed: they targeted the pre-py-cord command API, module-level config on `main` (config now lives in `config_loader`), and the dropped `user_joins` table. `on_voice_state_update` has since grown auto-join, AFK and hidden-channel branches, so testing it needs a fresh, much richer set of mocks.
+- Removed alongside them: `test_web_interface.py` (contained no `TestCase`), `test_garmin_voice.py`, `test_aligned_recording.py`, `test_aligned_implementation.py` (imported `voice_recv` / `AlignedPerUserSink`, gone since the py-cord migration).
 
 ### Health checks
 
@@ -114,7 +118,7 @@ The five settings are configured at runtime under Settings → Access Control. R
 - **`/status` is exempt** (`ACCESS_EXEMPT_PATHS`) — the Docker healthcheck and `health_check.py` poll it without going through the proxy, so gating it would mark the container unhealthy.
 - Templates get `can_join_logs` / `can_settings` / `can_bot_control` / `can_recordings` from a context processor to hide unusable controls. That is cosmetic; every protected route checks for itself.
 
-Unrelated pre-existing bug found while testing this: `/restart_bot` is an `async def` view, but `asgiref` is not installed, so Flask refuses to run it and the route returns 500 for everyone. Fixing it means adding `asgiref` (or `Flask[async]`) to `requirements.txt`, or making the view synchronous.
+**Flask is installed without the `async` extra, so Flask views must be `def`, never `async def`** — an async view returns HTTP 500 for everyone. `/restart_bot` had this bug; it hands its coroutine to the bot's loop with `asyncio.run_coroutine_threadsafe` and needs no `await` of its own. Restarting relies on `restart: unless-stopped` in the compose file: the process exits 0 after `bot.close()`, and only that policy brings it back (`on-failure` would not).
 
 ### STT engines
 
