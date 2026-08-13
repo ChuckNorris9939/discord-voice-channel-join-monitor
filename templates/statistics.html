@@ -365,7 +365,9 @@
         <div class="toolbar">
             <div class="toolbar-group">
                 <a href="{{ url_for('home') }}" class="back-button">🔙 Back to Home</a>
+                {% if can_join_logs %}
                 <a href="{{ url_for('view_join_logs_page') }}" class="back-button secondary">📊 Join Logs</a>
+                {% endif %}
 
                 {% if stats %}
                 <form method="GET" action="{{ url_for('statistics_page') }}" class="select-wrap" id="period-form">

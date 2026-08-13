@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🔒 Access Denied</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            color: #e0e0e0;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .card {
+            max-width: 560px;
+            width: 100%;
+            background: rgba(45, 45, 45, 0.95);
+            border: 1px solid #404040;
+            border-top: 4px solid #e74c3c;
+            border-radius: 12px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+            padding: 40px;
+            text-align: center;
+        }
+
+        .icon { font-size: 3.5em; margin-bottom: 12px; }
+        h1 { color: #ffffff; font-size: 1.8em; margin-bottom: 12px; }
+        p { color: #b8c7d4; line-height: 1.6; margin-bottom: 10px; }
+
+        .detail {
+            background: rgba(0, 0, 0, 0.25);
+            border: 1px solid #4a5b6d;
+            border-radius: 8px;
+            padding: 16px 20px;
+            margin: 24px 0;
+            text-align: left;
+        }
+
+        .detail div { margin: 6px 0; font-size: 0.92em; color: #9fb3c8; }
+        .detail strong { color: #ffffff; }
+        code {
+            background: rgba(52, 152, 219, 0.15);
+            border: 1px solid rgba(52, 152, 219, 0.4);
+            border-radius: 4px;
+            padding: 2px 7px;
+            color: #7fc4f5;
+            font-size: 0.95em;
+        }
+
+        .back-button {
+            background: linear-gradient(135deg, #3498db, #2980b9);
+            color: white;
+            padding: 12px 26px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 600;
+            display: inline-block;
+            transition: all 0.3s ease;
+        }
+
+        .back-button:hover {
+            background: linear-gradient(135deg, #2980b9, #1f5f8b);
+            transform: translateY(-2px);
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="icon">🔒</div>
+        <h1>Access Denied</h1>
+        <p>You do not have permission to open <strong>{{ area }}</strong>.</p>
+
+        <div class="detail">
+            <div>Signed in as: <strong>{{ username or 'unknown' }}</strong></div>
+            <div>Needs any of:
+                {% for group in allowed_groups %}<code>{{ group }}</code>{% if not loop.last %} {% endif %}{% endfor %}
+            </div>
+            <div>You are in:
+                {% if user_groups %}
+                    {% for group in user_groups %}<code>{{ group }}</code>{% if not loop.last %} {% endif %}{% endfor %}
+                {% else %}<em>no groups</em>{% endif %}
+            </div>
+        </div>
+
+        <p>Ask an administrator to add you to one of those groups in Authentik.</p>
+        <br>
+        <a href="{{ url_for('home') }}" class="back-button">🔙 Back to Dashboard</a>
+    </div>
+</body>
+</html>

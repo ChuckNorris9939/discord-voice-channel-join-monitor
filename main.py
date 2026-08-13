@@ -1,4 +1,5 @@
 import os
+import functools
 from pathlib import Path
 import threading
 import datetime
@@ -116,6 +117,116 @@ app = Flask(__name__, template_folder='templates')
 # Track bot startup time for uptime calculation
 BOT_START_TIME = time.time()
 
+# --------- Web UI access control ---------
+# Authentik sits in front of this app and injects the logged-in user's groups.
+# Required groups are configured per area on the settings page; an empty setting
+# means that area is open. Requests without the header are allowed through, since
+# they can only come from inside the host - Authentik is always in front of the
+# public route, and local access has to keep working.
+AUTHENTIK_GROUPS_HEADER = 'X-authentik-groups'
+AUTHENTIK_USER_HEADER = 'X-authentik-username'
+
+# Never gated: Docker's HEALTHCHECK and health_check.py poll this, and they do
+# not go through the proxy, so protecting it would report the bot as unhealthy.
+ACCESS_EXEMPT_PATHS = {'/status'}
+
+
+def request_groups():
+    """Groups of the current user. None means the proxy sent no header at all,
+    which is different from a user who is in no groups."""
+    raw = request.headers.get(AUTHENTIK_GROUPS_HEADER)
+    if raw is None:
+        return None
+    # Authentik joins groups with "|"; commas are accepted too so a differently
+    # configured outpost still works. Group names may contain spaces and "+".
+    separators = '|' if '|' in raw else ','
+    return [group.strip() for group in raw.split(separators) if group.strip()]
+
+
+def request_username():
+    return request.headers.get(AUTHENTIK_USER_HEADER, '')
+
+
+def parse_group_setting(value):
+    """A setting holds one or more group names, comma separated.
+
+    Discord roles are flat, not hierarchical: an admin usually carries only
+    discord_Administrator and not discord_User+ as well. So every group that
+    should reach an area has to be listed, and holding any one of them is enough.
+    """
+    if not value:
+        return []
+    return [group.strip() for group in value.split(',') if group.strip()]
+
+
+def has_access(required_setting):
+    """True if the current request may use an area guarded by required_setting."""
+    allowed = parse_group_setting(required_setting)
+    if not allowed:
+        return True          # area not restricted
+    groups = request_groups()
+    if groups is None:
+        return True          # no proxy in front, e.g. local access
+    return any(group in allowed for group in groups)
+
+
+def deny(area, required_setting):
+    allowed = parse_group_setting(required_setting)
+    logger.warning(
+        f"Access denied to {request.path} for user '{request_username() or 'unknown'}' "
+        f"(needs one of {allowed}, has {request_groups()})"
+    )
+    return render_template('forbidden.html', area=area, allowed_groups=allowed,
+                           user_groups=request_groups() or [],
+                           username=request_username()), 403
+
+
+def require_group(setting_name, area):
+    """Guard a route with the group configured under setting_name."""
+    def decorator(view):
+        # Async views need an async wrapper, otherwise Flask sees a sync function
+        # and never awaits the coroutine the view returns.
+        if asyncio.iscoroutinefunction(view):
+            @functools.wraps(view)
+            async def wrapped(*args, **kwargs):
+                required_group = getattr(cfg, setting_name, '')
+                if not has_access(required_group):
+                    return deny(area, required_group)
+                return await view(*args, **kwargs)
+        else:
+            @functools.wraps(view)
+            def wrapped(*args, **kwargs):
+                required_group = getattr(cfg, setting_name, '')
+                if not has_access(required_group):
+                    return deny(area, required_group)
+                return view(*args, **kwargs)
+        return wrapped
+    return decorator
+
+
+@app.before_request
+def enforce_general_access():
+    """Gate the whole UI behind the general access group."""
+    if request.path in ACCESS_EXEMPT_PATHS:
+        return None
+    required_group = getattr(cfg, 'ACCESS_GROUP', '')
+    if not has_access(required_group):
+        return deny('this dashboard', required_group)
+    return None
+
+
+@app.context_processor
+def inject_access_flags():
+    """So templates can hide controls the user cannot use. Cosmetic only - every
+    protected route checks for itself."""
+    return {
+        'can_join_logs': has_access(getattr(cfg, 'JOIN_LOGS_GROUP', '')),
+        'can_settings': has_access(getattr(cfg, 'SETTINGS_GROUP', '')),
+        'can_bot_control': has_access(getattr(cfg, 'BOT_CONTROL_GROUP', '')),
+        'can_recordings': has_access(getattr(cfg, 'RECORDINGS_GROUP', '')),
+        'auth_username': request_username(),
+    }
+
 @app.route("/")
 def home():
     # Calculate uptime
@@ -149,6 +260,7 @@ def home():
 MAX_LOG_ROWS = 25000
 
 @app.route('/view_join_logs')
+@require_group('JOIN_LOGS_GROUP', 'Join Logs')
 def view_join_logs_page():
     conn = None
     logs = []
@@ -241,6 +353,7 @@ def statistics_page():
     return render_template('statistics.html', stats=stats, error=error)
 
 @app.route('/garmin_recordings')
+@require_group('RECORDINGS_GROUP', 'Garmin Recordings')
 def garmin_recordings_page():
     import os
     from pathlib import Path
@@ -316,6 +429,7 @@ def garmin_recordings_page():
     return render_template('garmin_recordings.html', recordings=recordings)
 
 @app.route('/download_recording/<filename>')
+@require_group('RECORDINGS_GROUP', 'Garmin Recordings')
 def download_recording(filename):
     """Download a specific recording file."""
     import os
@@ -332,6 +446,7 @@ def download_recording(filename):
         return "File not found", 404
 
 @app.route('/settings', methods=['GET', 'POST'])
+@require_group('SETTINGS_GROUP', 'Bot Settings')
 def settings_route():
     message = None 
     error = None   
@@ -374,6 +489,16 @@ def settings_route():
             afk_channel_id_str = request.form.get('afk_channel_id', '')
             save_setting(DB_KEY_AFK_CHANNEL_ID, afk_channel_id_str if afk_channel_id_str else "None")
             logger.info(f"Saved {DB_KEY_AFK_CHANNEL_ID}: {afk_channel_id_str}")
+
+            # Handle access control groups (empty value = area not restricted)
+            for form_field, db_key in (('access_group', DB_KEY_ACCESS_GROUP),
+                                       ('join_logs_group', DB_KEY_JOIN_LOGS_GROUP),
+                                       ('settings_group', DB_KEY_SETTINGS_GROUP),
+                                       ('bot_control_group', DB_KEY_BOT_CONTROL_GROUP),
+                                       ('recordings_group', DB_KEY_RECORDINGS_GROUP)):
+                group_value = request.form.get(form_field, '').strip()
+                save_setting(db_key, group_value)
+                logger.info(f"Saved {db_key}: '{group_value}'")
 
             # Handle PURGE_OLDER_THAN_DAYS
             purge_days_str = request.form.get('purge_older_than_days', '7')
@@ -513,6 +638,15 @@ def settings_route():
     current_settings_display['TECHSUPPORT_CHANNEL_ID'] = str(cfg.TECHSUPPORT_CHANNEL_ID) if cfg.TECHSUPPORT_CHANNEL_ID is not None else ''
     current_settings_display['TESTING_CHANNEL_ID'] = str(cfg.TESTING_CHANNEL_ID) if cfg.TESTING_CHANNEL_ID is not None else ''
     current_settings_display['AFK_CHANNEL_ID'] = str(cfg.AFK_CHANNEL_ID) if cfg.AFK_CHANNEL_ID is not None else ''
+    current_settings_display['ACCESS_GROUP'] = cfg.ACCESS_GROUP
+    current_settings_display['JOIN_LOGS_GROUP'] = cfg.JOIN_LOGS_GROUP
+    current_settings_display['SETTINGS_GROUP'] = cfg.SETTINGS_GROUP
+    current_settings_display['BOT_CONTROL_GROUP'] = cfg.BOT_CONTROL_GROUP
+    current_settings_display['RECORDINGS_GROUP'] = cfg.RECORDINGS_GROUP
+    # Shown on the settings page so the admin can see what the proxy is actually
+    # sending, instead of guessing which group names to type.
+    current_settings_display['DETECTED_GROUPS'] = request_groups()
+    current_settings_display['DETECTED_USER'] = request_username()
     current_settings_display['PURGE_OLDER_THAN_DAYS'] = str(cfg.PURGE_OLDER_THAN_DAYS)
     current_settings_display['JOIN_MESSAGE_TIMER_ENABLED'] = str(cfg.JOIN_MESSAGE_TIMER_ENABLED).lower()
     current_settings_display['JOIN_MESSAGE_TIMER_MINUTES'] = str(cfg.JOIN_MESSAGE_TIMER_MINUTES)
@@ -540,6 +674,7 @@ def settings_route():
     return render_template('settings.html', current_settings=current_settings_display, message=message, error=error, vosk_models=vosk_models)
 
 @app.route('/restart_bot', methods=['POST'])
+@require_group('BOT_CONTROL_GROUP', 'Bot Restart')
 async def restart_bot_route():
     if request.method == 'POST':
         logger.info("Restart command received via web UI.")
@@ -675,6 +810,7 @@ def get_garmin_health_data():
         }
 
 @app.route('/garmin/start', methods=['POST'])
+@require_group('RECORDINGS_GROUP', 'Recording Control')
 def garmin_start_route():
     try:
         # Use the global garmin_manager
@@ -718,6 +854,7 @@ def garmin_start_route():
         return {"success": False, "error": str(e)}
 
 @app.route('/garmin/stop', methods=['POST'])
+@require_group('RECORDINGS_GROUP', 'Recording Control')
 def garmin_stop_route():
     try:
         # Use the global garmin_manager
@@ -740,6 +877,7 @@ def garmin_stop_route():
         return {"success": False, "error": str(e)}
 
 @app.route('/garmin/save', methods=['POST'])
+@require_group('RECORDINGS_GROUP', 'Recording Control')
 def garmin_save_route():
     try:
         # Use the global garmin_manager
@@ -796,6 +934,7 @@ def garmin_save_route():
         return {"success": False, "error": str(e)}
 
 @app.route('/garmin/autojoin', methods=['POST'])
+@require_group('RECORDINGS_GROUP', 'Recording Control')
 def garmin_autojoin_route():
     try:
         # Toggle the autojoin setting
@@ -816,6 +955,7 @@ def garmin_autojoin_route():
         return {"success": False, "error": str(e)}
 
 @app.route('/garmin/stt_output', methods=['POST'])
+@require_group('RECORDINGS_GROUP', 'Recording Control')
 def garmin_stt_output_route():
     try:
         # Toggle the STT output setting
@@ -846,6 +986,7 @@ def status_route():
         return {"success": False, "error": str(e)}
 
 @app.route('/cleanup/run', methods=['POST'])
+@require_group('BOT_CONTROL_GROUP', 'Audio Cleanup')
 def cleanup_run_route():
     """API endpoint to manually trigger audio cleanup"""
     try:
@@ -1292,7 +1433,7 @@ def update_thread_reminder_sent(thread_id: int, timestamp_iso: str):
 
 # --------- Helper Functions for bot_settings Table ---------
 import config_loader as cfg
-from config_loader import save_setting, DB_KEY_APP_TESTING_MODE, DB_KEY_HIDDEN_CHANNELS, DB_KEY_JOIN_LOGS_ID, DB_KEY_BOT_LOGS_ID, DB_KEY_TECHSUPPORT_CHANNEL_ID, DB_KEY_TESTING_CHANNEL_ID, DB_KEY_AFK_CHANNEL_ID, DB_KEY_PURGE_OLDER_THAN_DAYS, DB_KEY_JOIN_MESSAGE_TIMER_ENABLED, DB_KEY_JOIN_MESSAGE_TIMER_MINUTES, DB_KEY_AFK_TIMER_MINUTES, DB_KEY_STT_ENABLED, DB_KEY_STT_ENGINE, DB_KEY_VOSK_MODEL_PATH, DB_KEY_GARMIN_AUTO_JOIN_ENABLED, DB_KEY_GARMIN_AUTO_JOIN_CHANNELS, DB_KEY_GARMIN_RECORD_SECONDS, DB_KEY_GARMIN_MAX_RECORDING_DURATION, DB_KEY_GARMIN_STT_OUTPUT_ENABLED, DB_KEY_GARMIN_SILENCE_COMPRESSION_ENABLED, DB_KEY_LOG_LEVEL, DB_KEY_DISCORD_LOG_LEVEL, DB_KEY_CLEANUP_ALIGNED_RECORDINGS_HOURS, DB_KEY_CLEANUP_GARMIN_OUTPUT_HOURS
+from config_loader import save_setting, DB_KEY_APP_TESTING_MODE, DB_KEY_HIDDEN_CHANNELS, DB_KEY_JOIN_LOGS_ID, DB_KEY_BOT_LOGS_ID, DB_KEY_TECHSUPPORT_CHANNEL_ID, DB_KEY_TESTING_CHANNEL_ID, DB_KEY_AFK_CHANNEL_ID, DB_KEY_PURGE_OLDER_THAN_DAYS, DB_KEY_JOIN_MESSAGE_TIMER_ENABLED, DB_KEY_JOIN_MESSAGE_TIMER_MINUTES, DB_KEY_AFK_TIMER_MINUTES, DB_KEY_STT_ENABLED, DB_KEY_STT_ENGINE, DB_KEY_VOSK_MODEL_PATH, DB_KEY_GARMIN_AUTO_JOIN_ENABLED, DB_KEY_GARMIN_AUTO_JOIN_CHANNELS, DB_KEY_GARMIN_RECORD_SECONDS, DB_KEY_GARMIN_MAX_RECORDING_DURATION, DB_KEY_GARMIN_STT_OUTPUT_ENABLED, DB_KEY_GARMIN_SILENCE_COMPRESSION_ENABLED, DB_KEY_LOG_LEVEL, DB_KEY_DISCORD_LOG_LEVEL, DB_KEY_CLEANUP_ALIGNED_RECORDINGS_HOURS, DB_KEY_CLEANUP_GARMIN_OUTPUT_HOURS, DB_KEY_ACCESS_GROUP, DB_KEY_JOIN_LOGS_GROUP, DB_KEY_SETTINGS_GROUP, DB_KEY_BOT_CONTROL_GROUP, DB_KEY_RECORDINGS_GROUP
 
 
 

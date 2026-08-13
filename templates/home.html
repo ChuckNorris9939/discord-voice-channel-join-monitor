@@ -640,22 +640,28 @@
             <!-- Navigation Section - Top -->
             <div class="navigation-section">
                 <div class="nav-grid">
+                    {% if can_join_logs %}
                     <a href="{{ url_for('view_join_logs_page') }}" class="nav-button logs">
                         <span class="button-icon">📊</span>
                         View Join Logs
                     </a>
+                    {% endif %}
                     <a href="{{ url_for('statistics_page') }}" class="nav-button statistics">
                         <span class="button-icon">📈</span>
                         Voice Statistics
                     </a>
+                    {% if can_recordings %}
                     <a href="{{ url_for('garmin_recordings_page') }}" class="nav-button recordings">
                         <span class="button-icon">🎙️</span>
                         Garmin Recordings
                     </a>
+                    {% endif %}
+                    {% if can_settings %}
                     <a href="{{ url_for('settings_route') }}" class="nav-button settings">
                         <span class="button-icon">⚙️</span>
                         Bot Settings
                     </a>
+                    {% endif %}
                 </div>
             </div>
 

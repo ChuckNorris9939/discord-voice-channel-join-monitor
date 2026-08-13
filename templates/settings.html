@@ -504,10 +504,14 @@
                     <!-- Manual Cleanup Button -->
                     <div class="form-group">
                         <label>Manual Cleanup</label>
+                        {% if can_bot_control %}
                         <button type="button" class="save-button" onclick="runManualCleanup()" style="width: auto; margin-top: 10px;">
                             🧹 Run Cleanup Now
                         </button>
                         <p class="note">Click to manually trigger the audio cleanup process. This will delete files according to the retention settings above.</p>
+                        {% else %}
+                        <p class="note">Running the cleanup manually needs the <em>Bot control</em> group. The scheduled cleanup keeps running regardless.</p>
+                        {% endif %}
                     </div>
                 </div>
 
@@ -531,6 +535,92 @@
                     <div class="form-group">
                         <label for="afk_timer_minutes">AFK Timer (Minutes)</label>
                         <input type="number" name="afk_timer_minutes" id="afk_timer_minutes" value="{{ current_settings.get('AFK_TIMER_MINUTES', '10') }}" min="1">
+                    </div>
+                </div>
+
+                <div class="category-header" onclick="toggleCategory('access-category')">
+                    <h2>🔐 Access Control (Authentik Groups)</h2>
+                    <span class="toggle-icon collapsed">▼</span>
+                </div>
+                <div id="access-category" class="category-content collapsed">
+                    <p class="note" style="margin-bottom:18px;">
+                        Restrict parts of this dashboard to Authentik groups. Names must match exactly
+                        what Authentik sends in <code>X-authentik-groups</code>.
+                        <strong>Enter several groups separated by commas — holding any one of them grants access.</strong>
+                        <br><br>
+                        Groups are <em>not</em> hierarchical: someone in <code>discord_Administrator</code>
+                        is usually not also in <code>discord_User+</code>, so every group that should reach
+                        an area has to be listed there. In particular, list the admin and moderator groups
+                        under general access too, or they lose access to the whole dashboard.
+                        <br><br>
+                        <strong>Leave a field empty to leave that area open to everyone.</strong>
+                        Requests without the header (local access, not through the proxy) are always
+                        allowed, so a misconfiguration here cannot lock you out permanently.
+                    </p>
+
+                    <div class="form-group detected-groups">
+                        {% if current_settings.get('DETECTED_GROUPS') %}
+                            <label>Your current session (as reported by Authentik)</label>
+                            <p class="note">
+                                User: <code>{{ current_settings.get('DETECTED_USER') or 'unknown' }}</code><br>
+                                Groups:
+                                {% for group in current_settings.get('DETECTED_GROUPS') %}<code>{{ group }}</code>{% if not loop.last %} {% endif %}{% endfor %}
+                            </p>
+                        {% else %}
+                            <label>Your current session</label>
+                            <p class="note">
+                                No <code>X-authentik-groups</code> header on this request — you are reaching
+                                the app directly rather than through the proxy. Access checks are skipped.
+                            </p>
+                        {% endif %}
+                    </div>
+
+                    <div class="form-group">
+                        <label for="access_group">General access to the application</label>
+                        <input type="text" name="access_group" id="access_group"
+                               value="{{ current_settings.get('ACCESS_GROUP', '') }}"
+                               placeholder="discord_User+, discord_Moderator, discord_Administrator">
+                        <p class="note">
+                            Required for every page, and all that the dashboard and
+                            <strong>Voice Statistics</strong> need. List <strong>every</strong> group that
+                            should get in, admins and moderators included.
+                            Empty = open to anyone Authentik lets through.
+                        </p>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="join_logs_group">Join Logs</label>
+                        <input type="text" name="join_logs_group" id="join_logs_group"
+                               value="{{ current_settings.get('JOIN_LOGS_GROUP', '') }}"
+                               placeholder="discord_Moderator, discord_Administrator">
+                        <p class="note">Guards the raw join/leave log with individual user IDs and timestamps.</p>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="settings_group">Settings</label>
+                        <input type="text" name="settings_group" id="settings_group"
+                               value="{{ current_settings.get('SETTINGS_GROUP', '') }}"
+                               placeholder="discord_Administrator">
+                        <p class="note">Guards this settings page.</p>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="bot_control_group">Bot control</label>
+                        <input type="text" name="bot_control_group" id="bot_control_group"
+                               value="{{ current_settings.get('BOT_CONTROL_GROUP', '') }}"
+                               placeholder="discord_Administrator">
+                        <p class="note">Guards restarting the bot and triggering the manual audio cleanup.</p>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="recordings_group">Recordings</label>
+                        <input type="text" name="recordings_group" id="recordings_group"
+                               value="{{ current_settings.get('RECORDINGS_GROUP', '') }}"
+                               placeholder="discord_Moderator, discord_Administrator">
+                        <p class="note">
+                            Guards the recordings list, downloads and the Garmin start/stop/save controls.
+                            Add the admin group here as well if admins should reach it.
+                        </p>
                     </div>
                 </div>
 

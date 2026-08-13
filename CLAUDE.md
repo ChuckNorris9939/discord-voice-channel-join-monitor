@@ -94,6 +94,28 @@ Key routes: `/` dashboard, `/view_join_logs`, `/statistics` (voice analytics, `?
 
 Templates have no external dependencies — no CDN scripts or fonts. Charts on `/statistics` are hand-rolled CSS bars and inline SVG so the dashboard works without internet access.
 
+### Web UI access control
+
+The app has no login of its own — Authentik sits in front (SWAG/nginx forward auth) and injects `X-authentik-groups` / `X-authentik-username`. Authorization is enforced in `main.py`:
+
+- `enforce_general_access` (a `before_request` hook) gates every path against `cfg.ACCESS_GROUP` — this also covers `/` and `/statistics`, which have no group of their own
+- `@require_group('JOIN_LOGS_GROUP', …)` guards `/view_join_logs`
+- `@require_group('SETTINGS_GROUP', …)` guards `/settings`
+- `@require_group('BOT_CONTROL_GROUP', …)` guards `/restart_bot`, `/cleanup/run`
+- `@require_group('RECORDINGS_GROUP', …)` guards `/garmin_recordings`, `/download_recording/*`, `/garmin/*`
+
+`require_group` builds an async wrapper for `async def` views — a sync wrapper would leave the coroutine unawaited.
+
+The five settings are configured at runtime under Settings → Access Control. Rules that matter when changing this:
+
+- **Each setting holds a comma-separated list of groups, and holding any one of them grants access.** Discord roles are flat, not hierarchical — a user in `discord_Administrator` is normally *not* also in `discord_User+` — so every group that should reach an area must be listed there, including admins under general access.
+- **An empty group setting means that area is unrestricted** — that is the default, so deploying cannot lock anyone out.
+- **A request with no `X-authentik-groups` header is allowed through.** Only the proxy adds it, so this keeps direct/local access working. It also means the check is not a defence against anything that can already reach the container port.
+- **`/status` is exempt** (`ACCESS_EXEMPT_PATHS`) — the Docker healthcheck and `health_check.py` poll it without going through the proxy, so gating it would mark the container unhealthy.
+- Templates get `can_join_logs` / `can_settings` / `can_bot_control` / `can_recordings` from a context processor to hide unusable controls. That is cosmetic; every protected route checks for itself.
+
+Unrelated pre-existing bug found while testing this: `/restart_bot` is an `async def` view, but `asgiref` is not installed, so Flask refuses to run it and the route returns 500 for everyone. Fixing it means adding `asgiref` (or `Flask[async]`) to `requirements.txt`, or making the view synchronous.
+
 ### STT engines
 
 Configured via `STT_ENGINE` env var:
