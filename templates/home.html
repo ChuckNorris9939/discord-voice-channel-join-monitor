@@ -122,6 +122,14 @@
             background: linear-gradient(135deg, #8e44ad, #7d3c98);
         }
 
+        .nav-button.statistics {
+            background: linear-gradient(135deg, #1abc9c, #16a085);
+        }
+
+        .nav-button.statistics:hover {
+            background: linear-gradient(135deg, #16a085, #117864);
+        }
+
         .nav-button.recordings {
             background: linear-gradient(135deg, #e67e22, #d35400);
         }
@@ -634,6 +642,10 @@
                     <a href="{{ url_for('view_join_logs_page') }}" class="nav-button logs">
                         <span class="button-icon">📊</span>
                         View Join Logs
+                    </a>
+                    <a href="{{ url_for('statistics_page') }}" class="nav-button statistics">
+                        <span class="button-icon">📈</span>
+                        Voice Statistics
                     </a>
                     <a href="{{ url_for('garmin_recordings_page') }}" class="nav-button recordings">
                         <span class="button-icon">🎙️</span>

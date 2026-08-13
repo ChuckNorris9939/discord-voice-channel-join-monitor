@@ -39,3 +39,4 @@ vosk
 python-dotenv
 pydub
 numpy
+tzdata

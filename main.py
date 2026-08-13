@@ -177,6 +177,29 @@ def view_join_logs_page():
             
     return render_template('view_logs.html', logs=logs, current_filter_username=current_filter_username)
 
+@app.route('/statistics')
+def statistics_page():
+    import config_loader as cfg
+    import voice_stats
+
+    period = request.args.get('period', voice_stats.DEFAULT_PERIOD)
+    stats = None
+    error = None
+    try:
+        stats = voice_stats.collect_statistics(
+            DATABASE_PATH,
+            afk_channel_id=cfg.AFK_CHANNEL_ID,
+            period_key=period,
+        )
+        logger.info(f"Statistics built for period '{stats['period']['key']}': "
+                    f"{stats['kpis']['total_sessions']} sessions, "
+                    f"{stats['kpis']['unique_users']} users")
+    except Exception as e:
+        error = str(e)
+        logger.error(f"Failed to build voice statistics: {e}", exc_info=True)
+
+    return render_template('statistics.html', stats=stats, error=error)
+
 @app.route('/garmin_recordings')
 def garmin_recordings_page():
     import os

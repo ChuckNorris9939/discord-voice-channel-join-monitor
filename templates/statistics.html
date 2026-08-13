@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>📈 Voice Statistics</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            color: #e0e0e0;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: rgba(45, 45, 45, 0.95);
+            border-radius: 12px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            border: 1px solid #404040;
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(90deg, #2c3e50, #34495e);
+            padding: 20px;
+            text-align: center;
+            border-bottom: 2px solid #3498db;
+        }
+
+        .header h1 {
+            color: #ffffff;
+            font-size: 2.4em;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+        }
+
+        .header .subtitle {
+            color: #9fb3c8;
+            margin-top: 6px;
+            font-size: 0.95em;
+        }
+
+        .content { padding: 25px; }
+
+        /* ---------- Toolbar ---------- */
+        .toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 25px;
+        }
+
+        .toolbar-group {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            align-items: center;
+        }
+
+        .back-button {
+            background: linear-gradient(135deg, #3498db, #2980b9);
+            color: white;
+            padding: 12px 22px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            display: inline-block;
+        }
+
+        .back-button:hover {
+            background: linear-gradient(135deg, #2980b9, #1f5f8b);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(52, 152, 219, 0.4);
+        }
+
+        .back-button.secondary { background: linear-gradient(135deg, #9b59b6, #8e44ad); }
+        .back-button.secondary:hover { background: linear-gradient(135deg, #8e44ad, #7d3c98); }
+
+        .select-wrap {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            background: rgba(52, 73, 94, 0.35);
+            border: 1px solid #4a5b6d;
+            border-radius: 8px;
+            padding: 8px 14px;
+        }
+
+        .select-wrap label { font-weight: 600; color: #ffffff; font-size: 0.95em; }
+
+        select {
+            background-color: #404040;
+            color: #e0e0e0;
+            border: 1px solid #555;
+            border-radius: 6px;
+            padding: 8px 12px;
+            font-size: 15px;
+            font-family: inherit;
+            cursor: pointer;
+        }
+
+        select:focus { outline: none; border-color: #3498db; }
+
+        .meta-info { color: #8fa4b8; font-size: 0.88em; text-align: right; line-height: 1.5; }
+
+        /* ---------- KPI cards ---------- */
+        .kpi-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(185px, 1fr));
+            gap: 14px;
+            margin-bottom: 28px;
+        }
+
+        .kpi-card {
+            background: linear-gradient(135deg, rgba(52, 73, 94, 0.45), rgba(44, 62, 80, 0.35));
+            border: 1px solid #46586b;
+            border-left: 4px solid var(--accent, #3498db);
+            border-radius: 10px;
+            padding: 16px 18px;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .kpi-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 22px rgba(0, 0, 0, 0.35);
+        }
+
+        .kpi-label {
+            color: #9fb3c8;
+            font-size: 0.8em;
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+            margin-bottom: 6px;
+        }
+
+        .kpi-value {
+            color: #ffffff;
+            font-size: 1.65em;
+            font-weight: 700;
+            line-height: 1.15;
+            word-break: break-word;
+        }
+
+        .kpi-sub { color: #8fa4b8; font-size: 0.82em; margin-top: 4px; }
+
+        /* ---------- Chart cards ---------- */
+        .chart-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(430px, 1fr));
+            gap: 18px;
+        }
+
+        .chart-card {
+            background: rgba(52, 73, 94, 0.2);
+            border: 1px solid #404040;
+            border-radius: 10px;
+            padding: 20px;
+        }
+
+        .chart-card.full { grid-column: 1 / -1; }
+
+        .chart-head {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 6px;
+        }
+
+        .chart-title { color: #ffffff; font-size: 1.15em; font-weight: 600; }
+        .chart-hint { color: #8fa4b8; font-size: 0.83em; margin-bottom: 16px; }
+
+        /* Metric toggle */
+        .toggle {
+            display: inline-flex;
+            background: rgba(0, 0, 0, 0.25);
+            border: 1px solid #4a5b6d;
+            border-radius: 7px;
+            overflow: hidden;
+        }
+
+        .toggle button {
+            background: transparent;
+            color: #9fb3c8;
+            border: none;
+            padding: 7px 14px;
+            cursor: pointer;
+            font-size: 0.85em;
+            font-weight: 600;
+            font-family: inherit;
+            transition: all 0.2s ease;
+        }
+
+        .toggle button:hover { color: #ffffff; }
+        .toggle button.active { background: #3498db; color: #ffffff; }
+
+        /* ---------- Horizontal bar list ---------- */
+        .bar-row {
+            display: grid;
+            grid-template-columns: 26px minmax(90px, 150px) 1fr auto;
+            gap: 12px;
+            align-items: center;
+            padding: 7px 0;
+        }
+
+        .bar-rank { color: #7f8fa3; font-size: 0.85em; font-weight: 700; text-align: right; }
+
+        .bar-name {
+            color: #e0e0e0;
+            font-size: 0.92em;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .bar-track {
+            background: rgba(0, 0, 0, 0.25);
+            border-radius: 5px;
+            height: 22px;
+            overflow: hidden;
+        }
+
+        .bar-fill {
+            height: 100%;
+            border-radius: 5px;
+            width: 0;
+            transition: width 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+        }
+
+        .bar-value {
+            color: #ffffff;
+            font-size: 0.88em;
+            font-weight: 600;
+            white-space: nowrap;
+            min-width: 74px;
+            text-align: right;
+        }
+
+        .bar-value span { color: #8fa4b8; font-weight: 400; font-size: 0.9em; }
+
+        /* ---------- Column chart ---------- */
+        .columns {
+            display: flex;
+            align-items: flex-end;
+            gap: 4px;
+            height: 190px;
+            padding-top: 10px;
+        }
+
+        .column {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-end;
+            align-items: center;
+            height: 100%;
+            gap: 6px;
+        }
+
+        .column-bar {
+            width: 100%;
+            border-radius: 4px 4px 0 0;
+            min-height: 2px;
+            height: 0;
+            transition: height 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+            cursor: default;
+        }
+
+        .column-bar:hover { filter: brightness(1.3); }
+
+        .column-label { color: #8fa4b8; font-size: 0.72em; white-space: nowrap; }
+        .column.peak .column-label { color: #ffffff; font-weight: 700; }
+
+        /* ---------- Trend ---------- */
+        .trend-wrap { position: relative; }
+        .trend-wrap svg { width: 100%; height: 210px; display: block; overflow: visible; }
+        .trend-axis { display: flex; justify-content: space-between; color: #8fa4b8; font-size: 0.75em; margin-top: 8px; }
+
+        .empty-state {
+            text-align: center;
+            color: #aaaaaa;
+            font-style: italic;
+            padding: 60px 20px;
+        }
+
+        .error-box {
+            background: rgba(231, 76, 60, 0.12);
+            border: 1px solid #e74c3c;
+            border-radius: 8px;
+            padding: 16px 20px;
+            color: #ff9b8f;
+            margin-bottom: 20px;
+        }
+
+        @media (max-width: 900px) {
+            .chart-grid { grid-template-columns: 1fr; }
+            .meta-info { text-align: left; }
+        }
+
+        @media (max-width: 600px) {
+            body { padding: 10px; }
+            .header h1 { font-size: 1.7em; }
+            .content { padding: 15px; }
+            .bar-row { grid-template-columns: 22px minmax(70px, 100px) 1fr auto; gap: 8px; }
+            .column-label { font-size: 0.6em; }
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="header">
+        <h1>📈 Voice Statistics</h1>
+        {% if stats %}
+        <div class="subtitle">{{ stats.period.label }} &middot; {{ stats.period.start }} → {{ stats.period.end }}</div>
+        {% endif %}
+    </div>
+
+    <div class="content">
+        <div class="toolbar">
+            <div class="toolbar-group">
+                <a href="{{ url_for('home') }}" class="back-button">🔙 Back to Home</a>
+                <a href="{{ url_for('view_join_logs_page') }}" class="back-button secondary">📊 Join Logs</a>
+
+                {% if stats %}
+                <form method="GET" action="{{ url_for('statistics_page') }}" class="select-wrap">
+                    <label for="period">🗓️ Period:</label>
+                    <select name="period" id="period" onchange="this.form.submit()">
+                        {% for option in stats.period.options %}
+                        <option value="{{ option.key }}" {% if option.key == stats.period.key %}selected{% endif %}>{{ option.label }}</option>
+                        {% endfor %}
+                    </select>
+                    <noscript><button type="submit" class="back-button">Apply</button></noscript>
+                </form>
+                {% endif %}
+            </div>
+
+            {% if stats %}
+            <div class="meta-info">
+                Times shown in <strong>{{ stats.timezone }}</strong><br>
+                Updated {{ stats.generated_at }}
+            </div>
+            {% endif %}
+        </div>
+
+        {% if error %}
+        <div class="error-box"><strong>Could not build statistics:</strong> {{ error }}</div>
+        {% endif %}
+
+        {% if stats and stats.has_data %}
+        <!-- ---------- KPIs ---------- -->
+        <div class="kpi-grid">
+            <div class="kpi-card" style="--accent:#3498db">
+                <div class="kpi-label">Total Voice Time</div>
+                <div class="kpi-value">{{ stats.kpis.total_time }}</div>
+                <div class="kpi-sub">across all users</div>
+            </div>
+            <div class="kpi-card" style="--accent:#2ecc71">
+                <div class="kpi-label">Sessions</div>
+                <div class="kpi-value">{{ stats.kpis.total_sessions }}</div>
+                <div class="kpi-sub">Ø {{ stats.kpis.avg_session }} per session</div>
+            </div>
+            <div class="kpi-card" style="--accent:#9b59b6">
+                <div class="kpi-label">Active Users</div>
+                <div class="kpi-value">{{ stats.kpis.unique_users }}</div>
+                <div class="kpi-sub">in {{ stats.kpis.active_channels }} channels</div>
+            </div>
+            <div class="kpi-card" style="--accent:#e67e22">
+                <div class="kpi-label">AFK Share</div>
+                <div class="kpi-value">{{ stats.kpis.afk_share }}%</div>
+                <div class="kpi-sub">{{ stats.kpis.afk_time }} idling</div>
+            </div>
+            <div class="kpi-card" style="--accent:#1abc9c">
+                <div class="kpi-label">Busiest Day</div>
+                <div class="kpi-value">{{ stats.kpis.busiest_day }}</div>
+                <div class="kpi-sub">{{ stats.kpis.busiest_day_time }} of voice time</div>
+            </div>
+            <div class="kpi-card" style="--accent:#f1c40f">
+                <div class="kpi-label">Peak Hour</div>
+                <div class="kpi-value">{{ stats.kpis.busiest_hour }}</div>
+                <div class="kpi-sub">most active: {{ stats.kpis.busiest_weekday }}</div>
+            </div>
+        </div>
+
+        <!-- ---------- Charts ---------- -->
+        <div class="chart-grid">
+            <div class="chart-card">
+                <div class="chart-head">
+                    <div class="chart-title">🏆 Most Active Users</div>
+                    <div class="toggle" data-toggle-for="users">
+                        <button type="button" data-metric="seconds" class="active">Time</button>
+                        <button type="button" data-metric="sessions">Sessions</button>
+                    </div>
+                </div>
+                <div class="chart-hint">Ranked by time spent connected to voice</div>
+                <div id="chart-users"></div>
+            </div>
+
+            <div class="chart-card">
+                <div class="chart-head">
+                    <div class="chart-title">🔊 Most Active Channels</div>
+                    <div class="toggle" data-toggle-for="channels">
+                        <button type="button" data-metric="seconds" class="active">Time</button>
+                        <button type="button" data-metric="sessions">Sessions</button>
+                    </div>
+                </div>
+                <div class="chart-hint">Grouped by channel ID, showing the current channel name</div>
+                <div id="chart-channels"></div>
+            </div>
+
+            <div class="chart-card">
+                <div class="chart-head">
+                    <div class="chart-title">😴 Top AFK Users</div>
+                </div>
+                <div class="chart-hint">Time parked in the AFK channel, and what share of their total that is</div>
+                <div id="chart-afk"></div>
+            </div>
+
+            <div class="chart-card">
+                <div class="chart-head">
+                    <div class="chart-title">📅 Activity by Weekday</div>
+                </div>
+                <div class="chart-hint">Total voice time per day of the week</div>
+                <div id="chart-weekday"></div>
+            </div>
+
+            <div class="chart-card full">
+                <div class="chart-head">
+                    <div class="chart-title">🕒 Activity by Hour of Day</div>
+                </div>
+                <div class="chart-hint">When the server is busiest ({{ stats.timezone }})</div>
+                <div id="chart-hour"></div>
+            </div>
+
+            <div class="chart-card full">
+                <div class="chart-head">
+                    <div class="chart-title">📈 Voice Time Over Period</div>
+                </div>
+                <div class="chart-hint">Total voice time per day</div>
+                <div class="trend-wrap">
+                    <svg id="chart-trend" viewBox="0 0 1000 210" preserveAspectRatio="none"
+                         role="img" aria-label="Voice time trend"></svg>
+                    <div class="trend-axis" id="trend-axis"></div>
+                </div>
+            </div>
+        </div>
+
+        <script>
+            const DATA = {
+                users:    {{ stats.top_users    | tojson }},
+                channels: {{ stats.top_channels | tojson }},
+                afk:      {{ stats.top_afk      | tojson }},
+                hour:     {{ stats.by_hour      | tojson }},
+                weekday:  {{ stats.by_weekday   | tojson }},
+                day:      {{ stats.by_day       | tojson }}
+            };
+
+            const COLORS = {
+                users: ['#3498db', '#2980b9'],
+                channels: ['#9b59b6', '#8e44ad'],
+                afk: ['#e67e22', '#d35400'],
+                hour: ['#1abc9c', '#16a085'],
+                weekday: ['#2ecc71', '#27ae60']
+            };
+
+            /* Horizontal ranked bars. Names come from Discord, so they are
+               written with textContent rather than innerHTML. */
+            function renderBars(containerId, items, colorKey, metric, extra) {
+                const box = document.getElementById(containerId);
+                box.textContent = '';
+                if (!items.length) {
+                    const empty = document.createElement('div');
+                    empty.className = 'empty-state';
+                    empty.textContent = 'No data for this period';
+                    box.appendChild(empty);
+                    return;
+                }
+
+                const max = Math.max(...items.map(i => i[metric])) || 1;
+                const [from, to] = COLORS[colorKey];
+
+                items.forEach((item, index) => {
+                    const row = document.createElement('div');
+                    row.className = 'bar-row';
+
+                    const rank = document.createElement('div');
+                    rank.className = 'bar-rank';
+                    rank.textContent = (index + 1) + '.';
+
+                    const name = document.createElement('div');
+                    name.className = 'bar-name';
+                    name.textContent = item.name;
+                    name.title = item.name;
+
+                    const track = document.createElement('div');
+                    track.className = 'bar-track';
+                    const fill = document.createElement('div');
+                    fill.className = 'bar-fill';
+                    fill.style.background = `linear-gradient(90deg, ${from}, ${to})`;
+                    track.appendChild(fill);
+
+                    const value = document.createElement('div');
+                    value.className = 'bar-value';
+                    if (metric === 'sessions') {
+                        value.textContent = item.sessions + '×';
+                    } else {
+                        value.textContent = item.duration;
+                        if (extra === 'share') {
+                            const sub = document.createElement('span');
+                            sub.textContent = ' · ' + item.share + '%';
+                            value.appendChild(sub);
+                        }
+                    }
+
+                    row.append(rank, name, track, value);
+                    box.appendChild(row);
+
+                    // Next frame so the CSS width transition actually animates.
+                    requestAnimationFrame(() => {
+                        fill.style.width = Math.max(2, (item[metric] / max) * 100) + '%';
+                    });
+                });
+            }
+
+            function renderColumns(containerId, items, colorKey) {
+                const box = document.getElementById(containerId);
+                box.textContent = '';
+                const wrap = document.createElement('div');
+                wrap.className = 'columns';
+
+                const max = Math.max(...items.map(i => i.seconds)) || 1;
+                const [from, to] = COLORS[colorKey];
+
+                items.forEach(item => {
+                    const col = document.createElement('div');
+                    col.className = 'column' + (item.seconds === max && max > 0 ? ' peak' : '');
+
+                    const bar = document.createElement('div');
+                    bar.className = 'column-bar';
+                    bar.style.background = `linear-gradient(180deg, ${from}, ${to})`;
+                    bar.title = `${item.label}: ${item.duration}`;
+
+                    const label = document.createElement('div');
+                    label.className = 'column-label';
+                    label.textContent = item.label;
+
+                    col.append(bar, label);
+                    wrap.appendChild(col);
+
+                    requestAnimationFrame(() => {
+                        bar.style.height = Math.max(1, (item.seconds / max) * 100) + '%';
+                    });
+                });
+
+                box.appendChild(wrap);
+            }
+
+            function renderTrend(items) {
+                const svg = document.getElementById('chart-trend');
+                const axis = document.getElementById('trend-axis');
+                svg.textContent = '';
+                axis.textContent = '';
+                if (!items.length) return;
+
+                const W = 1000, H = 210, PAD = 8;
+                const max = Math.max(...items.map(i => i.seconds)) || 1;
+                const step = items.length > 1 ? W / (items.length - 1) : 0;
+                const y = v => H - PAD - (v / max) * (H - PAD * 2);
+
+                const points = items.map((item, i) => [i * step, y(item.seconds)]);
+                const line = points.map(p => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ');
+
+                const ns = 'http://www.w3.org/2000/svg';
+                const defs = document.createElementNS(ns, 'defs');
+                defs.innerHTML =
+                    '<linearGradient id="trendFill" x1="0" y1="0" x2="0" y2="1">' +
+                    '<stop offset="0%" stop-color="#3498db" stop-opacity="0.55"/>' +
+                    '<stop offset="100%" stop-color="#3498db" stop-opacity="0.02"/></linearGradient>';
+                svg.appendChild(defs);
+
+                const area = document.createElementNS(ns, 'polygon');
+                area.setAttribute('points', `0,${H} ${line} ${(items.length - 1) * step},${H}`);
+                area.setAttribute('fill', 'url(#trendFill)');
+                svg.appendChild(area);
+
+                const stroke = document.createElementNS(ns, 'polyline');
+                stroke.setAttribute('points', line);
+                stroke.setAttribute('fill', 'none');
+                stroke.setAttribute('stroke', '#3498db');
+                stroke.setAttribute('stroke-width', '2');
+                stroke.setAttribute('vector-effect', 'non-scaling-stroke');
+                stroke.setAttribute('stroke-linejoin', 'round');
+                svg.appendChild(stroke);
+
+                // Hover targets: invisible full-height columns carrying a tooltip.
+                items.forEach((item, i) => {
+                    const hit = document.createElementNS(ns, 'rect');
+                    hit.setAttribute('x', String(Math.max(0, i * step - step / 2)));
+                    hit.setAttribute('y', '0');
+                    hit.setAttribute('width', String(step || W));
+                    hit.setAttribute('height', String(H));
+                    hit.setAttribute('fill', 'transparent');
+                    const tip = document.createElementNS(ns, 'title');
+                    tip.textContent = `${item.label}: ${item.duration}`;
+                    hit.appendChild(tip);
+                    svg.appendChild(hit);
+                });
+
+                const first = document.createElement('span');
+                first.textContent = items[0].label;
+                const last = document.createElement('span');
+                last.textContent = items[items.length - 1].label;
+                axis.append(first, last);
+            }
+
+            // Metric toggles for the two ranked charts
+            document.querySelectorAll('.toggle').forEach(toggle => {
+                toggle.addEventListener('click', event => {
+                    const button = event.target.closest('button');
+                    if (!button) return;
+                    toggle.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+                    button.classList.add('active');
+
+                    const key = toggle.dataset.toggleFor;
+                    renderBars('chart-' + key, DATA[key], key, button.dataset.metric);
+                });
+            });
+
+            renderBars('chart-users', DATA.users, 'users', 'seconds');
+            renderBars('chart-channels', DATA.channels, 'channels', 'seconds');
+            renderBars('chart-afk', DATA.afk, 'afk', 'seconds', 'share');
+            renderColumns('chart-weekday', DATA.weekday, 'weekday');
+            renderColumns('chart-hour', DATA.hour, 'hour');
+            renderTrend(DATA.day);
+        </script>
+
+        {% elif not error %}
+        <div class="empty-state">
+            <h3>No voice activity in this period</h3>
+            <p>Pick a longer period, or wait for the bot to log some voice events.</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+</body>
+</html>

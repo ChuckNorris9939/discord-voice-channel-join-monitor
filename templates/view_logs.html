@@ -66,6 +66,16 @@
             box-shadow: 0 6px 20px rgba(52, 152, 219, 0.4);
         }
 
+        .back-button.statistics {
+            background: linear-gradient(135deg, #1abc9c, #16a085);
+            margin-left: 10px;
+        }
+
+        .back-button.statistics:hover {
+            background: linear-gradient(135deg, #16a085, #117864);
+            box-shadow: 0 6px 20px rgba(26, 188, 156, 0.4);
+        }
+
         .filter-form {
             background: rgba(52, 73, 94, 0.2);
             border-radius: 10px;
@@ -204,6 +214,7 @@
 
         <div class="content">
             <a href="{{ url_for('home') }}" class="back-button">🔙 Back to Home</a>
+            <a href="{{ url_for('statistics_page') }}" class="back-button statistics">📈 Voice Statistics</a>
 
             <form method="GET" action="{{ url_for('view_join_logs_page') }}" class="filter-form">
                 <label for="username_filter">Filter by Username:</label>

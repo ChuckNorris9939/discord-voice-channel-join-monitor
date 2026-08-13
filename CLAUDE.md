@@ -37,6 +37,7 @@ docker build . -t dc_voice_monitor
 
 ```bash
 python -m unittest tests/test_main.py
+python -m unittest tests.test_voice_stats
 python -m unittest tests/test_garmin_voice.py
 python -m unittest tests/test_web_interface.py
 python -m unittest tests/test_aligned_recording.py
@@ -61,6 +62,7 @@ curl http://localhost:8080/status
 
 - **[main.py](main.py)** (~3200 lines) — Discord bot + embedded Flask web server. Contains all Discord event handlers, slash commands, background tasks, SQLite schema + queries, and all Flask routes. This is the primary file.
 - **[garmin_voice.py](garmin_voice.py)** (~1700 lines) — Voice recording system. Implements `LiveSTTMP3Sink`, a custom Discord audio sink that captures 48kHz stereo PCM, does silence compression, per-user track isolation, audio mixing, and optional real-time STT.
+- **[voice_stats.py](voice_stats.py)** — Analytics for the `/statistics` dashboard. The log only stores discrete join/switch/leave events, so this reconstructs *sessions* by pairing them per user (a `switch` closes the running session and opens a new one for the destination channel). Rankings group by `user_id`/`channel_id` and display the newest name, because both get renamed over time. Sessions are capped at `MAX_SESSION_SECONDS` so a missed `leave` cannot dominate a ranking.
 - **[config_loader.py](config_loader.py)** — Centralized settings with three-layer priority: environment variables (`.env`) → SQLite `bot_settings` table → hardcoded defaults.
 - **[audio_cleanup_service.py](audio_cleanup_service.py)** — Deletes old recordings from `data/garmin-output/` and `data/aligned-recordings/` based on configurable retention hours. Runs every 6 hours as a background task.
 - **[health_check.py](health_check.py)** — External health monitor that checks container status, `/status` endpoint, and Discord connectivity, with automatic restart on failure.
@@ -87,7 +89,9 @@ Three tables, auto-created on startup:
 
 ### Web server (Flask on port 8080)
 
-Key routes: `/` dashboard, `/view_join_logs`, `/garmin_recordings`, `/settings`, `/restart_bot`, `/status` (health JSON), `/cleanup/run`, `/garmin/start|stop|save|autojoin|stt_output`. Templates are in `templates/`.
+Key routes: `/` dashboard, `/view_join_logs`, `/statistics` (voice analytics, `?period=7d|30d|90d|365d|all`), `/garmin_recordings`, `/settings`, `/restart_bot`, `/status` (health JSON), `/cleanup/run`, `/garmin/start|stop|save|autojoin|stt_output`. Templates are in `templates/`.
+
+Templates have no external dependencies — no CDN scripts or fonts. Charts on `/statistics` are hand-rolled CSS bars and inline SVG so the dashboard works without internet access.
 
 ### STT engines
 
