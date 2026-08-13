@@ -167,6 +167,16 @@ def load_all_settings():
     ORIGINAL_JOIN_LOGS_ID = JOIN_LOGS_ID
     ORIGINAL_BOT_LOGS_ID = BOT_LOGS_ID
 
+    # Apply the testing redirect here rather than leaving it to a separate
+    # enable_testing_mode() call. This function is re-run from several places
+    # (settings saves, garmin_voice import), and each run reloads the raw DB
+    # values above - which silently reverted the redirect and sent messages to
+    # the production channels while testing mode was on.
+    if TESTING and TESTING_CHANNEL_ID:
+        JOIN_LOGS_ID = TESTING_CHANNEL_ID
+        BOT_LOGS_ID = TESTING_CHANNEL_ID
+        logger.info(f"Testing mode: log channels redirected to {TESTING_CHANNEL_ID}")
+
     # --- PURGE_OLDER_THAN_DAYS ---
     purge_days_str = get_setting(DB_KEY_PURGE_OLDER_THAN_DAYS, '7')
     PURGE_OLDER_THAN_DAYS = int(purge_days_str)

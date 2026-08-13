@@ -14,6 +14,21 @@ CREATE TABLE user_voice_events (
     id INTEGER PRIMARY KEY,
     user_id INTEGER,
     username TEXT,
+    display_name_global TEXT,
+    display_name_server TEXT,
+    channel_id INTEGER,
+    channel_name TEXT,
+    event_type TEXT,
+    timestamp TEXT
+)
+"""
+
+# Databases created before display names were logged.
+LEGACY_SCHEMA = """
+CREATE TABLE user_voice_events (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER,
+    username TEXT,
     channel_id INTEGER,
     channel_name TEXT,
     event_type TEXT,
@@ -40,12 +55,13 @@ class VoiceStatsTestCase(unittest.TestCase):
         self.conn.close()
         os.unlink(self.db_path)
 
-    def add_event(self, user_id, username, channel_id, channel_name, event_type, timestamp):
+    def add_event(self, user_id, username, channel_id, channel_name, event_type, timestamp,
+                  display_global=None, display_server=None):
         self._next_id += 1
         self.conn.execute(
-            "INSERT INTO user_voice_events VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (self._next_id, user_id, username, channel_id, channel_name, event_type,
-             f"2026-08-01T{timestamp}+00:00"),
+            "INSERT INTO user_voice_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (self._next_id, user_id, username, display_global, display_server,
+             channel_id, channel_name, event_type, f"2026-08-01T{timestamp}+00:00"),
         )
         self.conn.commit()
 
@@ -141,6 +157,130 @@ class VoiceStatsTestCase(unittest.TestCase):
         result = voice_stats.collect_statistics(self.db_path, period_key='not-a-period')
 
         self.assertEqual(result['period']['key'], voice_stats.DEFAULT_PERIOD)
+
+    def test_newest_display_names_win_over_blank_history(self):
+        # Older rows predate the columns; the newest non-empty value must survive.
+        self.add_event(1, 'alice', CHANNEL_A, 'A', 'join', '10:00:00')
+        self.add_event(1, 'alice', CHANNEL_A, 'A', 'leave', '11:00:00')
+        self.add_event(1, 'alice', CHANNEL_A, 'A', 'join', '12:00:00',
+                       display_global='Alice!', display_server='Mod Alice')
+        self.add_event(1, 'alice', CHANNEL_A, 'A', 'leave', '13:00:00')
+
+        entry = self.stats()['top_users'][0]
+
+        self.assertEqual(entry['display_global'], 'Alice!')
+        self.assertEqual(entry['display_server'], 'Mod Alice')
+
+    def test_display_names_default_to_empty(self):
+        self.add_event(1, 'bob', CHANNEL_A, 'A', 'join', '10:00:00')
+        self.add_event(1, 'bob', CHANNEL_A, 'A', 'leave', '11:00:00')
+
+        entry = self.stats()['top_users'][0]
+
+        self.assertEqual(entry['display_global'], '')
+        self.assertEqual(entry['display_server'], '')
+
+    def test_database_without_display_columns_still_works(self):
+        # A database that has not been migrated yet must not break the dashboard.
+        handle, legacy_path = tempfile.mkstemp(suffix='.db')
+        os.close(handle)
+        legacy = sqlite3.connect(legacy_path)
+        try:
+            legacy.executescript(LEGACY_SCHEMA)
+            legacy.execute(
+                "INSERT INTO user_voice_events VALUES (1, 1, 'alice', ?, 'A', 'join', ?)",
+                (CHANNEL_A, '2026-08-01T10:00:00+00:00'))
+            legacy.execute(
+                "INSERT INTO user_voice_events VALUES (2, 1, 'alice', ?, 'A', 'leave', ?)",
+                (CHANNEL_A, '2026-08-01T11:00:00+00:00'))
+            legacy.commit()
+
+            result = voice_stats.collect_statistics(legacy_path, period_key='all')
+
+            self.assertEqual(result['top_users'][0]['seconds'], 3600)
+            self.assertEqual(result['top_users'][0]['display_global'], '')
+        finally:
+            legacy.close()
+            os.unlink(legacy_path)
+
+    def custom(self, from_date=None, to_date=None):
+        return voice_stats.collect_statistics(
+            self.db_path, period_key='custom', custom_from=from_date, custom_to=to_date)
+
+    def test_custom_range_covers_the_whole_selected_days(self):
+        # 10:00-11:00 on the 1st, and again on the 3rd.
+        self.add_event(1, 'alice', CHANNEL_A, 'A', 'join', '10:00:00')
+        self.add_event(1, 'alice', CHANNEL_A, 'A', 'leave', '11:00:00')
+        self.conn.execute("UPDATE user_voice_events SET timestamp = '2026-08-03T10:00:00+00:00' WHERE id = 1")
+        self.conn.execute("UPDATE user_voice_events SET timestamp = '2026-08-03T11:00:00+00:00' WHERE id = 2")
+        self.conn.commit()
+
+        inside = self.custom('2026-08-03', '2026-08-03')
+        outside = self.custom('2026-08-04', '2026-08-05')
+
+        self.assertEqual(inside['kpis']['total_sessions'], 1)
+        self.assertEqual(outside['kpis']['total_sessions'], 0)
+
+    def test_custom_range_reversed_dates_give_the_same_window(self):
+        self.add_event(1, 'alice', CHANNEL_A, 'A', 'join', '10:00:00')
+        self.add_event(1, 'alice', CHANNEL_A, 'A', 'leave', '11:00:00')
+
+        forward = self.custom('2026-08-01', '2026-08-05')
+        reversed_ = self.custom('2026-08-05', '2026-08-01')
+
+        self.assertEqual(forward['period']['start'], reversed_['period']['start'])
+        self.assertEqual(forward['period']['end'], reversed_['period']['end'])
+        self.assertEqual(forward['kpis']['total_sessions'], reversed_['kpis']['total_sessions'])
+
+    def test_custom_range_end_names_the_last_day_included(self):
+        result = self.custom('2026-08-01', '2026-08-05')
+
+        # The window is exclusive internally; the label must not leak the 6th.
+        self.assertEqual(result['period']['end'], '2026-08-05')
+
+    def test_custom_range_without_dates_falls_back(self):
+        self.assertEqual(self.custom()['period']['key'], voice_stats.DEFAULT_PERIOD)
+        self.assertEqual(self.custom('nonsense', '')['period']['key'], voice_stats.DEFAULT_PERIOD)
+
+    def test_length_distribution_buckets_sessions(self):
+        self.add_event(1, 'alice', CHANNEL_A, 'A', 'join', '10:00:00')
+        self.add_event(1, 'alice', CHANNEL_A, 'A', 'leave', '10:02:00')   # < 5m
+        self.add_event(2, 'bob', CHANNEL_A, 'A', 'join', '10:00:00')
+        self.add_event(2, 'bob', CHANNEL_A, 'A', 'leave', '12:00:00')     # 1-3h
+
+        buckets = {b['label']: b['value'] for b in self.stats()['length_distribution']}
+
+        self.assertEqual(buckets['< 5m'], 1)
+        self.assertEqual(buckets['1–3h'], 1)
+        self.assertEqual(buckets['> 6h'], 0)
+        self.assertEqual(sum(buckets.values()), 2)
+
+    def test_longest_sessions_are_ranked_and_carry_context(self):
+        self.add_event(1, 'alice', CHANNEL_A, 'A', 'join', '10:00:00')
+        self.add_event(1, 'alice', CHANNEL_A, 'A', 'leave', '11:00:00')
+        self.add_event(2, 'bob', CHANNEL_B, 'B', 'join', '10:00:00')
+        self.add_event(2, 'bob', CHANNEL_B, 'B', 'leave', '13:00:00')
+
+        longest = self.stats()['longest_sessions']
+
+        self.assertEqual(longest[0]['name'], 'bob')
+        self.assertEqual(longest[0]['seconds'], 3 * 3600)
+        self.assertEqual(longest[0]['channel'], 'B')
+        self.assertIn('2026', longest[0]['when'])
+        self.assertEqual(longest[1]['name'], 'alice')
+
+    def test_longest_sessions_exclude_capped_sessions(self):
+        # A join whose leave never arrived would otherwise top the ranking.
+        self.add_event(1, 'ghost', CHANNEL_A, 'A', 'join', '00:00:00')
+        self.add_event(2, 'alice', CHANNEL_A, 'A', 'join', '10:00:00')
+        self.add_event(2, 'alice', CHANNEL_A, 'A', 'leave', '11:00:00')
+        self.conn.execute(
+            "UPDATE user_voice_events SET timestamp = '2026-09-30T00:00:00+00:00' WHERE id = 1")
+        self.conn.commit()
+
+        longest = self.stats()['longest_sessions']
+
+        self.assertEqual([entry['name'] for entry in longest], ['alice'])
 
     def test_format_duration(self):
         self.assertEqual(voice_stats.format_duration(45), '45s')

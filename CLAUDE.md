@@ -77,7 +77,8 @@ curl http://localhost:8080/status
 ### Database (SQLite at `data/user_log.db`)
 
 Three tables, auto-created on startup:
-- `user_voice_events` — voice join/leave log (user_id, username, channel, event_type, timestamp)
+- `user_voice_events` — voice join/leave/switch log (user_id, username, display_name_global, display_name_server, channel, event_type, timestamp). The two display-name columns were added later and are `NULL` on historic rows; startup runs an idempotent `ALTER TABLE` migration, and `voice_stats.py` selects `NULL` in their place if it reads an un-migrated database.
+  - A `switch` row records the **destination** channel, so filtering the log by one channel hides the switch that *ended* a stay in it. Sessions look unclosed unless you also look at the user's other rows.
 - `inactive_threads` — support forum thread tracking with escalation timestamps (warning → reminder → auto-close)
 - `bot_settings` — key/value dynamic configuration store
 

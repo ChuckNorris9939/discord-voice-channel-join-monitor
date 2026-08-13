@@ -108,6 +108,37 @@
 
         select:focus { outline: none; border-color: #3498db; }
 
+        /* Only revealed when the period dropdown is set to a custom range. */
+        .custom-range { display: none; align-items: center; gap: 8px; }
+        .custom-range.visible { display: inline-flex; }
+
+        .custom-range input[type="date"] {
+            background-color: #404040;
+            color: #e0e0e0;
+            border: 1px solid #555;
+            border-radius: 6px;
+            padding: 7px 10px;
+            font-size: 0.92em;
+            font-family: inherit;
+        }
+
+        .custom-range input[type="date"]:focus { outline: none; border-color: #3498db; }
+        .range-arrow { color: #9fb3c8; }
+
+        .apply-btn {
+            background: linear-gradient(135deg, #27ae60, #229954);
+            color: #ffffff;
+            border: none;
+            border-radius: 6px;
+            padding: 8px 16px;
+            font-weight: 600;
+            font-size: 0.9em;
+            font-family: inherit;
+            cursor: pointer;
+        }
+
+        .apply-btn:hover { background: linear-gradient(135deg, #229954, #1e8449); }
+
         .meta-info { color: #8fa4b8; font-size: 0.88em; text-align: right; line-height: 1.5; }
 
         /* ---------- KPI cards ---------- */
@@ -219,6 +250,13 @@
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
+            cursor: default;
+        }
+
+        /* Signals that hovering reveals the user's display names. */
+        .bar-name.has-tip {
+            text-decoration: underline dotted rgba(159, 179, 200, 0.6);
+            text-underline-offset: 3px;
         }
 
         .bar-track {
@@ -330,14 +368,22 @@
                 <a href="{{ url_for('view_join_logs_page') }}" class="back-button secondary">📊 Join Logs</a>
 
                 {% if stats %}
-                <form method="GET" action="{{ url_for('statistics_page') }}" class="select-wrap">
+                <form method="GET" action="{{ url_for('statistics_page') }}" class="select-wrap" id="period-form">
                     <label for="period">🗓️ Period:</label>
-                    <select name="period" id="period" onchange="this.form.submit()">
+                    <select name="period" id="period">
                         {% for option in stats.period.options %}
                         <option value="{{ option.key }}" {% if option.key == stats.period.key %}selected{% endif %}>{{ option.label }}</option>
                         {% endfor %}
                     </select>
-                    <noscript><button type="submit" class="back-button">Apply</button></noscript>
+
+                    <span class="custom-range" id="custom-range">
+                        <input type="date" name="from" id="custom-from" value="{{ stats.period.custom_from }}" aria-label="From">
+                        <span class="range-arrow">→</span>
+                        <input type="date" name="to" id="custom-to" value="{{ stats.period.custom_to }}" aria-label="To">
+                        <button type="submit" class="apply-btn">Apply</button>
+                    </span>
+
+                    <noscript><button type="submit" class="apply-btn">Apply</button></noscript>
                 </form>
                 {% endif %}
             </div>
@@ -431,6 +477,22 @@
                 <div id="chart-weekday"></div>
             </div>
 
+            <div class="chart-card">
+                <div class="chart-head">
+                    <div class="chart-title">⏱️ Session Length Distribution</div>
+                </div>
+                <div class="chart-hint">How long a single stay in voice typically lasts</div>
+                <div id="chart-length"></div>
+            </div>
+
+            <div class="chart-card">
+                <div class="chart-head">
+                    <div class="chart-title">🥇 Longest Single Sessions</div>
+                </div>
+                <div class="chart-hint">Hover for channel and start time — sessions with a missing leave event are excluded</div>
+                <div id="chart-longest"></div>
+            </div>
+
             <div class="chart-card full">
                 <div class="chart-head">
                     <div class="chart-title">🕒 Activity by Hour of Day</div>
@@ -459,7 +521,9 @@
                 afk:      {{ stats.top_afk      | tojson }},
                 hour:     {{ stats.by_hour      | tojson }},
                 weekday:  {{ stats.by_weekday   | tojson }},
-                day:      {{ stats.by_day       | tojson }}
+                day:      {{ stats.by_day       | tojson }},
+                length:   {{ stats.length_distribution | tojson }},
+                longest:  {{ stats.longest_sessions    | tojson }}
             };
 
             const COLORS = {
@@ -467,8 +531,24 @@
                 channels: ['#9b59b6', '#8e44ad'],
                 afk: ['#e67e22', '#d35400'],
                 hour: ['#1abc9c', '#16a085'],
-                weekday: ['#2ecc71', '#27ae60']
+                weekday: ['#2ecc71', '#27ae60'],
+                length: ['#5dade2', '#3498db'],
+                longest: ['#f1c40f', '#d4ac0d']
             };
+
+            /* Hover text for a user row. Display names only exist on events logged
+               after the columns were added, so fall back to a note rather than
+               implying the user simply has none. */
+            function tooltipFor(item) {
+                if (item.channel !== undefined) {                          // longest sessions
+                    return `${item.name}\nChannel: ${item.channel}\nStarted: ${item.when}\nDuration: ${item.duration}`;
+                }
+                if (item.display_global === undefined) return item.name;   // channels
+                const lines = ['Username: ' + item.name];
+                lines.push('Display name: ' + (item.display_global || 'not recorded yet'));
+                lines.push('Server nickname: ' + (item.display_server || 'not recorded yet'));
+                return lines.join('\n');
+            }
 
             /* Horizontal ranked bars. Names come from Discord, so they are
                written with textContent rather than innerHTML. */
@@ -497,7 +577,8 @@
                     const name = document.createElement('div');
                     name.className = 'bar-name';
                     name.textContent = item.name;
-                    name.title = item.name;
+                    name.title = tooltipFor(item);
+                    if (item.display_global || item.display_server || item.channel) name.classList.add('has-tip');
 
                     const track = document.createElement('div');
                     track.className = 'bar-track';
@@ -535,17 +616,21 @@
                 const wrap = document.createElement('div');
                 wrap.className = 'columns';
 
-                const max = Math.max(...items.map(i => i.seconds)) || 1;
+                // Time-based charts carry seconds/duration, count-based ones value/tooltip.
+                const amount = item => (item.value !== undefined ? item.value : item.seconds);
+                const caption = item => (item.tooltip !== undefined ? item.tooltip : item.duration);
+
+                const max = Math.max(...items.map(amount)) || 1;
                 const [from, to] = COLORS[colorKey];
 
                 items.forEach(item => {
                     const col = document.createElement('div');
-                    col.className = 'column' + (item.seconds === max && max > 0 ? ' peak' : '');
+                    col.className = 'column' + (amount(item) === max && max > 0 ? ' peak' : '');
 
                     const bar = document.createElement('div');
                     bar.className = 'column-bar';
                     bar.style.background = `linear-gradient(180deg, ${from}, ${to})`;
-                    bar.title = `${item.label}: ${item.duration}`;
+                    bar.title = `${item.label}: ${caption(item)}`;
 
                     const label = document.createElement('div');
                     label.className = 'column-label';
@@ -555,7 +640,7 @@
                     wrap.appendChild(col);
 
                     requestAnimationFrame(() => {
-                        bar.style.height = Math.max(1, (item.seconds / max) * 100) + '%';
+                        bar.style.height = Math.max(1, (amount(item) / max) * 100) + '%';
                     });
                 });
 
@@ -636,9 +721,28 @@
             renderBars('chart-users', DATA.users, 'users', 'seconds');
             renderBars('chart-channels', DATA.channels, 'channels', 'seconds');
             renderBars('chart-afk', DATA.afk, 'afk', 'seconds', 'share');
+            renderBars('chart-longest', DATA.longest, 'longest', 'seconds');
             renderColumns('chart-weekday', DATA.weekday, 'weekday');
+            renderColumns('chart-length', DATA.length, 'length');
             renderColumns('chart-hour', DATA.hour, 'hour');
             renderTrend(DATA.day);
+
+            /* Custom range: reveal the date pickers instead of submitting, and
+               only submit once a range is actually chosen. */
+            const periodSelect = document.getElementById('period');
+            const customRange = document.getElementById('custom-range');
+            const periodForm = document.getElementById('period-form');
+
+            function syncCustomRange() {
+                customRange.classList.toggle('visible', periodSelect.value === 'custom');
+            }
+
+            periodSelect.addEventListener('change', () => {
+                syncCustomRange();
+                if (periodSelect.value !== 'custom') periodForm.submit();
+            });
+
+            syncCustomRange();
         </script>
 
         {% elif not error %}

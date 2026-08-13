@@ -5,11 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>📊 User Join Logs</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
 
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -20,7 +16,7 @@
         }
 
         .container {
-            max-width: 1200px;
+            max-width: 1400px;
             margin: 0 auto;
             background: rgba(45, 45, 45, 0.95);
             border-radius: 12px;
@@ -36,28 +32,19 @@
             border-bottom: 2px solid #3498db;
         }
 
-        .header h1 {
-            color: #ffffff;
-            font-size: 3em;
-            margin-bottom: 15px;
-            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
-        }
+        .header h1 { color: #ffffff; font-size: 2.4em; text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5); }
 
-        .content {
-            padding: 25px;
-        }
+        .content { padding: 25px; }
 
         .back-button {
             background: linear-gradient(135deg, #3498db, #2980b9);
             color: white;
-            padding: 12px 24px;
+            padding: 12px 22px;
             border-radius: 8px;
             text-decoration: none;
             font-weight: 600;
-            font-size: 16px;
             transition: all 0.3s ease;
             display: inline-block;
-            margin-bottom: 25px;
         }
 
         .back-button:hover {
@@ -66,203 +53,819 @@
             box-shadow: 0 6px 20px rgba(52, 152, 219, 0.4);
         }
 
-        .back-button.statistics {
-            background: linear-gradient(135deg, #1abc9c, #16a085);
-            margin-left: 10px;
-        }
-
+        .back-button.statistics { background: linear-gradient(135deg, #1abc9c, #16a085); }
         .back-button.statistics:hover {
             background: linear-gradient(135deg, #16a085, #117864);
             box-shadow: 0 6px 20px rgba(26, 188, 156, 0.4);
         }
 
-        .filter-form {
-            background: rgba(52, 73, 94, 0.2);
+        .toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        /* ---------- Active filter chips ---------- */
+        .filter-bar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+            background: rgba(52, 73, 94, 0.25);
+            border: 1px solid #46586b;
             border-radius: 10px;
-            padding: 20px;
-            border: 1px solid #404040;
-            margin-bottom: 25px;
+            padding: 12px 16px;
+            margin-bottom: 18px;
         }
 
-        .filter-form label {
-            color: #ffffff;
-            margin-right: 12px;
-            font-weight: 600;
-            font-size: 16px;
+        .filter-bar.hidden { display: none; }
+        .filter-bar-label { color: #9fb3c8; font-size: 0.85em; font-weight: 600; margin-right: 4px; }
+
+        .chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(52, 152, 219, 0.18);
+            border: 1px solid #3498db;
+            border-radius: 20px;
+            padding: 5px 12px;
+            font-size: 0.85em;
+            color: #d6ecfb;
+            max-width: 360px;
         }
 
-        .filter-form input[type="text"] {
-            padding: 10px 15px;
-            border: 1px solid #555;
-            border-radius: 8px;
-            background-color: #404040;
-            color: #e0e0e0;
-            margin-right: 12px;
-            font-size: 16px;
-        }
+        .chip strong { color: #ffffff; }
+        .chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-        .filter-form input[type="text"]:focus {
-            outline: none;
-            border-color: #3498db;
-            box-shadow: 0 0 5px rgba(52, 152, 219, 0.3);
-        }
-
-        .filter-button {
-            background: linear-gradient(135deg, #27ae60, #229954);
-            color: white;
+        .chip button {
+            background: none;
             border: none;
-            padding: 10px 20px;
-            border-radius: 8px;
+            color: #9fb3c8;
             cursor: pointer;
+            font-size: 1.15em;
+            line-height: 1;
+            padding: 0;
+        }
+
+        .chip button:hover { color: #ff6b6b; }
+
+        .clear-all {
+            background: rgba(231, 76, 60, 0.15);
+            border: 1px solid #e74c3c;
+            color: #ff9b8f;
+            border-radius: 20px;
+            padding: 5px 14px;
+            font-size: 0.85em;
             font-weight: 600;
-            font-size: 16px;
-            transition: all 0.3s ease;
+            cursor: pointer;
+            font-family: inherit;
         }
 
-        .filter-button:hover {
-            background: linear-gradient(135deg, #229954, #1e8449);
-            transform: translateY(-1px);
-        }
+        .clear-all:hover { background: rgba(231, 76, 60, 0.3); color: #ffffff; }
 
-        .clear-filter {
-            color: #3498db;
-            text-decoration: none;
-            margin-left: 10px;
-            font-weight: 500;
-        }
-
-        .clear-filter:hover {
-            color: #2980b9;
-        }
-
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            background-color: rgba(52, 73, 94, 0.2);
-            border-radius: 10px;
-            overflow: hidden;
+        /* ---------- Table ---------- */
+        .table-wrap {
             border: 1px solid #404040;
+            border-radius: 10px;
+            overflow: auto;
+            max-height: 65vh;
         }
+
+        table { width: 100%; border-collapse: collapse; background-color: rgba(52, 73, 94, 0.2); }
 
         th, td {
             border: 1px solid #404040;
-            padding: 15px 18px;
+            padding: 10px 14px;
             text-align: left;
-            font-size: 16px;
+            font-size: 0.92em;
+            white-space: nowrap;
         }
 
-        th {
+        thead th {
             background: linear-gradient(135deg, #34495e, #2c3e50);
             color: #ffffff;
             font-weight: 600;
-            font-size: 1.1em;
+            position: sticky;
+            top: 0;
+            z-index: 2;
         }
 
-        tr:nth-child(even) {
-            background-color: rgba(52, 73, 94, 0.1);
+        .th-inner { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+
+        .filter-btn {
+            background: rgba(0, 0, 0, 0.25);
+            border: 1px solid #55697d;
+            color: #9fb3c8;
+            border-radius: 5px;
+            width: 24px;
+            height: 22px;
+            cursor: pointer;
+            font-size: 0.75em;
+            line-height: 1;
+            flex-shrink: 0;
+            transition: all 0.2s ease;
         }
 
-        tr:nth-child(odd) {
-            background-color: rgba(52, 73, 94, 0.05);
+        .filter-btn:hover { background: #3498db; color: #ffffff; border-color: #3498db; }
+        .filter-btn.active { background: #3498db; color: #ffffff; border-color: #5dade2; }
+
+        tbody tr:nth-child(even) { background-color: rgba(52, 73, 94, 0.1); }
+        tbody tr:hover { background-color: rgba(52, 152, 219, 0.12); }
+
+        td.event-join { color: #2ecc71; font-weight: 600; }
+        td.event-leave { color: #e74c3c; font-weight: 600; }
+        td.event-switch { color: #f1c40f; font-weight: 600; }
+
+        .muted { color: #7f8fa3; }
+
+        /* ---------- Footer / pagination ---------- */
+        .table-footer {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 16px;
         }
 
-        tr:hover {
-            background-color: rgba(52, 152, 219, 0.1);
-        }
+        .row-count { color: #9fb3c8; font-size: 0.9em; }
+        .row-count strong { color: #ffffff; }
 
-        .no-logs {
-            text-align: center;
-            color: #aaaaaa;
-            font-style: italic;
-            margin-top: 50px;
-            padding: 40px;
-        }
+        .pager { display: flex; gap: 8px; align-items: center; }
 
-        .filter-info {
-            background: rgba(52, 152, 219, 0.1);
-            border: 1px solid #3498db;
+        .pager button {
+            background: rgba(52, 73, 94, 0.5);
+            border: 1px solid #55697d;
+            color: #e0e0e0;
             border-radius: 6px;
-            padding: 10px 15px;
-            margin-bottom: 20px;
-            color: #3498db;
+            padding: 7px 14px;
+            cursor: pointer;
+            font-family: inherit;
+            font-size: 0.88em;
+            font-weight: 600;
         }
 
-        .filter-info strong {
-            color: #ffffff;
+        .pager button:hover:not(:disabled) { background: #3498db; border-color: #3498db; color: #fff; }
+        .pager button:disabled { opacity: 0.35; cursor: not-allowed; }
+        .pager .page-info { color: #9fb3c8; font-size: 0.88em; padding: 0 6px; }
+
+        .notice {
+            background: rgba(241, 196, 15, 0.1);
+            border: 1px solid #f1c40f;
+            border-radius: 8px;
+            padding: 12px 16px;
+            color: #f7dc6f;
+            margin-bottom: 18px;
+            font-size: 0.9em;
         }
+
+        .no-logs { text-align: center; color: #aaaaaa; font-style: italic; padding: 50px 20px; }
+
+        .error-box {
+            background: rgba(231, 76, 60, 0.12);
+            border: 1px solid #e74c3c;
+            border-radius: 8px;
+            padding: 16px 20px;
+            color: #ff9b8f;
+            margin-bottom: 18px;
+        }
+
+        /* ---------- Filter dropdown panel ---------- */
+        /* Rendered at body level so the scrolling table never clips it. */
+        .filter-panel {
+            position: fixed;
+            z-index: 100;
+            width: 290px;
+            background: #2b3a4a;
+            border: 1px solid #55697d;
+            border-radius: 10px;
+            box-shadow: 0 12px 34px rgba(0, 0, 0, 0.55);
+            padding: 12px;
+            display: none;
+        }
+
+        .filter-panel.open { display: block; }
+        .filter-panel h4 { color: #ffffff; font-size: 0.95em; margin-bottom: 10px; }
+
+        .filter-panel input[type="text"],
+        .filter-panel input[type="date"] {
+            width: 100%;
+            padding: 8px 10px;
+            border: 1px solid #55697d;
+            border-radius: 6px;
+            background-color: #1f2b38;
+            color: #e0e0e0;
+            font-size: 0.9em;
+            font-family: inherit;
+        }
+
+        .filter-panel input:focus { outline: none; border-color: #3498db; }
+
+        .panel-actions { display: flex; gap: 6px; margin: 10px 0; flex-wrap: wrap; }
+
+        .panel-actions button {
+            flex: 1;
+            min-width: 78px;
+            background: rgba(52, 73, 94, 0.6);
+            border: 1px solid #55697d;
+            color: #cfe0ee;
+            border-radius: 6px;
+            padding: 7px 6px;
+            cursor: pointer;
+            font-size: 0.8em;
+            font-weight: 600;
+            font-family: inherit;
+        }
+
+        .panel-actions button:hover { background: #3498db; border-color: #3498db; color: #fff; }
+
+        .option-list {
+            max-height: 240px;
+            overflow-y: auto;
+            border: 1px solid #3d4d5d;
+            border-radius: 6px;
+            background: rgba(0, 0, 0, 0.18);
+            padding: 4px;
+        }
+
+        .option {
+            display: flex;
+            align-items: center;
+            gap: 9px;
+            padding: 6px 8px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 0.87em;
+        }
+
+        .option:hover { background: rgba(52, 152, 219, 0.18); }
+        .option input { cursor: pointer; accent-color: #3498db; flex-shrink: 0; }
+        .option .label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .option .count { color: #7f8fa3; font-size: 0.85em; flex-shrink: 0; }
+
+        .option-note { color: #8fa4b8; font-size: 0.78em; padding: 8px; text-align: center; }
+        .panel-hint { color: #7f8fa3; font-size: 0.75em; margin-top: 8px; text-align: center; }
+
+        .date-row { margin-bottom: 8px; }
+        .date-row label { display: block; color: #9fb3c8; font-size: 0.8em; margin-bottom: 4px; }
+
+        .presets { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+
+        .presets button {
+            background: rgba(52, 73, 94, 0.6);
+            border: 1px solid #55697d;
+            color: #cfe0ee;
+            border-radius: 15px;
+            padding: 5px 11px;
+            cursor: pointer;
+            font-size: 0.78em;
+            font-family: inherit;
+        }
+
+        .presets button:hover { background: #3498db; border-color: #3498db; color: #fff; }
 
         @media (max-width: 768px) {
-            .header h1 {
-                font-size: 2em;
-            }
-            
-            table {
-                font-size: 0.9em;
-            }
-            
-            th, td {
-                padding: 8px 10px;
-            }
+            body { padding: 10px; }
+            .header h1 { font-size: 1.7em; }
+            .content { padding: 15px; }
+            th, td { padding: 8px 10px; font-size: 0.85em; }
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <h1>📊 User Join Logs</h1>
-        </div>
+<div class="container">
+    <div class="header">
+        <h1>📊 User Join Logs</h1>
+    </div>
 
-        <div class="content">
+    <div class="content">
+        <div class="toolbar">
             <a href="{{ url_for('home') }}" class="back-button">🔙 Back to Home</a>
             <a href="{{ url_for('statistics_page') }}" class="back-button statistics">📈 Voice Statistics</a>
-
-            <form method="GET" action="{{ url_for('view_join_logs_page') }}" class="filter-form">
-                <label for="username_filter">Filter by Username:</label>
-                <input type="text" id="username_filter" name="username_filter" value="{{ current_filter_username or '' }}" placeholder="Enter username">
-                <button type="submit" class="filter-button">🔍 Filter</button>
-                {% if current_filter_username %}
-                    <a href="{{ url_for('view_join_logs_page') }}" class="clear-filter">❌ Clear Filter</a>
-                {% endif %}
-            </form>
-
-            {% if current_filter_username %}
-                <div class="filter-info">
-                    Showing logs filtered by username: <strong>{{ current_filter_username }}</strong>
-                </div>
-            {% endif %}
-
-            {% if logs %}
-                <table>
-                    <thead>
-                        <tr>
-                            <th>ID</th>
-                            <th>User ID</th>
-                            <th>Username</th>
-                            <th>Channel ID</th>
-                            <th>Channel Name</th>
-                            <th>Timestamp (UTC)</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for log_entry in logs %}
-                        <tr>
-                            <td>{{ log_entry.id }}</td>
-                            <td>{{ log_entry.user_id }}</td>
-                            <td>{{ log_entry.username }}</td>
-                            <td>{{ log_entry.channel_id }}</td>
-                            <td>{{ log_entry.channel_name }}</td>
-                            <td>{{ log_entry.timestamp }}</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            {% else %}
-                <div class="no-logs">
-                    <h3>No log entries found</h3>
-                    <p>The database is empty or no entries match your filter criteria.</p>
-                </div>
-            {% endif %}
         </div>
+
+        {% if error %}
+        <div class="error-box"><strong>Could not load the log:</strong> {{ error }}</div>
+        {% endif %}
+
+        {% if truncated %}
+        <div class="notice">
+            Showing the {{ max_rows }} most recent of {{ total_rows }} entries. Older rows are not loaded.
+        </div>
+        {% endif %}
+
+        {% if logs %}
+        <div class="filter-bar hidden" id="filter-bar">
+            <span class="filter-bar-label">Active filters:</span>
+            <div id="chips" style="display:contents"></div>
+            <button type="button" class="clear-all" id="clear-all">Clear all</button>
+        </div>
+
+        <div class="table-wrap">
+            <table>
+                <thead><tr id="head-row"></tr></thead>
+                <tbody id="body"></tbody>
+            </table>
+        </div>
+
+        <div class="table-footer">
+            <div class="row-count" id="row-count"></div>
+            <div class="pager">
+                <button type="button" id="first">« First</button>
+                <button type="button" id="prev">‹ Prev</button>
+                <span class="page-info" id="page-info"></span>
+                <button type="button" id="next">Next ›</button>
+                <button type="button" id="last">Last »</button>
+            </div>
+        </div>
+
+        <div class="filter-panel" id="panel"></div>
+
+        <script>
+            // Values arrive as strings: Discord snowflake IDs exceed the range
+            // JavaScript can represent exactly as numbers.
+            const ROWS = {{ logs | tojson }};
+
+            const COLUMNS = [
+                { label: 'User ID',             type: 'list' },
+                { label: 'Username',            type: 'list' },
+                { label: 'Display Name',        type: 'list' },
+                { label: 'Server Nickname',     type: 'list' },
+                { label: 'Channel ID',          type: 'list' },
+                { label: 'Channel Name',        type: 'list' },
+                { label: 'Event',               type: 'list' },
+                { label: 'Timestamp (UTC)',     type: 'date' }
+            ];
+
+            const DATE_COL = 7;
+            const EVENT_COL = 6;
+            const PAGE_SIZE = 100;
+            const MAX_OPTIONS = 300;
+
+            // null means "no filter on this column"; otherwise a Set of allowed values.
+            const selected = COLUMNS.map(() => null);
+            let dateFrom = '';
+            let dateTo = '';
+
+            let filtered = ROWS;
+            let page = 0;
+            let openColumn = null;
+
+            const panel = document.getElementById('panel');
+            const tbody = document.getElementById('body');
+
+            /* ---------- filtering ---------- */
+
+            /* Timestamps are stored in UTC but shown in the viewer's local time.
+               The date filter has to agree with what the table shows, so the local
+               calendar date is what gets compared - using the UTC date would put a
+               late-evening message under the previous day. Both are computed once
+               per row here rather than on every filter pass. */
+            const LOCAL_DATE = COLUMNS.length;       // 'YYYY-MM-DD', for filtering
+            const LOCAL_LABEL = COLUMNS.length + 1;  // 'DD.MM.YYYY HH:MM:SS', for display
+
+            const pad = value => String(value).padStart(2, '0');
+
+            function localDate(date) {
+                return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+            }
+
+            function localLabel(date) {
+                return `${pad(date.getDate())}.${pad(date.getMonth() + 1)}.${date.getFullYear()} ` +
+                       `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+            }
+
+            /* Offset of the viewer's timezone right now, e.g. "UTC+2". Individual
+               rows are still converted per date, so a winter row is correct even
+               though this header reflects today's offset. */
+            function offsetLabel() {
+                const minutes = -new Date().getTimezoneOffset();
+                if (minutes === 0) return 'UTC';
+                const hours = Math.floor(Math.abs(minutes) / 60);
+                const rest = Math.abs(minutes) % 60;
+                return 'UTC' + (minutes > 0 ? '+' : '-') + hours + (rest ? ':' + pad(rest) : '');
+            }
+
+            for (const row of ROWS) {
+                const parsed = new Date(row[DATE_COL]);
+                if (isNaN(parsed.getTime())) {
+                    row[LOCAL_DATE] = row[DATE_COL].slice(0, 10);
+                    row[LOCAL_LABEL] = row[DATE_COL];
+                } else {
+                    row[LOCAL_DATE] = localDate(parsed);
+                    row[LOCAL_LABEL] = localLabel(parsed);
+                }
+            }
+
+            COLUMNS[DATE_COL].label = 'Timestamp (' + offsetLabel() + ')';
+
+            function dateOf(row) { return row[LOCAL_DATE]; }
+
+            function passes(row, exceptColumn) {
+                for (let i = 0; i < COLUMNS.length; i++) {
+                    if (i === exceptColumn) continue;
+                    if (i === DATE_COL) {
+                        const day = dateOf(row);
+                        if (dateFrom && day < dateFrom) return false;
+                        if (dateTo && day > dateTo) return false;
+                    } else if (selected[i] && !selected[i].has(row[i])) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+
+            function applyFilters() {
+                filtered = ROWS.filter(row => passes(row, -1));
+                page = 0;
+                renderTable();
+                renderChips();
+                renderHead();
+            }
+
+            /* Options for one column are counted over the rows that pass every
+               *other* filter, so the choices narrow down like they do in Excel. */
+            function optionsFor(column) {
+                const counts = new Map();
+                for (const row of ROWS) {
+                    if (!passes(row, column)) continue;
+                    const value = row[column];
+                    counts.set(value, (counts.get(value) || 0) + 1);
+                }
+                return [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }));
+            }
+
+            function hasFilter(column) {
+                return column === DATE_COL ? Boolean(dateFrom || dateTo) : selected[column] !== null;
+            }
+
+            /* ---------- table ---------- */
+
+            function renderHead() {
+                const head = document.getElementById('head-row');
+                head.textContent = '';
+                COLUMNS.forEach((column, index) => {
+                    const th = document.createElement('th');
+                    const inner = document.createElement('div');
+                    inner.className = 'th-inner';
+
+                    const label = document.createElement('span');
+                    label.textContent = column.label;
+
+                    const button = document.createElement('button');
+                    button.className = 'filter-btn' + (hasFilter(index) ? ' active' : '');
+                    button.type = 'button';
+                    button.textContent = '▼';
+                    button.title = 'Filter ' + column.label;
+                    button.addEventListener('click', event => {
+                        event.stopPropagation();
+                        togglePanel(index, button);
+                    });
+
+                    inner.append(label, button);
+                    th.appendChild(inner);
+                    head.appendChild(th);
+                });
+            }
+
+            function renderTable() {
+                const pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+                page = Math.min(page, pages - 1);
+
+                tbody.textContent = '';
+                const slice = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+
+                if (!slice.length) {
+                    const tr = document.createElement('tr');
+                    const td = document.createElement('td');
+                    td.colSpan = COLUMNS.length;
+                    td.className = 'no-logs';
+                    td.textContent = 'No rows match the current filters.';
+                    tr.appendChild(td);
+                    tbody.appendChild(tr);
+                } else {
+                    for (const row of slice) {
+                        const tr = document.createElement('tr');
+                        // Iterate the columns, not the row: rows carry extra
+                        // precomputed fields past the last visible column.
+                        COLUMNS.forEach((column, index) => {
+                            const value = row[index];
+                            const td = document.createElement('td');
+                            // Values come from Discord, so never inject them as HTML.
+                            if (index === DATE_COL) {
+                                td.textContent = row[LOCAL_LABEL];
+                            } else if (value === '') {
+                                td.textContent = '—';   // display names are blank on rows logged before they were captured
+                                td.className = 'muted';
+                            } else {
+                                td.textContent = value;
+                                if (index === EVENT_COL) td.className = 'event-' + value;
+                            }
+                            tr.appendChild(td);
+                        });
+                        tbody.appendChild(tr);
+                    }
+                }
+
+                document.getElementById('row-count').innerHTML =
+                    'Showing <strong>' + slice.length + '</strong> of <strong>' +
+                    filtered.length.toLocaleString() + '</strong> matching rows' +
+                    (filtered.length !== ROWS.length ? ' (' + ROWS.length.toLocaleString() + ' total)' : '');
+
+                document.getElementById('page-info').textContent = 'Page ' + (page + 1) + ' / ' + pages;
+                document.getElementById('first').disabled = page === 0;
+                document.getElementById('prev').disabled = page === 0;
+                document.getElementById('next').disabled = page >= pages - 1;
+                document.getElementById('last').disabled = page >= pages - 1;
+            }
+
+            /* ---------- active filter chips ---------- */
+
+            function renderChips() {
+                const bar = document.getElementById('filter-bar');
+                const chips = document.getElementById('chips');
+                chips.textContent = '';
+
+                let any = false;
+                COLUMNS.forEach((column, index) => {
+                    let text = null;
+                    if (index === DATE_COL && (dateFrom || dateTo)) {
+                        const asGerman = iso => iso.split('-').reverse().join('.');
+                        text = (dateFrom ? asGerman(dateFrom) : '…') + ' → ' +
+                               (dateTo ? asGerman(dateTo) : '…');
+                    } else if (selected[index]) {
+                        const values = [...selected[index]];
+                        text = values.length <= 2 ? values.join(', ') : values.length + ' selected';
+                    }
+                    if (text === null) return;
+
+                    any = true;
+                    const chip = document.createElement('div');
+                    chip.className = 'chip';
+                    const strong = document.createElement('strong');
+                    strong.textContent = column.label + ':';
+                    const span = document.createElement('span');
+                    span.textContent = text;
+                    span.title = text;
+                    const close = document.createElement('button');
+                    close.type = 'button';
+                    close.textContent = '×';
+                    close.title = 'Remove filter';
+                    close.addEventListener('click', () => clearColumn(index));
+                    chip.append(strong, span, close);
+                    chips.appendChild(chip);
+                });
+
+                bar.classList.toggle('hidden', !any);
+            }
+
+            function clearColumn(column) {
+                if (column === DATE_COL) { dateFrom = dateTo = ''; }
+                else { selected[column] = null; }
+                applyFilters();
+            }
+
+            /* ---------- filter panel ---------- */
+
+            function togglePanel(column, anchor) {
+                if (openColumn === column) { closePanel(); return; }
+                openColumn = column;
+                panel.textContent = '';
+                if (COLUMNS[column].type === 'date') {
+                    buildDatePanel();
+                } else {
+                    buildListPanel(column);
+                }
+                panel.classList.add('open');   // must be visible before measuring
+                position(anchor);
+            }
+
+            function closePanel() {
+                openColumn = null;
+                panel.classList.remove('open');
+            }
+
+            function position(anchor) {
+                const box = anchor.getBoundingClientRect();
+                const width = panel.offsetWidth;
+                let left = box.left;
+                if (left + width > window.innerWidth - 10) left = window.innerWidth - width - 10;
+                panel.style.left = Math.max(10, left) + 'px';
+
+                const top = box.bottom + 6;
+                const height = panel.offsetHeight;
+                panel.style.top = (top + height > window.innerHeight - 10
+                    ? Math.max(10, box.top - height - 6)
+                    : top) + 'px';
+            }
+
+            function buildListPanel(column) {
+                const title = document.createElement('h4');
+                title.textContent = 'Filter: ' + COLUMNS[column].label;
+
+                const search = document.createElement('input');
+                search.type = 'text';
+                search.placeholder = 'Search values…';
+
+                const actions = document.createElement('div');
+                actions.className = 'panel-actions';
+                const allBtn = button('Select all');
+                const noneBtn = button('Select none');
+                const clearBtn = button('Clear filter');
+                actions.append(allBtn, noneBtn, clearBtn);
+
+                const list = document.createElement('div');
+                list.className = 'option-list';
+
+                const options = optionsFor(column);
+                // Nothing ticked means "no filter on this column". Starting empty is
+                // what makes searching work: the hit you searched for is unticked
+                // until you actually tick it, instead of being lost among every
+                // other value that a "tick everything" default would leave selected.
+                let chosen = selected[column] ? new Set(selected[column]) : new Set();
+
+                function commit() {
+                    const isEverything = options.length > 0 && chosen.size === options.length;
+                    selected[column] = (chosen.size === 0 || isEverything) ? null : new Set(chosen);
+                    applyFilters();
+                }
+
+                function paint() {
+                    const term = search.value.trim().toLowerCase();
+                    const visible = options.filter(([value]) => !term || value.toLowerCase().includes(term));
+                    list.textContent = '';
+
+                    if (!visible.length) {
+                        const note = document.createElement('div');
+                        note.className = 'option-note';
+                        note.textContent = 'No matching values';
+                        list.appendChild(note);
+                        return;
+                    }
+
+                    visible.slice(0, MAX_OPTIONS).forEach(([value, count]) => {
+                        const row = document.createElement('label');
+                        row.className = 'option';
+
+                        const box = document.createElement('input');
+                        box.type = 'checkbox';
+                        box.checked = chosen.has(value);
+                        box.addEventListener('change', () => {
+                            box.checked ? chosen.add(value) : chosen.delete(value);
+                            commit();
+                        });
+
+                        const label = document.createElement('span');
+                        label.className = 'label';
+                        label.textContent = value === '' ? '(empty)' : value;
+                        label.title = value;
+
+                        const badge = document.createElement('span');
+                        badge.className = 'count';
+                        badge.textContent = count;
+
+                        row.append(box, label, badge);
+                        list.appendChild(row);
+                    });
+
+                    if (visible.length > MAX_OPTIONS) {
+                        const note = document.createElement('div');
+                        note.className = 'option-note';
+                        note.textContent = 'Showing first ' + MAX_OPTIONS + ' of ' +
+                            visible.length + ' values — use search to narrow down';
+                        list.appendChild(note);
+                    }
+                }
+
+                // "Select all"/"none" act on what the search currently shows, like Excel.
+                function visibleValues() {
+                    const term = search.value.trim().toLowerCase();
+                    return options.filter(([v]) => !term || v.toLowerCase().includes(term)).map(o => o[0]);
+                }
+
+                allBtn.addEventListener('click', () => {
+                    visibleValues().forEach(v => chosen.add(v));
+                    paint(); commit();
+                });
+                noneBtn.addEventListener('click', () => {
+                    visibleValues().forEach(v => chosen.delete(v));
+                    paint(); commit();
+                });
+                clearBtn.addEventListener('click', () => {
+                    chosen = new Set();
+                    search.value = '';
+                    paint(); commit();
+                });
+                search.addEventListener('input', paint);
+
+                const hint = document.createElement('div');
+                hint.className = 'panel-hint';
+                hint.textContent = 'Tick values to filter — nothing ticked shows everything.';
+
+                panel.append(title, search, actions, list, hint);
+                paint();
+                search.focus();
+            }
+
+            function buildDatePanel() {
+                const title = document.createElement('h4');
+                title.textContent = 'Filter: date range';
+
+                const fromRow = document.createElement('div');
+                fromRow.className = 'date-row';
+                const fromLabel = document.createElement('label');
+                fromLabel.textContent = 'From';
+                const from = document.createElement('input');
+                from.type = 'date';
+                from.value = dateFrom;
+                fromRow.append(fromLabel, from);
+
+                const toRow = document.createElement('div');
+                toRow.className = 'date-row';
+                const toLabel = document.createElement('label');
+                toLabel.textContent = 'To';
+                const to = document.createElement('input');
+                to.type = 'date';
+                to.value = dateTo;
+                toRow.append(toLabel, to);
+
+                from.addEventListener('change', () => { dateFrom = from.value; applyFilters(); });
+                to.addEventListener('change', () => { dateTo = to.value; applyFilters(); });
+
+                const presets = document.createElement('div');
+                presets.className = 'presets';
+                [['Today', 0], ['Last 7 days', 6], ['Last 30 days', 29], ['Last 90 days', 89]]
+                    .forEach(([label, daysBack]) => {
+                        const preset = document.createElement('button');
+                        preset.type = 'button';
+                        preset.textContent = label;
+                        preset.addEventListener('click', () => {
+                            // Local dates, to match what the table and the filter compare.
+                            const now = new Date();
+                            const start = new Date(now.getTime() - daysBack * 86400000);
+                            dateTo = localDate(now);
+                            dateFrom = localDate(start);
+                            from.value = dateFrom;
+                            to.value = dateTo;
+                            applyFilters();
+                        });
+                        presets.appendChild(preset);
+                    });
+
+                const actions = document.createElement('div');
+                actions.className = 'panel-actions';
+                const clearBtn = button('Clear filter');
+                clearBtn.addEventListener('click', () => {
+                    dateFrom = dateTo = '';
+                    from.value = to.value = '';
+                    applyFilters();
+                });
+                actions.appendChild(clearBtn);
+
+                panel.append(title, fromRow, toRow, presets, actions);
+            }
+
+            function button(text) {
+                const element = document.createElement('button');
+                element.type = 'button';
+                element.textContent = text;
+                return element;
+            }
+
+            /* ---------- wiring ---------- */
+
+            document.addEventListener('click', event => {
+                if (openColumn !== null && !panel.contains(event.target)) closePanel();
+            });
+            document.addEventListener('keydown', event => {
+                if (event.key === 'Escape') closePanel();
+            });
+
+            document.getElementById('clear-all').addEventListener('click', () => {
+                selected.fill(null);
+                dateFrom = dateTo = '';
+                applyFilters();
+            });
+
+            const pages = () => Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+            document.getElementById('first').addEventListener('click', () => { page = 0; renderTable(); });
+            document.getElementById('prev').addEventListener('click', () => { page--; renderTable(); });
+            document.getElementById('next').addEventListener('click', () => { page++; renderTable(); });
+            document.getElementById('last').addEventListener('click', () => { page = pages() - 1; renderTable(); });
+
+            renderHead();
+            renderTable();
+        </script>
+
+        {% else %}
+        <div class="no-logs">
+            <h3>No log entries found</h3>
+            <p>The database is empty.</p>
+        </div>
+        {% endif %}
     </div>
+</div>
 </body>
 </html>

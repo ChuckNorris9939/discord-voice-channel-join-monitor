@@ -1,4 +1,4 @@
-py-cord[voice]>=2.8.0
+py-cord[voice]>=2.8.1
 PyNaCl
 SpeechRecognition
 # discord-ext-voice-recv  # Temporarily disabled during py-cord migration

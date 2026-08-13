@@ -34,10 +34,23 @@ PERIODS = [
     ("90d", "Last 90 days", 90),
     ("365d", "Last 12 months", 365),
     ("all", "All time", None),
+    ("custom", "Custom range…", None),
 ]
 DEFAULT_PERIOD = "30d"
+CUSTOM_PERIOD = "custom"
 
 TOP_N = 10
+
+# Buckets for the session length distribution, as (upper bound in seconds, label).
+# The final bucket has no upper bound.
+LENGTH_BUCKETS = [
+    (5 * 60, "< 5m"),
+    (30 * 60, "5–30m"),
+    (60 * 60, "30m–1h"),
+    (3 * 3600, "1–3h"),
+    (6 * 3600, "3–6h"),
+    (None, "> 6h"),
+]
 
 
 def format_duration(seconds):
@@ -74,36 +87,76 @@ def _parse_timestamp(value):
     return parsed.astimezone(timezone.utc)
 
 
-def _resolve_period(period_key):
+def _parse_date(value):
+    """Parse a YYYY-MM-DD string from the date picker, or None if unusable."""
+    try:
+        return datetime.strptime(value.strip(), "%Y-%m-%d")
+    except (AttributeError, ValueError):
+        return None
+
+
+def _day_bounds(day, tz, end_of_day=False):
+    """Turn a calendar day into an instant, interpreted in the display timezone
+    so picking a day means that whole local day and not a shifted UTC window."""
+    if end_of_day:
+        day += timedelta(days=1)  # exclusive upper bound
+    return day.replace(tzinfo=tz).astimezone(timezone.utc)
+
+
+def _resolve_period(period_key, custom_from=None, custom_to=None, tz=timezone.utc):
     """Return (key, label, window_start, window_end) for the requested period."""
-    window_end = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc)
+
+    if period_key == CUSTOM_PERIOD:
+        first = _parse_date(custom_from)
+        last = _parse_date(custom_to)
+        if first or last:
+            # Order the days before turning them into bounds, so a reversed
+            # selection covers exactly the same range as the correct order.
+            if first and last and first > last:
+                first, last = last, first
+            start = _day_bounds(first, tz) if first else None
+            end = min(_day_bounds(last, tz, end_of_day=True) if last else now, now)
+            return CUSTOM_PERIOD, "Custom range", start, end
+        # Custom selected without usable dates - fall back rather than error.
+        return _resolve_period(DEFAULT_PERIOD, tz=tz)
+
     for key, label, days in PERIODS:
-        if key == period_key:
-            start = None if days is None else window_end - timedelta(days=days)
-            return key, label, start, window_end
-    return _resolve_period(DEFAULT_PERIOD)
+        if key == period_key and key != CUSTOM_PERIOD:
+            start = None if days is None else now - timedelta(days=days)
+            return key, label, start, now
+    return _resolve_period(DEFAULT_PERIOD, tz=tz)
 
 
 def _load_events(db_path, window_start):
     """Load events, including a lookback so sessions crossing the window start
     are still reconstructed from their real join event."""
-    query = (
-        "SELECT user_id, username, channel_id, channel_name, event_type, timestamp "
-        "FROM user_voice_events"
-    )
-    params = []
-    if window_start is not None:
-        # Timestamps are ISO 8601 with a fixed +00:00 offset, so lexicographic
-        # comparison matches chronological order.
-        lookback = window_start - timedelta(seconds=MAX_SESSION_SECONDS)
-        query += " WHERE timestamp >= ?"
-        params.append(lookback.isoformat())
-    query += " ORDER BY timestamp"
-
     conn = sqlite3.connect(db_path)
     try:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
+
+        # The display-name columns were added to the log later. Select NULL in
+        # their place when reading a database that has not been migrated yet,
+        # so the dashboard still renders instead of erroring out.
+        available = {row[1] for row in cursor.execute("PRAGMA table_info(user_voice_events)")}
+        optional = [name if name in available else f"NULL AS {name}"
+                    for name in ("display_name_global", "display_name_server")]
+
+        query = (
+            f"SELECT user_id, username, {optional[0]}, {optional[1]}, "
+            "channel_id, channel_name, event_type, timestamp "
+            "FROM user_voice_events"
+        )
+        params = []
+        if window_start is not None:
+            # Timestamps are ISO 8601 with a fixed +00:00 offset, so lexicographic
+            # comparison matches chronological order.
+            lookback = window_start - timedelta(seconds=MAX_SESSION_SECONDS)
+            query += " WHERE timestamp >= ?"
+            params.append(lookback.isoformat())
+        query += " ORDER BY timestamp"
+
         cursor.execute(query, params)
         return cursor.fetchall()
     finally:
@@ -154,7 +207,8 @@ def _build_sessions(rows, window_start, window_end):
 
 def _make_session(row, start, end):
     duration = (end - start).total_seconds()
-    if duration > MAX_SESSION_SECONDS:
+    capped = duration > MAX_SESSION_SECONDS
+    if capped:
         duration = MAX_SESSION_SECONDS
         end = start + timedelta(seconds=MAX_SESSION_SECONDS)
     return {
@@ -165,20 +219,34 @@ def _make_session(row, start, end):
         "start": start,
         "end": end,
         "duration": max(0.0, duration),
+        # A capped session means the closing event was never logged, so its
+        # length is an artefact and must not appear in a "longest" ranking.
+        "capped": capped,
     }
 
 
 def _latest_names(rows):
     """Map ids to their most recent name. Users and channels get renamed, so
-    grouping must key on the id while display uses the current name."""
+    grouping must key on the id while display uses the current name.
+
+    Only non-empty values are kept, which matters for the display names: they
+    are absent on every row logged before the columns existed, and a blank must
+    not overwrite a name a newer event already told us about.
+    """
     users = {}
     channels = {}
+    display_global = {}
+    display_server = {}
     for row in rows:  # rows arrive ordered by timestamp, so later wins
         if row["username"]:
             users[row["user_id"]] = row["username"]
         if row["channel_name"]:
             channels[row["channel_id"]] = row["channel_name"]
-    return users, channels
+        if row["display_name_global"]:
+            display_global[row["user_id"]] = row["display_name_global"]
+        if row["display_name_server"]:
+            display_server[row["user_id"]] = row["display_name_server"]
+    return users, channels, display_global, display_server
 
 
 def _spread_over_buckets(session, tz, by_hour, by_weekday, by_day):
@@ -211,13 +279,14 @@ def _rank(totals, sessions_count, names, limit=TOP_N):
 
 
 def collect_statistics(db_path, afk_channel_id=0, period_key=DEFAULT_PERIOD,
-                       timezone_name=DEFAULT_TIMEZONE):
+                       timezone_name=DEFAULT_TIMEZONE, custom_from=None, custom_to=None):
     """Build the full statistics payload for the dashboard."""
     tz, tz_label = _resolve_timezone(timezone_name)
-    period_key, period_label, window_start, window_end = _resolve_period(period_key)
+    period_key, period_label, window_start, window_end = _resolve_period(
+        period_key, custom_from, custom_to, tz)
 
     rows = _load_events(db_path, window_start)
-    user_names, channel_names = _latest_names(rows)
+    user_names, channel_names, display_global, display_server = _latest_names(rows)
     effective_start = window_start or (
         _parse_timestamp(rows[0]["timestamp"]) if rows else window_end
     )
@@ -258,6 +327,14 @@ def collect_statistics(db_path, afk_channel_id=0, period_key=DEFAULT_PERIOD,
     top_channels = _rank(channel_seconds, channel_sessions, channel_names)
     top_afk = _rank(afk_seconds, afk_sessions, user_names)
 
+    # Attach the newest display names known for each user so the dashboard can
+    # show them on hover. Empty until the user triggers a voice event that the
+    # bot logs with the new columns in place.
+    for entry in top_users + top_afk:
+        user_id = int(entry["id"])
+        entry["display_global"] = display_global.get(user_id, "")
+        entry["display_server"] = display_server.get(user_id, "")
+
     # Show how much of each user's voice time was spent idling in AFK.
     for entry in top_afk:
         total_for_user = user_seconds.get(int(entry["id"]), 0)
@@ -287,8 +364,13 @@ def collect_statistics(db_path, afk_channel_id=0, period_key=DEFAULT_PERIOD,
             "key": period_key,
             "label": period_label,
             "start": effective_start.astimezone(tz).strftime("%Y-%m-%d"),
-            "end": window_end.astimezone(tz).strftime("%Y-%m-%d"),
+            # The window end is exclusive, so step back to name the last day it
+            # actually covers. For the rolling periods this is still today.
+            "end": (window_end - timedelta(seconds=1)).astimezone(tz).strftime("%Y-%m-%d"),
             "options": [{"key": key, "label": label} for key, label, _ in PERIODS],
+            # Echoed back so the date pickers keep showing what was submitted.
+            "custom_from": custom_from or "",
+            "custom_to": custom_to or "",
         },
         "kpis": {
             "total_time": format_duration(total_seconds),
@@ -309,7 +391,49 @@ def collect_statistics(db_path, afk_channel_id=0, period_key=DEFAULT_PERIOD,
         "by_hour": hour_series,
         "by_weekday": weekday_series,
         "by_day": day_series,
+        "length_distribution": _length_distribution(sessions),
+        "longest_sessions": _longest_sessions(sessions, user_names, channel_names, tz),
     }
+
+
+def _length_distribution(sessions):
+    """How session lengths are spread out - shows whether people drop in briefly
+    or settle in for the evening."""
+    counts = [0] * len(LENGTH_BUCKETS)
+    for session in sessions:
+        for index, (upper, _) in enumerate(LENGTH_BUCKETS):
+            if upper is None or session["duration"] < upper:
+                counts[index] += 1
+                break
+
+    total = sum(counts) or 1
+    return [
+        {
+            "label": label,
+            "value": count,
+            "tooltip": f"{count} sessions ({count / total * 100:.0f}%)",
+        }
+        for count, (_, label) in zip(counts, LENGTH_BUCKETS)
+    ]
+
+
+def _longest_sessions(sessions, user_names, channel_names, tz, limit=TOP_N):
+    """Single longest stays in voice. Sessions that hit the cap are left out:
+    they are missing a leave event, not genuine marathons."""
+    genuine = [session for session in sessions if not session.get("capped")]
+    ranked = sorted(genuine, key=lambda item: item["duration"], reverse=True)[:limit]
+    return [
+        {
+            "id": str(session["user_id"]),
+            "name": user_names.get(session["user_id"], str(session["user_id"])),
+            "seconds": int(session["duration"]),
+            "duration": format_duration(session["duration"]),
+            "sessions": 1,
+            "channel": channel_names.get(session["channel_id"], str(session["channel_id"])),
+            "when": session["start"].astimezone(tz).strftime("%d.%m.%Y %H:%M"),
+        }
+        for session in ranked
+    ]
 
 
 def _build_day_series(by_day, window_start, window_end, tz, max_points=120):

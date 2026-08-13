@@ -29,7 +29,8 @@ except Exception as e:
     print(f"⚠️ Error loading .env file: {e}")
     print("   Environment variables will only be loaded from system environment")
 
-BOT_VERSION = "2.0.0"
+# 2.1.0 — voice statistics dashboard, filterable join logs, display-name logging
+BOT_VERSION = "2.1.0"
 # Get the directory where this script is located
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(SCRIPT_DIR, "data")
@@ -136,17 +137,24 @@ def home():
     # Get dynamic status data
     status_data = get_status_data()
     
-    return render_template('home.html', 
-                         app_testing_mode=TESTING, 
-                         bot_version=BOT_VERSION, 
+    return render_template('home.html',
+                         app_testing_mode=TESTING,
+                         bot_version=BOT_VERSION,
+                         pycord_version=discord.__version__,
                          uptime=uptime_str,
                          status_data=status_data)
+
+# Filtering happens in the browser, so the whole log is shipped to the page.
+# This caps how much, to keep the payload sane as the table grows.
+MAX_LOG_ROWS = 25000
 
 @app.route('/view_join_logs')
 def view_join_logs_page():
     conn = None
     logs = []
-    current_filter_username = request.args.get('username_filter', '').strip()
+    truncated = False
+    total_rows = 0
+    error = None
     try:
         # Use absolute path to ensure database is found regardless of working directory
         logger.info(f"Connecting to database at: {DATABASE_PATH}")
@@ -154,28 +162,56 @@ def view_join_logs_page():
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
-        sql_query = "SELECT id, user_id, username, channel_id, channel_name, event_type, timestamp FROM user_voice_events"
-        params = []
+        cursor.execute("SELECT COUNT(*) FROM user_voice_events")
+        total_rows = cursor.fetchone()[0]
 
-        if current_filter_username:
-            sql_query += " WHERE username LIKE ?" # Use LIKE for partial matching
-            params.append(f"%{current_filter_username}%")
-        
-        sql_query += " ORDER BY id DESC"
-        
-        cursor.execute(sql_query, params)
-        logs = cursor.fetchall()
-        logger.info(f"Successfully fetched {len(logs)} log entries for web interface. Filter: '{current_filter_username}'")
+        # Display names are a later addition. Select NULL in their place when the
+        # migration has not run yet, so the log still loads instead of failing.
+        available = {row[1] for row in cursor.execute("PRAGMA table_info(user_voice_events)")}
+        optional = ", ".join(
+            name if name in available else f"NULL AS {name}"
+            for name in ("display_name_global", "display_name_server")
+        )
+
+        # id is only used to order newest-first, it is not shown in the table.
+        cursor.execute(
+            f"SELECT user_id, username, {optional}, "
+            "channel_id, channel_name, event_type, timestamp "
+            "FROM user_voice_events ORDER BY id DESC LIMIT ?",
+            (MAX_LOG_ROWS,)
+        )
+        # Every value goes out as a string: Discord IDs are 64-bit snowflakes and
+        # would lose their last digits if JavaScript parsed them as numbers.
+        logs = [
+            [
+                str(row["user_id"]),
+                row["username"] or "",
+                row["display_name_global"] or "",
+                row["display_name_server"] or "",
+                str(row["channel_id"]),
+                row["channel_name"] or "",
+                row["event_type"] or "",
+                row["timestamp"] or "",
+            ]
+            for row in cursor.fetchall()
+        ]
+        truncated = total_rows > len(logs)
+        logger.info(f"Fetched {len(logs)} of {total_rows} log entries for web interface")
     except sqlite3.Error as e:
-        logger.error(f"SQLite error when fetching logs for web interface (filter: '{current_filter_username}'): {e}")
+        # Surface this instead of falling through to the empty state, which would
+        # claim the database has no rows when in fact the query failed.
+        error = f"Database error: {e}"
+        logger.error(f"SQLite error when fetching logs for web interface: {e}")
     except Exception as e:
-        logger.error(f"General error when fetching logs for web interface (filter: '{current_filter_username}'): {e}", exc_info=True)
+        error = f"Unexpected error: {e}"
+        logger.error(f"General error when fetching logs for web interface: {e}", exc_info=True)
     finally:
         if conn:
             conn.close()
-            logger.info(f"Database connection closed for /view_join_logs (filter: '{current_filter_username}').")
-            
-    return render_template('view_logs.html', logs=logs, current_filter_username=current_filter_username)
+            logger.info("Database connection closed for /view_join_logs.")
+
+    return render_template('view_logs.html', logs=logs, total_rows=total_rows,
+                           truncated=truncated, max_rows=MAX_LOG_ROWS, error=error)
 
 @app.route('/statistics')
 def statistics_page():
@@ -183,6 +219,8 @@ def statistics_page():
     import voice_stats
 
     period = request.args.get('period', voice_stats.DEFAULT_PERIOD)
+    custom_from = request.args.get('from', '').strip()
+    custom_to = request.args.get('to', '').strip()
     stats = None
     error = None
     try:
@@ -190,6 +228,8 @@ def statistics_page():
             DATABASE_PATH,
             afk_channel_id=cfg.AFK_CHANNEL_ID,
             period_key=period,
+            custom_from=custom_from,
+            custom_to=custom_to,
         )
         logger.info(f"Statistics built for period '{stats['period']['key']}': "
                     f"{stats['kpis']['total_sessions']} sessions, "
@@ -904,13 +944,25 @@ def init_user_log_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER,
                 username TEXT,
+                display_name_global TEXT,
+                display_name_server TEXT,
                 channel_id INTEGER,
                 channel_name TEXT,
-                event_type TEXT, -- 'join' or 'leave'
+                event_type TEXT, -- 'join', 'leave' or 'switch'
                 timestamp TEXT
             )
         """)
         conn.commit()
+
+        # Display names were added later; existing databases need the columns
+        # backfilled as NULL (historic rows predate the data being captured).
+        existing_columns = {row[1] for row in cursor.execute("PRAGMA table_info(user_voice_events)")}
+        for column in ("display_name_global", "display_name_server"):
+            if column not in existing_columns:
+                cursor.execute(f"ALTER TABLE user_voice_events ADD COLUMN {column} TEXT")
+                conn.commit()
+                if not is_test_db:
+                    logger.info(f"Migrated user_voice_events: added column '{column}'")
 
         # Drop the old user_joins table if it exists
         cursor.execute("DROP TABLE IF EXISTS user_joins")
@@ -949,17 +1001,21 @@ def init_user_log_db():
             logger.info(f"Database connection to {DATABASE_PATH} closed after init.")
 
 # --------- Helper Functions for User Voice Events ---------
-def log_voice_event(user_id: int, username: str, channel_id: int, channel_name: str, event_type: str):
-    """Logs a user join or leave event to the database."""
+def log_voice_event(user_id: int, username: str, channel_id: int, channel_name: str, event_type: str,
+                    display_name_global: Optional[str] = None, display_name_server: Optional[str] = None):
+    """Logs a user join, leave or switch event to the database."""
     conn = None
     try:
         conn = sqlite3.connect(DATABASE_PATH)
         cursor = conn.cursor()
         timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
         cursor.execute("""
-            INSERT INTO user_voice_events (user_id, username, channel_id, channel_name, event_type, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (user_id, username, channel_id, channel_name, event_type, timestamp))
+            INSERT INTO user_voice_events
+                (user_id, username, display_name_global, display_name_server,
+                 channel_id, channel_name, event_type, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (user_id, username, display_name_global, display_name_server,
+              channel_id, channel_name, event_type, timestamp))
         conn.commit()
         logger.info(f"Logged voice event: User {username} ({user_id}) {event_type} channel {channel_name} ({channel_id})")
     except sqlite3.Error as e:
@@ -1459,10 +1515,23 @@ async def on_ready():
     
     logger.info(f"⚡ Bot erfolgreich gestartet mit py-cord {discord.__version__} - alle Features aktiviert")
     
-    # Send startup message to Discord
+    # Send startup message to Discord. Targets are listed explicitly to match the
+    # shutdown message: without them this defaults to BOT_LOGS only, so the start
+    # never showed up in the channel where the stop message does.
     try:
-        await send_log_message(f"✅ **Bot ist gestartet** mit Version **{BOT_VERSION}** (py-cord {discord.__version__})")
-        logger.info("✅ Bot startup message sent to Discord")
+        start_message_targets = []
+        if cfg.JOIN_LOGS_ID:
+            start_message_targets.append(cfg.JOIN_LOGS_ID)
+        if cfg.BOT_LOGS_ID:
+            start_message_targets.append(cfg.BOT_LOGS_ID)
+
+        await send_log_message(
+            f"✅ **Bot ist gestartet**\n"
+            f"📦 Bot-Version: **{BOT_VERSION}**\n"
+            f"🔗 py-cord: **{discord.__version__}**",
+            target_channel_ids=list(set(start_message_targets)) or None
+        )
+        logger.warning(f"✅ Bot startup message sent to Discord (targets: {start_message_targets})")
         
         # Send command sync message only in testing mode
         if cfg.TESTING:
@@ -1977,7 +2046,8 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
     
     # Handle join events
     if joined_visible_channel:
-        log_voice_event(member.id, member.name, after.channel.id, after.channel.name, 'join')
+        log_voice_event(member.id, member.name, after.channel.id, after.channel.name, 'join',
+                        member.global_name, member.nick)
         # Send join message
         try:
             msg = f"➕ **{member.name}** ist {after.channel.mention} beigetreten"
@@ -1993,7 +2063,8 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
 
     # Handle leave events
     elif left_visible_channel:
-        log_voice_event(member.id, member.name, before.channel.id, before.channel.name, 'leave')
+        log_voice_event(member.id, member.name, before.channel.id, before.channel.name, 'leave',
+                        member.global_name, member.nick)
         # Send leave message
         try:
             msg = f"➖ **{member.name}** hat {before.channel.mention} verlassen"
@@ -2017,7 +2088,8 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
     elif switched_between_visible_channels:
         logger.debug(f"User {member.name} switched from {before.channel.name} to {after.channel.name} (no message sent)")
         # Still log the event but don't send messages
-        log_voice_event(member.id, member.name, after.channel.id, after.channel.name, 'switch')
+        log_voice_event(member.id, member.name, after.channel.id, after.channel.name, 'switch',
+                        member.global_name, member.nick)
         
         # Schedule or reset the global summary timer
         _start_or_reset_global_join_summary_timer()
@@ -2957,11 +3029,22 @@ async def before_check_inactive_threads_task():
 
 PURGE_OLDER_THAN_DAYS = 7 # Default value, will be configurable
 
+# Messages older than 14 days cannot be bulk-deleted, so each one costs a request
+# on Discord's per-message endpoint, which rate limits hard. These throttle that
+# path: a pause between deletions and a budget per run, so a large backlog is
+# spread over several days instead of being hammered through at once.
+PURGE_INDIVIDUAL_DELAY_SECONDS = 1.5
+PURGE_MAX_INDIVIDUAL_PER_RUN = 100
+
 @tasks.loop(hours=24)
 async def msg_purge_task():
     target_ids_task_log = [cfg.BOT_LOGS_ID] if cfg.BOT_LOGS_ID else []
 
-    purge_cutoff_date = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=cfg.PURGE_OLDER_THAN_DAYS)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    purge_cutoff_date = now - datetime.timedelta(days=cfg.PURGE_OLDER_THAN_DAYS)
+    # Discord only bulk-deletes messages younger than 14 days. The margin keeps
+    # borderline messages out of the bulk call so it cannot fail on them.
+    bulk_floor_date = now - datetime.timedelta(days=14) + datetime.timedelta(hours=1)
 
     def is_older_than_cutoff(message):
         return message.created_at < purge_cutoff_date
@@ -2988,18 +3071,46 @@ async def msg_purge_task():
 
         await send_log_message(f"🔄 Starting daily purge in channel {channel_to_purge_obj.mention} (ID: {channel_id}) for messages older than {cfg.PURGE_OLDER_THAN_DAYS} days (before {purge_cutoff_date.strftime('%Y-%m-%d %H:%M:%S UTC')}).", target_channel_ids=target_ids_task_log)
         try:
-            # Note: purge() can only bulk-delete messages up to 14 days old.
-            # This logic will work for PURGE_OLDER_THAN_DAYS <= 14.
-            # For messages older than 14 days, they need to be deleted individually, which is much slower.
-            # The current implementation relies on the bulk purge behavior.
-            if cfg.PURGE_OLDER_THAN_DAYS > 14:
-                 await send_log_message(f"⚠️ Daily Purge: Configured purge duration ({cfg.PURGE_OLDER_THAN_DAYS} days) is > 14 days. The bot can only bulk-delete messages up to 14 days old. Purging will be ineffective for older messages.", target_channel_ids=target_ids_task_log)
+            # Phase 1: everything still inside the 14 day window goes out in bulk,
+            # which is one API request per 100 messages.
+            deleted_messages = await channel_to_purge_obj.purge(
+                limit=None, check=is_older_than_cutoff, after=bulk_floor_date, bulk=True
+            )
+            bulk_count = len(deleted_messages)
 
-            deleted_messages = await channel_to_purge_obj.purge(limit=None, check=is_older_than_cutoff, bulk=True)
-            if deleted_messages:
-                await send_log_message(f"🗑️ Daily Purge: {len(deleted_messages)} messages deleted in {channel_to_purge_obj.mention}.", target_channel_ids=target_ids_task_log)
+            # Phase 2: older messages can only be removed one request at a time on a
+            # tightly rate limited endpoint. Pace them and stop after a fixed budget
+            # so a large backlog is worked off across runs instead of hammering the
+            # API in one go.
+            individual_count = 0
+            hit_budget = False
+            async for message in channel_to_purge_obj.history(
+                limit=None, before=bulk_floor_date, oldest_first=True
+            ):
+                if individual_count >= PURGE_MAX_INDIVIDUAL_PER_RUN:
+                    hit_budget = True
+                    break
+                if not is_older_than_cutoff(message):
+                    continue
+                try:
+                    await message.delete()
+                    individual_count += 1
+                    await asyncio.sleep(PURGE_INDIVIDUAL_DELAY_SECONDS)
+                except discord.NotFound:
+                    continue  # already gone
+
+            total = bulk_count + individual_count
+            if total:
+                summary = (f"🗑️ Daily Purge: {total} messages deleted in "
+                           f"{channel_to_purge_obj.mention} "
+                           f"({bulk_count} bulk, {individual_count} individual).")
+                if hit_budget:
+                    summary += (f"\n⏳ Stopped at the per-run limit of {PURGE_MAX_INDIVIDUAL_PER_RUN} "
+                                f"old messages to stay well inside Discord's rate limits. "
+                                f"The rest follows on the next run.")
+                await send_log_message(summary, target_channel_ids=target_ids_task_log)
             else:
-                await send_log_message(f"ℹ️ Daily Purge: No messages found in {channel_to_purge_obj.mention} that matched the criteria (older than {cfg.PURGE_OLDER_THAN_DAYS} days and within the last 14 days).", target_channel_ids=target_ids_task_log)
+                await send_log_message(f"ℹ️ Daily Purge: No messages older than {cfg.PURGE_OLDER_THAN_DAYS} days found in {channel_to_purge_obj.mention}.", target_channel_ids=target_ids_task_log)
         except discord.Forbidden:
             await send_log_message(f"⚠️ Daily Purge: No permission to delete messages in {channel_to_purge_obj.mention}.", target_channel_ids=target_ids_task_log)
         except discord.HTTPException as e:
@@ -3219,9 +3330,14 @@ if __name__ == "__main__":
         logger.critical("❌ Fehler: Umgebungsvariable 'DISCORD_TOKEN' ist nicht gesetzt.")
         exit(1)
 
+    # Schema must be ready before anything touches the database. This runs here
+    # rather than in on_ready so it does not depend on reaching Discord, and so
+    # the web server can never serve a request against an unmigrated database.
+    os.makedirs(DATA_DIR, exist_ok=True)
+    init_user_log_db()
+
     try:
         logger.info(f"🚀 Starte Bot mit py-cord {discord.__version__}...")
-        # Using bot.run() instead of asyncio.run(main()) to avoid event loop conflicts
         # Using bot.run() instead of asyncio.run(main()) to avoid event loop conflicts
         bot.run(TOKEN)
     except discord.LoginFailure:
