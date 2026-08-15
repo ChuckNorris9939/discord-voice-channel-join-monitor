@@ -1,100 +1,128 @@
 # discord-voice-channel-join-monitor
-**Version 1.14**
 
-Sends messages when user joins to a voice channel
+**Version 2.1.0**
 
-clone command: `git clone --branch master --single-branch https://github.com/ChuckNorris9939/discord-voice-channel-join-monitor.git`
-build command: `docker build . -t dc_voice_monitor`
+A Discord bot that logs voice channel activity, manages support forum threads, and exposes a web dashboard with voice statistics. Built on py-cord with an embedded Flask server.
+
+```bash
+git clone --branch master --single-branch https://github.com/ChuckNorris9939/discord-voice-channel-join-monitor.git
+docker compose up -d --build
+```
+
+## Features
+
+- **Voice activity logging** — every join, leave and channel switch is written to SQLite, including username, global display name and server nickname
+- **Voice statistics dashboard** — time spent per user and per channel, AFK ranking, activity by hour and weekday, session length distribution, longest sessions; selectable period including a custom date range
+- **Filterable join log** — Excel-style per-column filters with search, multi-select and a date range
+- **Support forum management** — inactive threads get a warning after 48 h, a reminder after 72 h and are closed automatically after 96 h
+- **Voice recording** with optional real-time speech-to-text (Google Cloud Speech or offline Vosk) — see the DAVE note below
+- **Automatic cleanup** of old recordings and of old messages in the log channels
+- **Role-based web UI access** via Authentik groups
+
+## Requirements
+
+- Docker and Docker Compose (recommended), or Python 3.10+ with `ffmpeg` installed
+- A Discord bot token
 
 ## Installation
 
-### Dependencies
-Install the required Python packages using pip:
+```bash
+cp env.example .env      # then fill in DISCORD_TOKEN
+docker compose up -d --build
+```
+
+Without Docker:
+
 ```bash
 pip install -r requirements.txt
+python main.py
 ```
 
-### Environment Configuration
-The bot supports loading environment variables from a `.env` file for easier configuration management.
+`data/` holds the database, logs and recordings and must be mounted as a volume so it survives a container rebuild.
 
-1. **Copy the example file:**
-   ```bash
-   cp env.example .env
-   ```
+### Configuration
 
-2. **Edit the `.env` file** with your actual values:
-   ```bash
-   # Required: Your Discord bot token
-   DISCORD_TOKEN=your_actual_discord_bot_token_here
-   
-   # Optional: Other configuration settings
-   APP_TESTING_MODE=false
-   LOG_LEVEL=INFO
-   PORT=8080
-   ```
+`DISCORD_TOKEN` is required. Everything else has a sensible default and can be changed at runtime under `/settings`.
 
-3. **Important:** Never commit your `.env` file to version control as it contains sensitive information like your Discord token.
+**Values saved in the web UI take precedence over `.env`.** Treat `.env` as the starting point for a fresh database — once a setting exists in the `bot_settings` table, the `.env` entry no longer has any effect. `DISCORD_TOKEN` and `PORT` are the exception; they are read from the environment only.
 
-The bot will automatically load the `.env` file when it starts. If the file is not found or there's an error loading it, the bot will fall back to system environment variables.
+Common variables:
 
-### Health Check Port
-The bot runs a small web server for health checks on port 8080 by default. If this port is already in use on your system (you might see an `OSError: [Errno 98] Address already in use`), you can specify a different port by setting the `PORT` environment variable before running the bot:
+| Variable | Default | Purpose |
+|---|---|---|
+| `DISCORD_TOKEN` | — | required |
+| `PORT` | `8080` | web server port |
+| `LOG_LEVEL` | `INFO` | application log level |
+| `APP_TESTING_MODE` | `false` | redirects all bot messages to the testing channel |
+| `STT_ENGINE` | `google` | `google` or `vosk` |
+| `TEMP_DAVE_FIX` | `false` | join voice channels without recording, see below |
+
+## Web interface
+
+Reachable on the configured port, by default `http://localhost:8080`:
+
+| Path | Contents |
+|---|---|
+| `/` | dashboard with status, uptime and version |
+| `/statistics` | voice statistics, `?period=7d\|30d\|90d\|365d\|all\|custom` |
+| `/view_join_logs` | full join/leave log with column filters |
+| `/garmin_recordings` | recordings, grouped by session |
+| `/settings` | all runtime settings |
+| `/status` | health check as JSON |
+
+### Access control
+
+The app has no login of its own. Authentik sits in front as a forward-auth proxy and passes the logged-in user's groups in `X-authentik-groups`. Under **Settings → Access Control** five areas can each be restricted to a list of groups: general access, join logs, settings, bot control and recordings.
+
+Holding **any one** of the listed groups grants access — Discord roles are flat, so an admin group has to be listed everywhere it should reach, general access included. An empty field leaves that area open, which is the default, so deploying cannot lock anyone out.
+
+## Slash commands
+
+| Command | Purpose |
+|---|---|
+| `/users` | list everyone currently in a visible voice channel |
+| `/viewlogs` | last join events (administrators only) |
+| `/close` | close a support thread |
+| `/delete` | delete messages in the current channel |
+| `/garmin-start`, `/garmin-stop`, `/garmin-save` | control recording |
+| `/garmin-health`, `/garmin-autojoin` | recording status and auto-join |
+
+A `!!` prefix is configured for text commands as well.
+
+## Known limitation: voice recording and DAVE
+
+Discord made its DAVE end-to-end encryption mandatory for voice on 2 March 2026. py-cord 2.8 implements DAVE for sending only — **voice reception is still unimplemented** ([py-cord #3139](https://github.com/Pycord-Development/pycord/issues/3139)), so `start_recording()` crashes and the bot drops out of the channel.
+
+Until that is fixed, set `TEMP_DAVE_FIX = true` (Settings → Garmin). The bot then joins voice channels and stays connected, but records nothing. Voice **logging** and all statistics are unaffected — they do not require the bot to be in the channel.
+
+## Health checks
+
 ```bash
-export PORT=8081
-# Then run your bot
+curl http://localhost:8080/status     # JSON status
+python health_check.py                # external monitor with automatic restart
+docker compose -f docker-compose.health.yml up -d
 ```
-Or include it in your `.env` file if you are using one.
 
-### Testing Mode
-You can enable a testing mode by setting the `APP_TESTING_MODE` environment variable to `true`.
-This setting can also be managed via the `/settings` page in the web UI.
+Details in [docs/HEALTH_CHECK.md](docs/HEALTH_CHECK.md).
+
+## Tests
+
 ```bash
-export APP_TESTING_MODE=true
+python -m unittest tests.test_main tests.test_voice_stats
 ```
-When testing mode is active:
-*   A log message "TESTING MODE ENABLED: Overriding LOG_CHANNEL_ID and BOT_AUDIT_ID to 1376227809474908253" will be printed at startup.
-*   The `LOG_CHANNEL_ID` and `BOT_AUDIT_ID` will both be set to `1376227809474908253`, redirecting critical logs and audit messages to this specific channel.
 
-## User Join Logging
+`main.py` requires Python 3.10+, so any test importing it has to run inside the container:
 
-This bot includes a feature to log user voice channel join events.
-When a user joins a visible voice channel, the following information is recorded in an SQLite database file named `user_log.db`:
-- The SQLite database (`user_log.db`) is stored within a `data/` directory, which is automatically created in the bot's root folder if it doesn't exist.
-- User ID
-- Username
-- Voice Channel ID
-- Voice Channel Name
-- Timestamp (UTC, ISO format)
+```bash
+docker run --rm -v "$(pwd)":/app -w /app --entrypoint python dc_voice_monitor \
+  -m unittest tests.test_main tests.test_voice_stats
+```
 
-### `viewlogs` Command
+## Further documentation
 
-To view the latest join events, administrators can use the `viewlogs` command.
+- [CLAUDE.md](CLAUDE.md) — architecture and the pitfalls worth knowing before changing anything
+- [docs/AUDIO_CLEANUP_IMPLEMENTATION.md](docs/AUDIO_CLEANUP_IMPLEMENTATION.md) — retention logic for recordings
+- [docs/TESTING_GUIDE.md](docs/TESTING_GUIDE.md) — manual test procedure for thread inactivity monitoring
+- [docs/HEALTH_CHECK.md](docs/HEALTH_CHECK.md) — health monitoring setup
 
-- **Purpose**: Displays the last 10 user join events recorded in the database.
-- **Access**: Restricted to users with Administrator permissions on the server.
-- **Usage**:
-    - As a slash command: `/viewlogs`
-    - As a traditional command: `!!viewlogs` (if the `!!` prefix is configured)
-
-The output will be sent as an ephemeral message, visible only to the administrator who invoked the command.
-
-### Web Interface for Logs
-A web interface is available to browse all user join logs stored in the database and manage bot settings. You can access it at the following paths on the server where the bot is running:
-
-*   `/view_join_logs`: Browse user join logs.
-*   `/settings`: View and modify bot settings.
-
-For example, if your bot is accessible at `http://localhost:8080`, the interfaces would be at `http://localhost:8080/view_join_logs` and `http://localhost:8080/settings`. The port is the same one used by the Flask server for health checks (default 8080, configurable via the `PORT` environment variable).
-
-#### Bot Settings Page (`/settings`)
-The `/settings` page allows for dynamic configuration of several bot parameters, including:
-- App Testing Mode
-- Hidden Channel IDs
-- Log Channel ID
-- Bot Audit ID
-- Tech Support Channel ID
-
-Changes saved here are stored in the database and loaded by the bot. Some settings might also be influenced by environment variables as initial defaults.
-
-##### Restart Bot Functionality
-The `/settings` page includes a "Restart Bot" button. Clicking this button will trigger a graceful shutdown of the bot. **Important:** For the bot to restart automatically after shutdown, you must be running it using a process manager (like Docker with a restart policy, systemd, pm2, or a simple `while true` loop in a shell script) that handles automatic restarts after process termination. Without a process manager, the bot will simply stop.
+Never commit `.env` — it contains the bot token.

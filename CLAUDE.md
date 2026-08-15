@@ -37,10 +37,6 @@ docker build . -t dc_voice_monitor
 
 ```bash
 python -m unittest tests.test_main tests.test_voice_stats    # 32 tests, green
-
-# Audio mixing performance tests
-python test_mixing_performance.py
-python test_mixing_performance_simple.py
 ```
 
 Both suites pass. Things to know before extending them:
@@ -51,6 +47,8 @@ Both suites pass. Things to know before extending them:
 - **`tests/test_main.py` gives each test a temp database file.** A `":memory:"` database cannot be used: `main.py` opens a new connection per operation and every `":memory:"` connection is a separate empty database. The `sqlite3.connect` patch must also call a saved reference to the real function — `main.sqlite3` is the same module object as `sqlite3`, so a naive patch recurses infinitely.
 - Tests covering `on_voice_state_update` and the `/viewlogs` command were removed: they targeted the pre-py-cord command API, module-level config on `main` (config now lives in `config_loader`), and the dropped `user_joins` table. `on_voice_state_update` has since grown auto-join, AFK and hidden-channel branches, so testing it needs a fresh, much richer set of mocks.
 - Removed alongside them: `test_web_interface.py` (contained no `TestCase`), `test_garmin_voice.py`, `test_aligned_recording.py`, `test_aligned_implementation.py` (imported `voice_recv` / `AlignedPerUserSink`, gone since the py-cord migration).
+
+The py-cord migration dropped `discord-ext-voice-recv` and with it `AlignedPerUserSink`, which left a trail of dead files. All removed in one sweep: the five `test_*.py` benchmark scripts in the repo root, `garmin_voice_old.py`, `tests/garmin_voice_backup.py`, `tests/validate_recordings.py`, `tests/mixed.py` (hardcoded Windows paths) and `docs/ALIGNED_RECORDING_README.md`. Anything referencing `AlignedPerUserSink` or `voice_recv` is from that era and is dead by definition.
 
 ### Health checks
 

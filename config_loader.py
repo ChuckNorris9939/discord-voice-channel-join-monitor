@@ -88,13 +88,15 @@ DB_KEY_CLEANUP_GARMIN_OUTPUT_HOURS = "CLEANUP_GARMIN_OUTPUT_HOURS"
 DB_KEY_JOIN_LOGS_ID = "JOIN_LOGS_ID"
 DB_KEY_BOT_LOGS_ID = "BOT_LOGS_ID"
 
-# Original hardcoded default values (pre-database settings)
+# Channel IDs are deployment-specific and identify a concrete Discord server, so
+# they are not baked into this public repository. Configure them in .env (or via
+# the settings page); 0 simply means "not configured".
 
-DEFAULT_TECHSUPPORT_CHANNEL_ID = 1139952610883928134
-DEFAULT_TESTING_CHANNEL_ID = 1376227809474908253
-DEFAULT_HIDDEN_CHANNELS_LIST = [1255930025463644232, 1233872680680296499, 374159356717039620]
-DEFAULT_JOIN_LOGS_ID = 1266773678306230374
-DEFAULT_BOT_LOGS_ID = 1373288909542264852
+DEFAULT_TECHSUPPORT_CHANNEL_ID = 0
+DEFAULT_TESTING_CHANNEL_ID = 0
+DEFAULT_HIDDEN_CHANNELS_LIST = []
+DEFAULT_JOIN_LOGS_ID = 0
+DEFAULT_BOT_LOGS_ID = 0
 
 # --- Global Settings Variables (with initial hardcoded defaults) ---
 TESTING = False
@@ -152,7 +154,8 @@ def load_all_settings():
     # --- HIDDEN_CHANNELS ---
     hc_str_db_val = get_setting(DB_KEY_HIDDEN_CHANNELS)
     if hc_str_db_val is None:
-        hc_str_db_val = ','.join(map(str, DEFAULT_HIDDEN_CHANNELS_LIST))
+        hc_str_db_val = os.environ.get(DB_KEY_HIDDEN_CHANNELS,
+                                       ','.join(map(str, DEFAULT_HIDDEN_CHANNELS_LIST)))
         save_setting(DB_KEY_HIDDEN_CHANNELS, hc_str_db_val)
     if hc_str_db_val and hc_str_db_val.strip():
         try:
@@ -166,7 +169,11 @@ def load_all_settings():
     def load_channel_id(key: str, default_id: int):
         id_str_db_val = get_setting(key)
         if id_str_db_val is None:
-            id_str_db_val = str(default_id)
+            # Not in the database yet: take it from the environment. The DB keys
+            # are named exactly like the env variables, so `key` doubles as the
+            # variable name. Channel IDs identify a specific Discord server and
+            # are therefore configured per deployment, not hardcoded here.
+            id_str_db_val = os.environ.get(key, str(default_id))
             save_setting(key, id_str_db_val)
         if id_str_db_val and id_str_db_val.lower() != 'none':
             try:

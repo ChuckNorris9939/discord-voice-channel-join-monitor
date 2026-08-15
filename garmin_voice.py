@@ -548,7 +548,7 @@ class GarminVoiceManager:
             return None
 
     # ==================================================
-    # STT Processing Methods (copied from garmin_voice_old.py)
+    # STT Processing Methods
     # ==================================================
     
     def _process_stt_audio(self, user, pcm_data):

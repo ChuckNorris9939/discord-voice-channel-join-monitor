@@ -1051,7 +1051,9 @@ intents.members = True
 bot = commands.Bot(command_prefix="!!", intents=intents)
 
 # Konfiguration
-DISCORD_SERVER_ID = 374159356717039616
+# Deployment-specific, so it comes from the environment rather than being
+# hardcoded in a public repository. 0 means "not configured".
+DISCORD_SERVER_ID = int(os.environ.get('DISCORD_SERVER_ID', '0') or 0)
 CLOSED_TAG_NAME = "🔒 CLOSED"
 
 # Global variables to be populated by config_loader

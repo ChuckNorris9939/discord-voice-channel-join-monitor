@@ -35,3 +35,7 @@ discord_WTF/
 
 # Miscellaneous
 Cursor
+# SQLite databases (never commit user data)
+*.db
+*.sqlite
+*.sqlite3
