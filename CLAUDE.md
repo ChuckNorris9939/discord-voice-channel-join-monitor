@@ -67,7 +67,7 @@ curl http://localhost:8080/status
 - **[main.py](main.py)** (~3200 lines) — Discord bot + embedded Flask web server. Contains all Discord event handlers, slash commands, background tasks, SQLite schema + queries, and all Flask routes. This is the primary file.
 - **[garmin_voice.py](garmin_voice.py)** (~1700 lines) — Voice recording system. Implements `LiveSTTMP3Sink`, a custom Discord audio sink that captures 48kHz stereo PCM, does silence compression, per-user track isolation, audio mixing, and optional real-time STT.
 - **[voice_stats.py](voice_stats.py)** — Analytics for the `/statistics` dashboard. The log only stores discrete join/switch/leave events, so this reconstructs *sessions* by pairing them per user (a `switch` closes the running session and opens a new one for the destination channel). Rankings group by `user_id`/`channel_id` and display the newest name, because both get renamed over time. Sessions are capped at `MAX_SESSION_SECONDS` so a missed `leave` cannot dominate a ranking.
-- **[config_loader.py](config_loader.py)** — Centralized settings with three-layer priority: environment variables (`.env`) → SQLite `bot_settings` table → hardcoded defaults.
+- **[config_loader.py](config_loader.py)** — Centralized settings. Priority is **SQLite `bot_settings` table → environment variable (`.env`) → hardcoded default**, i.e. `get_setting(DB_KEY_X, os.environ.get('X', 'default'))`: once a value exists in the database, the `.env` entry no longer has any effect. Saving the settings page writes every field, so a single save pins all of them. Follow this pattern when adding a setting; `APP_TESTING_MODE` additionally persists the env value into the database on first read.
 - **[audio_cleanup_service.py](audio_cleanup_service.py)** — Deletes old recordings from `data/garmin-output/` and `data/aligned-recordings/` based on configurable retention hours. Runs every 6 hours as a background task.
 - **[health_check.py](health_check.py)** — External health monitor that checks container status, `/status` endpoint, and Discord connectivity, with automatic restart on failure.
 
@@ -120,6 +120,14 @@ The five settings are configured at runtime under Settings → Access Control. R
 
 **Flask is installed without the `async` extra, so Flask views must be `def`, never `async def`** — an async view returns HTTP 500 for everyone. `/restart_bot` had this bug; it hands its coroutine to the bot's loop with `asyncio.run_coroutine_threadsafe` and needs no `await` of its own. Restarting relies on `restart: unless-stopped` in the compose file: the process exits 0 after `bot.close()`, and only that policy brings it back (`on-failure` would not).
 
+### Voice recording is currently disabled (DAVE)
+
+Discord enforced its DAVE end-to-end encryption for voice on 2 March 2026. py-cord 2.8 implements DAVE for *sending* only; **voice reception is still unimplemented** (py-cord issue #3139, tracking ~60 tasks). Calling `start_recording()` therefore raises `'LiveSTTMP3Sink' object has no attribute '__sink_listeners__'`, which made the bot crash out of the channel on every join.
+
+`TEMP_DAVE_FIX` (default `false`, toggle under Settings → Garmin) works around this: when on, `garmin_voice.py` connects to the channel and returns early instead of creating a `LiveSTTMP3Sink` — the bot stays in voice, records nothing. All three `start_recording()` call sites are guarded: the initial join, the restart-after-save path, and `_restart_recording()`.
+
+The flag is read at join time, so flipping it applies to the next join without a restart. Turn it back off once #3139 lands and voice reception works again.
+
 ### STT engines
 
 Configured via `STT_ENGINE` env var:
@@ -128,9 +136,11 @@ Configured via `STT_ENGINE` env var:
 
 ## Configuration
 
-Copy `env.example` to `.env`. Required: `DISCORD_TOKEN`. All settings can also be changed at runtime via the `/settings` web UI, which persists to the `bot_settings` database table. `config_loader.py` merges all sources on read with env vars taking highest priority.
+Copy `env.example` to `.env`. Required: `DISCORD_TOKEN`. Almost every setting can also be changed at runtime via the `/settings` web UI, which persists to the `bot_settings` table — and that stored value then wins over `.env` (see `config_loader.py` above). Treat `.env` as the initial value for a fresh database, not as an override.
 
-Key env vars: `LOG_LEVEL`, `PORT` (default 8080), `STT_ENGINE`, `GARMIN_RECORDING_DURATION`, `GARMIN_SILENCE_COMPRESSION`, `APP_TESTING_MODE`.
+`DISCORD_TOKEN` and `PORT` are the exception: they are read straight from the environment and are not in `bot_settings`.
+
+Key env vars: `LOG_LEVEL`, `PORT` (default 8080), `STT_ENGINE`, `GARMIN_RECORDING_DURATION`, `GARMIN_SILENCE_COMPRESSION`, `APP_TESTING_MODE`, `TEMP_DAVE_FIX`.
 
 ## Docker notes
 

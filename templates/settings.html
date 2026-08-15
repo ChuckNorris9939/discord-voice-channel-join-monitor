@@ -490,6 +490,15 @@
                         </select>
                         <p class="note">When enabled, applies advanced silence compression to recordings. When disabled, files are simply copied to garmin-output.</p>
                     </div>
+                    <!-- Temp DAVE Fix (disable recording) -->
+                    <div class="form-group">
+                        <label for="temp_dave_fix">🔇 Temp DAVE Fix (disable recording)</label>
+                        <select name="temp_dave_fix" id="temp_dave_fix">
+                            <option value="true" {% if current_settings.get('TEMP_DAVE_FIX') == 'true' %}selected{% endif %}>True</option>
+                            <option value="false" {% if current_settings.get('TEMP_DAVE_FIX') == 'false' %}selected{% endif %}>False</option>
+                        </select>
+                        <p class="note">Discord's DAVE (End-to-End Encryption) currently breaks voice reception (pycord #3139), which crashes the bot when it tries to record and makes it leave the channel. When <strong>True</strong>, the bot joins voice channels WITHOUT recording, so it stays connected. Turn this off again once recording works with DAVE.</p>
+                    </div>
                 </div>
 
                 <div class="category-header" onclick="toggleCategory('cleanup-category')">

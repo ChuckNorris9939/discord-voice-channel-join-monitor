@@ -727,10 +727,22 @@ class GarminVoiceManager:
             
             # Connect to the voice channel
             self.vc = await channel.connect()
-            
+
+            # Temp DAVE Fix: Voice-Recording ist durch Discords DAVE-E2EE aktuell
+            # kaputt (pycord #3139) und lässt start_recording crashen. Wenn aktiv,
+            # bleibt der Bot nur verbunden — ohne Aufnahme.
+            if cfg.TEMP_DAVE_FIX:
+                self.current_sink = None
+                self.recording_start_time = time.time()
+                logger.warning(
+                    f"🔇 Joined voice channel '{channel.name}' WITHOUT recording "
+                    f"(Temp DAVE Fix enabled — recording disabled)"
+                )
+                return
+
             # Use LiveSTTMP3Sink for both MP3 recording AND real-time STT
             self.current_sink = LiveSTTMP3Sink(garmin_manager=self)
-            
+
             self.vc.start_recording(
                 self.current_sink,
                 self._finished_callback,  # Same callback as before
@@ -950,7 +962,7 @@ class GarminVoiceManager:
                 logger.warning("⚠️ Recording session completed but no files saved")
             
             # Restart recording to continue capturing audio
-            if self.vc and self.vc.is_connected():
+            if self.vc and self.vc.is_connected() and not cfg.TEMP_DAVE_FIX:
                 try:
                     logger.info("🔄 Restarting recording for continuous operation...")
                     # Use LiveSTTMP3Sink to preserve STT functionality after save
@@ -1025,7 +1037,7 @@ class GarminVoiceManager:
         """Restart recording after save."""
         try:
             await asyncio.sleep(0.5)  # Small delay
-            if self.vc and self.vc.is_connected():
+            if self.vc and self.vc.is_connected() and not cfg.TEMP_DAVE_FIX:
                 # Create new LiveSTTMP3Sink for continued recording (preserves STT functionality)
                 self.current_sink = LiveSTTMP3Sink(garmin_manager=self)
                 
